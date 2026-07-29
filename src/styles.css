@@ -314,6 +314,40 @@
   animation: indeterminate 1.5s ease-in-out infinite;
 }
 
+/* Light sweeping across a placeholder line while copy is being written. Used
+   by the pin Boost rewrite card, where the wait is a real several-second
+   pipeline (image analysis → Pinterest Trends → generation) and the old
+   behaviour — showing template copy that was about to be replaced — was worse
+   than showing nothing. The sweep travels further than the bar is wide so
+   there's a pause between passes rather than a strobe. */
+@keyframes copy-shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  60%,
+  100% {
+    transform: translateX(220%);
+  }
+}
+@utility animate-copy-shimmer {
+  animation: copy-shimmer 1.8s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+/* The placeholder lines themselves breathe, so the block reads as "being
+   written" rather than "failed to load". Paired with a per-line delay. */
+@keyframes copy-line-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+@utility animate-copy-line {
+  animation: copy-line-pulse 2s ease-in-out infinite;
+}
+
 /* Seamless horizontal marquee — content must be duplicated once so -50% lands
    exactly on the copy. Used by the landing page's niche strip. */
 @keyframes marquee {
@@ -358,6 +392,16 @@
   .animate-wall-up,
   .animate-wall-down {
     animation: none;
+  }
+  /* The sweep is decorative — drop it. The lines keep a static dimmed state
+     so the placeholder is still legible as "not filled in yet". */
+  .animate-copy-shimmer {
+    animation: none;
+    opacity: 0;
+  }
+  .animate-copy-line {
+    animation: none;
+    opacity: 0.7;
   }
 }
 

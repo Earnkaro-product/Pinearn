@@ -10,8 +10,22 @@ export type HealthPin = {
   description: string | null;
   image_url: string | null;
   collection_id: string | null;
+  impressions?: number | null;
+  clicks?: number | null;
+  /** The real board a pin came from. Going live re-homes a pin into its own
+   * per-pin collection, so `collection_id` stops pointing at a board and this
+   * is the only remaining link back to one. */
+  origin_collection_id?: string | null;
   created_at: string;
 };
+
+/** Which board a pin actually belongs to for scoring purposes. Always prefer
+ * the origin: a live pin's `collection_id` points at a per-pin container that
+ * isn't a board at all, so counting it there makes its real board look empty
+ * and stale. */
+export function boardIdOf(pin: Pick<HealthPin, "collection_id" | "origin_collection_id">) {
+  return pin.origin_collection_id ?? pin.collection_id;
+}
 
 export type HealthBoard = {
   id: string;
@@ -41,6 +55,13 @@ const PLACEHOLDER_PATTERNS: RegExp[] = [
   /^pin\s*\d*$/i,
   /^\d+$/,
   /^(untitled|new board|new pin|my board|board \d+|no title|none|n\/a)$/i,
+  // Names WE generate, which are therefore placeholders by definition: the
+  // Pinterest import falls back to "Pin collection" for any pin without a
+  // title (see pinterest.functions.ts). Leaving this out was a real bug — the
+  // score never flagged such a board as generically named, so Board Boost only
+  // ever reported "No description" and then "suggested" the same useless name
+  // straight back. Anchored so a real name like "Denim Collection" is safe.
+  /^(pin collection|new collection|my (pins|collection|boards?)|collections?|boards?|pins)$/i,
 ];
 
 export function isPlaceholderText(text: string | null | undefined): boolean {
@@ -83,6 +104,24 @@ export function boardIssues(board: Pick<HealthBoard, "name" | "description">): s
 
 export function boardPassesStructure(board: Pick<HealthBoard, "name" | "description">): boolean {
   return boardIssues(board).length === 0;
+}
+
+/**
+ * Order a Boost deck so the worst items come first.
+ *
+ * The decks review EVERY pin and board, not only the ones failing the health
+ * check — a title that technically passes the length bands can still be losing
+ * to a better keyword. But "review everything" only works if the genuinely
+ * broken items are still at the front; otherwise a creator spends their first
+ * ten swipes on copy that was already fine and quits before reaching the
+ * placeholders. Sorted by issue count descending, and stable within a group so
+ * the caller's own ordering (newest first) survives.
+ */
+export function byIssueCountDesc<T>(items: T[], issuesOf: (item: T) => string[]): T[] {
+  return items
+    .map((item, i) => ({ item, i, n: issuesOf(item).length }))
+    .sort((a, b) => b.n - a.n || a.i - b.i)
+    .map((x) => x.item);
 }
 
 /* ---------------- Sub-scores + overall ---------------- */
@@ -205,8 +244,8 @@ export function computeHealthReport(
   const cutoff = now.getTime() - FRESH_DAYS * 86400000;
   const freshBoardIds = new Set(
     pins
-      .filter((p) => p.collection_id && new Date(p.created_at).getTime() >= cutoff)
-      .map((p) => p.collection_id as string),
+      .filter((p) => boardIdOf(p) && new Date(p.created_at).getTime() >= cutoff)
+      .map((p) => boardIdOf(p) as string),
   );
   const boardsFresh = boards.filter((b) => freshBoardIds.has(b.id)).length;
 
@@ -291,9 +330,10 @@ export function staleBoards(
 ): Array<{ id: string; name: string; daysSinceLastPin: number | null }> {
   const latestByBoard = new Map<string, number>();
   for (const p of pins) {
-    if (!p.collection_id) continue;
+    const boardId = boardIdOf(p);
+    if (!boardId) continue;
     const t = new Date(p.created_at).getTime();
-    if (t > (latestByBoard.get(p.collection_id) ?? 0)) latestByBoard.set(p.collection_id, t);
+    if (t > (latestByBoard.get(boardId) ?? 0)) latestByBoard.set(boardId, t);
   }
   const cutoff = now.getTime() - FRESH_DAYS * 86400000;
   return boards
@@ -411,34 +451,6 @@ export function suggestPinDescription(pin: HealthPin, boardName: string | null):
   }
   if (desc.length > PIN_DESC_MAX) desc = desc.slice(0, PIN_DESC_MAX - 1).trimEnd() + "…";
   return desc;
-}
-
-/** Heuristic board rename: derived from the most common real words across the
- * board's pin titles (its dominant category), falling back to cleaning up the
- * existing name. */
-export function suggestBoardName(board: HealthBoard, boardPins: HealthPin[]): string {
-  if (!isPlaceholderText(board.name)) return clean(board.name);
-  // Dominant topic: most frequent non-trivial word across real pin titles.
-  const counts = new Map<string, number>();
-  for (const p of boardPins) {
-    if (isPlaceholderText(p.title)) continue;
-    for (const w of clean(p.title)
-      .toLowerCase()
-      .split(/[^a-z0-9]+/)) {
-      if (w.length < 4) continue;
-      counts.set(w, (counts.get(w) ?? 0) + 1);
-    }
-  }
-  const top = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 2);
-  if (top.length === 0) return "Style & Inspiration Finds";
-  const cap = (w: string) => w[0].toUpperCase() + w.slice(1);
-  return `${top.map(([w]) => cap(w)).join(" & ")} Inspiration`;
-}
-
-export function suggestBoardDescription(board: HealthBoard, suggestedName: string): string {
-  const existing = clean(board.description ?? "");
-  if (existing.length > 0) return existing;
-  return `A curated board of ${suggestedName.replace(/ Inspiration$/i, "").toLowerCase()} finds — handpicked pins, shopping ideas and inspiration, updated regularly. Follow for fresh picks.`;
 }
 
 /* ---------------- Score-animation handoff + history ---------------- */

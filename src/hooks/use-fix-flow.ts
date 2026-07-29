@@ -30,7 +30,7 @@ export type SwipeDecision = "approved" | "skipped";
 
 /**
  * The shared engine behind both Boost fix flows. Owns the single cursor the
- * SwipeDeck renders, optimistic apply/revert against the health-score cache
+ * deck renders, optimistic apply/revert against the health-score cache
  * (so the live score reacts instantly), inline edits, bulk approve, and
  * per-item + bulk undo. Live pins/boards are written to Supabase, so every
  * apply is individually reversible for the whole session — nothing here ships
@@ -180,9 +180,13 @@ export function useFixFlow<C extends BaseFixCard>(opts: {
     if (dec === "approved") void revertFix(prev);
   };
 
-  const editCurrent = (values: Record<string, string>) => {
-    if (!current) return;
-    const id = current.id;
+  /** Replace field values on any card in the deck, by id. Used both by the
+   * edit sheet and by flows that fill a card in asynchronously (e.g. an AI
+   * rewrite arriving after the deck has already rendered). Cards that have
+   * already been applied are left alone — their value is what got written to
+   * the database, and silently changing it would desync the undo snapshot. */
+  const patchCard = (id: string, values: Record<string, string>) => {
+    if (appliedRef.current.has(id)) return;
     setDeck((d) =>
       d
         ? d.map((c) =>
@@ -199,12 +203,22 @@ export function useFixFlow<C extends BaseFixCard>(opts: {
     );
   };
 
-  const approveAll = async () => {
-    const targets = cards.slice(index);
-    if (targets.length === 0 || bulkApplying) return;
+  const editCurrent = (values: Record<string, string>) => {
+    if (current) patchCard(current.id, values);
+  };
+
+  /** Apply every remaining card. `canApply` lets a flow exclude cards that have
+   * nothing to write yet — e.g. an AI rewrite that failed to generate. Excluded
+   * cards are marked skipped, not left undecided, so the deck still completes
+   * and the approved/skipped counts add up to the total. */
+  const approveAll = async (canApply?: (card: C) => boolean) => {
+    const remaining = cards.slice(index);
+    if (remaining.length === 0 || bulkApplying) return;
+    const targets = canApply ? remaining.filter(canApply) : remaining;
     setBulkApplying(true);
     setStatusById((prev) => {
       const n = { ...prev };
+      for (const c of remaining) n[c.id] = "skipped";
       for (const c of targets) n[c.id] = "approved";
       return n;
     });
@@ -260,6 +274,7 @@ export function useFixFlow<C extends BaseFixCard>(opts: {
     goTo,
     undo,
     editCurrent,
+    patchCard,
     approveAll,
     undoAll,
     revertOne,

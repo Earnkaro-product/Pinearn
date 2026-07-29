@@ -2,15 +2,18 @@ import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   ArrowRight,
+  Check,
   CheckCircle2,
   Pencil,
   RotateCcw,
   Sparkles,
+  TrendingUp,
   TriangleAlert,
   X,
 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { BaseFixCard, FixField } from "@/hooks/use-fix-flow";
+import type { KeywordSummary } from "@/lib/pin-seo.functions";
 
 /* ---------------- Bottom sheet shell (matches the app's hand-rolled sheets) --------------- */
 
@@ -206,7 +209,16 @@ export function ApproveAllSheet({
               <p className="truncate text-[11px] text-muted-foreground line-through">
                 {c.original[c.fields[0].key]?.toString().trim() || "(empty)"}
               </p>
-              <p className="mt-0.5 line-clamp-2 text-sm font-semibold">{c.fields[0].value}</p>
+              {/* A flow may not have generated its copy yet (the pin Boost
+                  deck fills cards in asynchronously and generates the rest on
+                  confirm), so an empty value is expected, not a bug. */}
+              {c.fields[0].value.trim() ? (
+                <p className="mt-0.5 line-clamp-2 text-sm font-semibold">{c.fields[0].value}</p>
+              ) : (
+                <p className="mt-0.5 text-sm font-medium italic text-muted-foreground/60">
+                  Will be written when you confirm
+                </p>
+              )}
             </div>
           ))}
           {cards.length > samples.length && (
@@ -237,55 +249,6 @@ export function ApproveAllSheet({
         </button>
       </div>
     </Sheet>
-  );
-}
-
-/* ---------------- The suggested-copy block (with Edit) ---------------- */
-
-/** The shared "Now → Suggested" block on every fix card, with an Edit button.
- * `current`/`suggested` render as two-field before/after; media is supplied by
- * the flow (pin image vs board collage). */
-export function SuggestionBlock({
-  fields,
-  current,
-  onEdit,
-}: {
-  fields: FixField[];
-  current: Record<string, string | null>;
-  onEdit: () => void;
-}) {
-  return (
-    <div className="no-scrollbar min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
-      <div>
-        <p className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground">Now</p>
-        <p className="mt-0.5 line-clamp-1 text-sm font-semibold text-muted-foreground">
-          {current[fields[0].key]?.toString().trim() || "(empty)"}
-        </p>
-        {fields[1] && (
-          <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground/70">
-            {current[fields[1].key]?.toString().trim() || "(no description)"}
-          </p>
-        )}
-      </div>
-      <div className="relative rounded-2xl bg-primary/5 p-3 ring-1 ring-primary/20">
-        <div className="flex items-center justify-between">
-          <p className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-primary">
-            <Sparkles className="h-3 w-3" /> Suggested
-          </p>
-          <button
-            type="button"
-            onClick={onEdit}
-            className="inline-flex min-h-8 items-center gap-1 rounded-full bg-surface px-2.5 text-[11px] font-bold text-primary ring-1 ring-primary/20 transition hover:bg-primary/10"
-          >
-            <Pencil className="h-3 w-3" /> Edit
-          </button>
-        </div>
-        <p className="mt-1 text-sm font-semibold leading-snug">{fields[0].value}</p>
-        {fields[1] && (
-          <p className="mt-1.5 text-xs leading-relaxed text-foreground/80">{fields[1].value}</p>
-        )}
-      </div>
-    </div>
   );
 }
 
@@ -357,20 +320,30 @@ export function GuideSheet({
 
 /* ---------------- Shared states ---------------- */
 
-export function OptimizedState({ onBack }: { onBack: () => void }) {
+/** Shown when the deck is empty. Since the decks now include EVERY pin and
+ * board rather than only the failing ones, an empty deck no longer means
+ * "nothing to fix" — it means there is nothing here at all. Saying "you're
+ * fully optimized" to someone with zero pins would be nonsense. */
+export function OptimizedState({
+  onBack,
+  unitLabel = "pins",
+}: {
+  onBack: () => void;
+  unitLabel?: string;
+}) {
   return (
     <div className="grid flex-1 place-items-center">
       <div className="rounded-3xl border border-border bg-surface p-10 text-center shadow-elevate">
         <CheckCircle2 className="mx-auto h-12 w-12 text-emerald-500" />
-        <h2 className="mt-3 font-display text-xl font-bold">You're fully optimized here</h2>
+        <h2 className="mt-3 font-display text-xl font-bold">Nothing here yet</h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Nothing needs fixing — every item already passes the check.
+          Import or create some {unitLabel} and we'll rewrite every title and description.
         </p>
         <button
           onClick={onBack}
           className="mt-5 inline-flex min-h-[48px] items-center gap-1.5 rounded-full bg-gradient-primary px-5 text-sm font-bold text-primary-foreground shadow-glow"
         >
-          Back to Boost Pins
+          Back to Boost
         </button>
       </div>
     </div>
@@ -525,6 +498,312 @@ export function DeckSkeleton() {
       <div className="mt-3 flex shrink-0 gap-2.5">
         <Skeleton className="h-[52px] w-24 rounded-2xl" />
         <Skeleton className="h-[52px] flex-1 rounded-2xl" />
+      </div>
+    </div>
+  );
+}
+
+/* ---------------- AI rewrite card internals ---------------- */
+//
+// Shared by the Pin Boost and Board Boost decks. Both screens present the same
+// idea — "here is what you have, here is what the pipeline wrote, and here is
+// the search demand it targeted" — so the pieces live here rather than being
+// forked per route and drifting apart.
+
+/** The item's health-check status. Now that the deck includes items with
+ * perfectly good copy, "no issues" needs its own affirmative state — a card
+ * with an empty chip row would just look broken. */
+export function IssueChips({ issues }: { issues: string[] }) {
+  if (issues.length === 0) {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-500/20">
+        <CheckCircle2 className="h-2.5 w-2.5" /> Already passing — checking for a stronger keyword
+      </span>
+    );
+  }
+  return (
+    <>
+      {issues.map((issue) => (
+        <span
+          key={issue}
+          className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold text-amber-700 ring-1 ring-inset ring-amber-500/20"
+        >
+          {issue}
+        </span>
+      ))}
+    </>
+  );
+}
+
+/** Before → after SEO score. The whole point of showing both is that the deck
+ * now offers a rewrite for every pin and board, including ones that already
+ * pass — so the creator needs to see whether accepting it is actually an
+ * upgrade rather than taking "AI suggested" on faith. */
+function ScoreDelta({ current, next }: { current: number; next: number }) {
+  const gain = next - current;
+  const better = gain > 0;
+  return (
+    <span className="inline-flex shrink-0 items-center gap-1 text-[10px] font-bold tabular-nums">
+      <span className="text-muted-foreground/70">{current}</span>
+      <ArrowRight className="h-2.5 w-2.5 text-muted-foreground/50" />
+      <span className={better ? "text-emerald-700" : "text-amber-700"}>{next}</span>
+      <span
+        className={`rounded-full px-1.5 py-0.5 ${
+          better ? "bg-emerald-500/10 text-emerald-700" : "bg-amber-500/10 text-amber-700"
+        }`}
+      >
+        {gain > 0 ? `+${gain}` : gain === 0 ? "no change" : gain}
+      </span>
+    </span>
+  );
+}
+
+/** A green/amber pill that shows a field's length against Pinterest's sweet
+ * spot — the same band the score checks. Doubles as proof the rewrite is
+ * genuinely better, not just different. */
+function FitChip({ len, min, max }: { len: number; min?: number; max?: number }) {
+  const ok = (min == null || len >= min) && (max == null || len <= max);
+  return (
+    <span
+      className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold tabular-nums ring-1 ring-inset ${
+        ok
+          ? "bg-emerald-500/10 text-emerald-700 ring-emerald-500/20"
+          : "bg-amber-500/10 text-amber-700 ring-amber-500/20"
+      }`}
+    >
+      {ok && <Check className="h-2.5 w-2.5" strokeWidth={3.5} />}
+      {len}
+      {max != null ? `/${max}` : ""}
+    </span>
+  );
+}
+
+/** Placeholder lines standing in for copy that's still being written. One
+ * shimmering bar per line of the real thing, so the card barely moves when the
+ * text lands. The block breathes and a highlight sweeps across it, which reads
+ * as "being written" rather than "failed to load". */
+export function CopyShimmer({ lines }: { lines: number }) {
+  // Ragged widths — uniform bars read as a table, not prose — and the last
+  // line is always short, the way a real paragraph ends.
+  const WIDTHS = ["100%", "92%", "97%"];
+  return (
+    <div className="space-y-2" aria-hidden>
+      {Array.from({ length: lines }).map((_, i) => (
+        <div
+          key={i}
+          className="animate-copy-line relative h-3 overflow-hidden rounded-full bg-primary/10"
+          style={{
+            width: i === lines - 1 && lines > 1 ? "64%" : WIDTHS[i % WIDTHS.length],
+            animationDelay: `${i * 160}ms`,
+          }}
+        >
+          <div
+            className="animate-copy-shimmer absolute inset-y-0 w-1/3 bg-gradient-to-r from-transparent via-primary/30 to-transparent"
+            style={{ animationDelay: `${i * 160}ms` }}
+          />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function TypingDots() {
+  return (
+    <span className="inline-flex items-center gap-0.5" aria-hidden>
+      {[0, 1, 2].map((i) => (
+        <span
+          key={i}
+          className="h-1 w-1 rounded-full bg-primary/70"
+          style={{
+            animation: "copy-line-pulse 1.1s ease-in-out infinite",
+            animationDelay: `${i * 140}ms`,
+          }}
+        />
+      ))}
+    </span>
+  );
+}
+
+/** One field's Without AI → AI suggested comparison. The current value is
+ * demoted and struck through; the AI suggestion is the bright, primary-accented
+ * payoff carrying a live SEO-fit chip.
+ *
+ * While the pipeline runs there is no suggestion yet — the payoff row shimmers
+ * rather than showing template copy, so nothing on screen can be mistaken for
+ * a finished rewrite. */
+export function FieldDiff({
+  heading,
+  now,
+  field,
+  loading,
+  lines,
+}: {
+  heading: string;
+  now?: string;
+  field: FixField;
+  loading: boolean;
+  lines: number;
+}) {
+  return (
+    <div className="overflow-hidden rounded-2xl border border-border bg-surface">
+      <p className="border-b border-border/70 bg-surface-2/50 px-3.5 py-2 text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
+        {heading}
+      </p>
+
+      {/* Without AI — demoted. */}
+      <div className="px-3.5 py-2.5">
+        <p className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground/60">
+          Without AI
+        </p>
+        <p
+          className={`mt-0.5 text-sm ${
+            now
+              ? "text-muted-foreground line-through decoration-muted-foreground/40"
+              : "italic text-muted-foreground/50"
+          }`}
+        >
+          {now || `No ${heading.toLowerCase()} yet`}
+        </p>
+      </div>
+
+      {/* AI suggested — the payoff. */}
+      <div className="bg-primary/[0.05] px-3.5 py-3">
+        <div className="flex items-center justify-between">
+          <p className="text-[10px] font-bold uppercase tracking-wide text-primary">AI suggested</p>
+          {loading ? (
+            <span className="inline-flex h-5 items-center gap-1 rounded-full bg-primary/10 px-2">
+              <TypingDots />
+            </span>
+          ) : (
+            <FitChip len={field.value.trim().length} min={field.min} max={field.max} />
+          )}
+        </div>
+        <div className="mt-1.5">
+          {loading ? (
+            <CopyShimmer lines={lines} />
+          ) : (
+            <motion.p
+              initial={{ opacity: 0, y: 4 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
+              className="text-[15px] font-bold leading-snug text-foreground"
+            >
+              {field.value}
+            </motion.p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** What the pipeline optimized this pin for — the primary keyword with its
+ * real Pinterest search interest, plus the SEO score of the finished copy.
+ * This is the honest version of "AI rewrite": it shows the evidence, so a
+ * creator can judge the suggestion instead of trusting a label. */
+export function KeywordProof({
+  result,
+}: {
+  // Structural, not tied to either pipeline's full result type: the pin and
+  // board flows return different shapes and both render this block.
+  result: { seoScore: number; currentScore: number; keywords: KeywordSummary | null };
+}) {
+  const kw = result.keywords;
+  if (!kw) return null;
+  const primaryStats = kw.ranked.find((k) => k.term.toLowerCase() === kw.primary.toLowerCase());
+  const supporting = [...kw.secondary, ...kw.longTail].slice(0, 3);
+  const gain = result.seoScore - result.currentScore;
+
+  return (
+    <div className="rounded-2xl border border-border bg-surface-2/40 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <p className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
+          <TrendingUp className="h-3 w-3" /> Ranking for
+        </p>
+        <ScoreDelta current={result.currentScore} next={result.seoScore} />
+      </div>
+
+      {/* The deck reviews copy that already passes, so an honest "this is not
+          actually better" is a required state, not an edge case. */}
+      {gain <= 0 && (
+        <p className="mt-1.5 rounded-xl bg-amber-500/10 px-2 py-1 text-[10px] font-semibold leading-snug text-amber-700">
+          {gain === 0
+            ? "Scores the same as what you have — skip unless you prefer the wording."
+            : "Your current copy scores higher. Best to skip this one."}
+        </p>
+      )}
+
+      <p className="mt-1 text-sm font-bold text-foreground">
+        {kw.primary}
+        {primaryStats?.volume != null && (
+          <span className="ml-1.5 text-[11px] font-semibold text-muted-foreground tabular-nums">
+            {primaryStats.volume}/100 search interest
+            {primaryStats.rising && <span className="text-emerald-600"> · rising</span>}
+          </span>
+        )}
+      </p>
+
+      {supporting.length > 0 && (
+        <div className="mt-1.5 flex flex-wrap gap-1">
+          {supporting.map((t) => (
+            <span
+              key={t}
+              className="rounded-full bg-surface px-2 py-0.5 text-[10px] font-medium text-muted-foreground ring-1 ring-inset ring-border"
+            >
+              {t}
+            </span>
+          ))}
+        </div>
+      )}
+
+      <p className="mt-1.5 text-[10px] text-muted-foreground/70">
+        {kw.hasTrendData
+          ? `Live Pinterest Trends · ${kw.country}${kw.asOf ? ` · week of ${kw.asOf}` : ""}`
+          : "From this pin's own details — no live trend data available"}
+      </p>
+    </div>
+  );
+}
+
+// The pipeline's real stages, in order, with roughly how long each takes on a
+// cold pin. Cycling through them beats a spinner because the wait is genuinely
+// several seconds and each line is true.
+//
+// Keep this list in step with runSuggestionPipeline's stages: the pipeline is
+// now trends → keywords → one copy call, with no separate image-analysis pass,
+// because the model reads the image while it writes. A stage listed here that
+// no longer happens is a small lie told during every single wait.
+const GENERATION_STAGES = [
+  { label: "Checking live Pinterest trends", ms: 7000 },
+  { label: "Picking keywords worth ranking for", ms: 4000 },
+  { label: "Reading your pin and writing the copy", ms: 999_999 },
+] as const;
+
+/** Shown while the pipeline runs: a progress sweep plus the current stage,
+ * advancing on the real timings above. It settles on the last stage rather
+ * than looping, so a slow pin reads as "still writing" instead of restarting. */
+export function GeneratingNotice() {
+  const [stage, setStage] = useState(0);
+
+  useEffect(() => {
+    if (stage >= GENERATION_STAGES.length - 1) return;
+    const t = setTimeout(() => setStage((s) => s + 1), GENERATION_STAGES[stage].ms);
+    return () => clearTimeout(t);
+  }, [stage]);
+
+  return (
+    <div className="overflow-hidden rounded-2xl border border-primary/20 bg-gradient-to-br from-rose-50/70 via-surface-2/40 to-amber-50/60 p-3">
+      <div className="flex items-center gap-2">
+        <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-primary/10 text-primary">
+          <Sparkles className="h-3.5 w-3.5 animate-pulse" />
+        </span>
+        {/* key remounts the <p> so each stage fades in as it swaps. */}
+        <p key={stage} className="animate-hint-in text-[11px] font-semibold text-muted-foreground">
+          {GENERATION_STAGES[stage].label}…
+        </p>
+      </div>
+      <div className="mt-2.5 h-1 w-full overflow-hidden rounded-full bg-surface-2">
+        <div className="animate-indeterminate h-full w-1/3 rounded-full bg-primary/60" />
       </div>
     </div>
   );
