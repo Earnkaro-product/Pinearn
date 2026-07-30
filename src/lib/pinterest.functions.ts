@@ -83,6 +83,26 @@ export const importPinterestBoards = createServerFn({ method: "POST" })
       .limit(1);
     let nextPosition = (existingPositions?.[0]?.position ?? -1) + 1;
 
+    // A Pinterest board is also a real board row, not just a collection: the
+    // storefront's Boards tab (and the public page) read `boards`, so without
+    // this every synced board — "mirror" and friends — was invisible there.
+    const { data: existingBoardRows } = await supabase
+      .from("boards")
+      .select("id, pinterest_board_id")
+      .eq("storefront_id", storefront.id)
+      .not("pinterest_board_id", "is", null);
+    const existingBoardByBoardId = new Map(
+      (existingBoardRows ?? []).map((b) => [b.pinterest_board_id as string, b.id]),
+    );
+
+    const { data: existingBoardPositions } = await supabase
+      .from("boards")
+      .select("position")
+      .eq("storefront_id", storefront.id)
+      .order("position", { ascending: false })
+      .limit(1);
+    let nextBoardPosition = (existingBoardPositions?.[0]?.position ?? -1) + 1;
+
     // Board names can be emoji-only or otherwise collapse to the same slug
     // (e.g. "-🎵" and "_📝" both strip down to the "board" fallback) — track
     // every slug already used in this storefront and disambiguate collisions
@@ -154,12 +174,56 @@ export const importPinterestBoards = createServerFn({ method: "POST" })
         boardsCreated++;
       }
 
+      // Board row + membership, so the board shows up on the Boards tab with
+      // its collection inside it. Keyed on pinterest_board_id, so re-running
+      // the sync reuses the existing row rather than duplicating it.
+      let boardRowId = existingBoardByBoardId.get(board.id);
+      let boardRowIsNew = false;
+      if (!boardRowId) {
+        const { data: boardRow, error: bErr } = await supabase
+          .from("boards")
+          .insert({
+            user_id: userId,
+            storefront_id: storefront.id,
+            name: board.name,
+            source: "pinterest",
+            pinterest_board_id: board.id,
+            position: nextBoardPosition++,
+          })
+          .select("id")
+          .single();
+        if (bErr) {
+          failedBoards.push(`${board.name || board.id} (board): ${bErr.message}`);
+        } else {
+          boardRowId = boardRow.id;
+          boardRowIsNew = true;
+          existingBoardByBoardId.set(board.id, boardRow.id);
+        }
+      }
+      if (boardRowId) {
+        await supabase
+          .from("board_collections")
+          .upsert(
+            { board_id: boardRowId, collection_id: collectionId, user_id: userId, position: 0 },
+            { onConflict: "board_id,collection_id" },
+          );
+      }
+
       const pins = await withPinterestToken(userId, (t) => listBoardPins(t, board.id));
       if (pins.length === 0) continue;
 
       // This is a creator app — only sync pins the user actually authored,
       // never pins they saved/repinned from someone else's content.
       const ownerPins = pins.filter((p) => p.isOwner);
+
+      // Cover for a just-created board: its newest pin's image, so the Boards
+      // tab isn't a wall of blank cards before anything is monetised. Only on
+      // creation — a cover the user picked later is never overwritten.
+      if (boardRowIsNew && boardRowId) {
+        const cover = ownerPins.find((p) => p.imageUrl)?.imageUrl;
+        if (cover)
+          await supabase.from("boards").update({ cover_image_url: cover }).eq("id", boardRowId);
+      }
 
       // Insert pins we've never seen; re-home pins that already exist but sit
       // in a different (or no) collection — unless they're already live, in

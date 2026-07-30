@@ -34,15 +34,28 @@ export type HealthBoard = {
   cover_image_url: string | null;
 };
 
+/**
+ * The PINTEREST profile, which is what this score is about.
+ *
+ * It used to be scored from the Pinearn storefront — storefront description as
+ * "bio", `is_published` as "website claimed". That measured the wrong profile: a
+ * creator with a perfect storefront and an empty Pinterest bio scored 100 while
+ * every visitor who tapped through from a pin landed on a blank page. These flags
+ * now come from Pinterest's /user_account (see pinterest-profile.functions.ts),
+ * so the score moves only when the profile people actually see improves.
+ */
 export type HealthProfile = {
-  // bio filled → the storefront description (the closest thing to a bio we own)
+  // bio filled → the Pinterest profile's `about` text
   bioFilled: boolean;
-  // avatar set → profiles.avatar_url
+  // avatar set → the Pinterest profile photo
   avatarSet: boolean;
-  // website claimed → the storefront is published (their claimed public link)
+  // website set → the Pinterest profile's website_url
   websiteClaimed: boolean;
-  // at least one social link → Pinterest account connected
+  // account connected → we can read (and the creator can fix) the profile at all
   socialLinked: boolean;
+  // False when Pinterest couldn't be read and the flags fall back to what Pinearn
+  // knows locally — the UI says so rather than presenting a guess as fact.
+  fromPinterest?: boolean;
 };
 
 /* ---------------- Generic/placeholder detection ---------------- */
@@ -166,11 +179,18 @@ export type HealthReport = {
 
 // Pin SEO drives reach hardest, so it carries the most weight. Revisit once
 // real usage data shows which sub-score correlates with impressions/saves.
+//
+// Profile Completeness is deliberately the lightest of the four. It's four
+// one-off switches on a profile Pinearn can't edit — the creator fixes them once,
+// on pinterest.com, and never touches them again. At its old 0.20 it could swing
+// the headline number by 20 points for work that has nothing to do with the pins
+// and boards the product actually improves, which made the score jump for reasons
+// the creator couldn't act on inside the app. Must sum to 1.
 export const SUB_SCORE_WEIGHTS: Record<SubScoreKey, number> = {
-  pinSeo: 0.35,
-  boardStructure: 0.25,
-  profile: 0.2,
-  freshness: 0.2,
+  pinSeo: 0.4,
+  boardStructure: 0.28,
+  profile: 0.1,
+  freshness: 0.22,
 };
 
 export const SUB_SCORE_LABELS: Record<SubScoreKey, string> = {
@@ -188,15 +208,17 @@ export const SCORE_CRITERIA: Record<SubScoreKey, string> = {
   boardStructure:
     "A board passes when its name is specific (not a placeholder) and it has a description.",
   profile:
-    "Four checks worth 25 each: bio, avatar, a claimed website, and a linked social account.",
+    "Four checks worth 25 each, read from your Pinterest profile: an About bio, a profile photo, a website URL, and a connected account. You fix these on Pinterest — Pinearn can only point you at them.",
   freshness: `A board counts as fresh when it has a pin from the last ${FRESH_DAYS} days.`,
 };
 
+// Named after the fields as Pinterest labels them, so the sheet's rows and the
+// settings page the creator lands on say the same words.
 const PROFILE_ITEM_LABELS: Record<ProfileItemKey, string> = {
-  bio: "Bio",
-  avatar: "Avatar",
-  website: "Website claimed",
-  social: "Social link",
+  bio: "About / bio",
+  avatar: "Profile photo",
+  website: "Website URL",
+  social: "Pinterest connected",
 };
 
 // The one-line diagnosis under the big number, keyed by whichever area is

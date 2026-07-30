@@ -310,6 +310,13 @@ export async function listBoardPins(accessToken: string, boardId: string): Promi
 export type PinterestAccount = {
   username: string | null;
   accountId: string | null;
+  // The profile fields the health score reads. Pinterest owns them — Pinearn can
+  // only report what's set and send the creator to the right settings page.
+  about: string | null;
+  websiteUrl: string | null;
+  profileImage: string | null;
+  businessName: string | null;
+  accountType: string | null;
   pinCount: number;
   boardCount: number;
   followerCount: number;
@@ -317,11 +324,23 @@ export type PinterestAccount = {
   monthlyViews: number;
 };
 
+/** Empty strings come back from Pinterest for unset text fields; normalise them
+ * to null so "set" is a single check everywhere downstream. */
+function nullIfBlank(v: unknown): string | null {
+  const s = typeof v === "string" ? v.trim() : "";
+  return s.length > 0 ? s : null;
+}
+
 export async function getUserAccount(accessToken: string): Promise<PinterestAccount> {
   const data = await pinterestFetch(accessToken, "/user_account");
   return {
     username: data.username ?? null,
     accountId: data.id ?? null,
+    about: nullIfBlank(data.about),
+    websiteUrl: nullIfBlank(data.website_url),
+    profileImage: nullIfBlank(data.profile_image),
+    businessName: nullIfBlank(data.business_name),
+    accountType: nullIfBlank(data.account_type),
     pinCount: Number(data.pin_count ?? 0),
     boardCount: Number(data.board_count ?? 0),
     followerCount: Number(data.follower_count ?? 0),
