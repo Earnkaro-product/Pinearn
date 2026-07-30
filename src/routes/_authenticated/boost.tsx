@@ -33,6 +33,7 @@ import {
   markAnalyzedThisSession,
 } from "@/components/boost-analyzer";
 import { useHealthScore, type HealthData } from "@/hooks/use-health-score";
+import type { PinterestProfileSnapshot } from "@/lib/pinterest-profile.functions";
 import {
   boardIssues,
   boardPassesStructure,
@@ -90,14 +91,10 @@ function BoostPinsPage() {
     }
   }, [report, analyzing, recorded]);
 
-  // Deep-link CTAs. saveLastSeenScore fires on EVERY fix path (not just the
-  // swipe flows) so the score climb animates on return regardless of route.
-  const goProfile = (item: ProfileItemKey) => {
-    if (report) saveLastSeenScore(report.overall);
-    if (item === "avatar") return navigate({ to: "/profile", search: { focus: "avatar" } });
-    if (item === "social") return navigate({ to: "/profile", search: { focus: "pinterest" } });
-    return navigate({ to: "/storefront", search: { collection: undefined, edit: 1 } });
-  };
+  // Profile Completeness scores the Pinterest profile, so its fix can't be a
+  // route inside Pinearn — the bio, photo and website all live on pinterest.com.
+  // The sheet shows what Pinterest currently has and hands over a link per field.
+  const [profileSheet, setProfileSheet] = useState(false);
   const goFreshness = (boardId?: string) => {
     if (report) saveLastSeenScore(report.overall);
     navigate({ to: "/pins/create", search: { board: boardId } });
@@ -109,10 +106,10 @@ function BoostPinsPage() {
         return navigate({ to: "/boost/pins" });
       case "boardStructure":
         return navigate({ to: "/boost/boards" });
-      case "profile": {
-        const first = report.profileItems.find((i) => !i.ok);
-        return goProfile(first?.key ?? "bio");
-      }
+      case "profile":
+        // Swap the briefing for the profile sheet rather than stacking them.
+        setBriefingKey(null);
+        return setProfileSheet(true);
       case "freshness":
         return goFreshness(staleBoards(data.pins, data.boards)[0]?.id);
     }
@@ -204,6 +201,23 @@ function BoostPinsPage() {
           />
         )}
       </AnimatePresence>
+
+      {/* The profile fix itself: their live Pinterest profile, field by field. */}
+      <AnimatePresence>
+        {profileSheet && report && (
+          <PinterestProfileSheet
+            snapshot={data?.pinterestProfile ?? null}
+            items={report.profileItems}
+            score={report.subScores.find((s) => s.key === "profile")?.score ?? 0}
+            refreshing={isFetching}
+            onRecheck={() => {
+              saveLastSeenScore(report.overall);
+              void refetch();
+            }}
+            onClose={() => setProfileSheet(false)}
+          />
+        )}
+      </AnimatePresence>
     </AppShell>
   );
 }
@@ -239,7 +253,7 @@ function missingItemsFor(
     case "profile":
       return profileItems
         .filter((i) => !i.ok)
-        .map((i) => ({ id: i.key, title: i.label, note: "Not set yet" }));
+        .map((i) => ({ id: i.key, title: i.label, note: "Missing on Pinterest" }));
     case "freshness":
       return staleBoards(data.pins, data.boards).map((b) => ({
         id: b.id,
@@ -263,9 +277,9 @@ const HOW_STEPS: Record<SubScoreKey, HowStep[]> = {
     { icon: Undo2, label: "Undo anytime" },
   ],
   profile: [
-    { icon: MousePointerClick, label: "Jump to field" },
-    { icon: PencilLine, label: "Fill it in" },
-    { icon: TrendingUp, label: "Score climbs" },
+    { icon: MousePointerClick, label: "See your Pinterest profile" },
+    { icon: PencilLine, label: "Fix it on Pinterest" },
+    { icon: TrendingUp, label: "Recheck — score climbs" },
   ],
   freshness: [
     { icon: Compass, label: "Find quiet boards" },
@@ -478,6 +492,258 @@ function FixBriefing({
             </button>
           </motion.div>
         </motion.div>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+/* ---------------- Profile fix: the creator's Pinterest profile ---------------- */
+
+// Where each field is actually edited. Pinterest keeps the profile fields on the
+// public-profile settings page and domain claiming on its own page, so a single
+// "open Pinterest" link would land the creator one or two clicks short of the
+// thing they came to fix.
+const PINTEREST_SETTINGS = "https://www.pinterest.com/settings/profile/";
+const PINTEREST_CLAIM = "https://www.pinterest.com/settings/claim/";
+
+type ProfileRow = {
+  key: ProfileItemKey;
+  label: string;
+  ok: boolean;
+  /** What Pinterest currently has, shown verbatim so it's obvious what to change. */
+  value: string | null;
+  hint: string;
+  href: string | null;
+  cta: string;
+};
+
+function PinterestProfileSheet({
+  snapshot,
+  items,
+  score,
+  refreshing,
+  onRecheck,
+  onClose,
+}: {
+  snapshot: PinterestProfileSnapshot | null;
+  items: ProfileItem[];
+  score: number;
+  refreshing: boolean;
+  onRecheck: () => void;
+  onClose: () => void;
+}) {
+  const connected = !!snapshot?.connected;
+  const okOf = (key: ProfileItemKey) => items.find((i) => i.key === key)?.ok ?? false;
+  const tone = scoreTone(score);
+
+  const rows: ProfileRow[] = [
+    {
+      key: "avatar",
+      label: "Profile photo",
+      ok: okOf("avatar"),
+      value: snapshot?.profileImage ? "Shown above" : null,
+      hint: "A face or logo — profiles without one convert far fewer followers.",
+      href: PINTEREST_SETTINGS,
+      cta: "Fix on Pinterest",
+    },
+    {
+      key: "bio",
+      label: "About / bio",
+      ok: okOf("bio"),
+      value: snapshot?.about ?? null,
+      hint: "Say who you are and what you pin — this is indexed by Pinterest search.",
+      href: PINTEREST_SETTINGS,
+      cta: "Fix on Pinterest",
+    },
+    {
+      key: "website",
+      label: "Website URL",
+      ok: okOf("website"),
+      value: snapshot?.websiteUrl ?? null,
+      hint: "The link on your profile. Claim it too, so every pin from your site is credited to you.",
+      href: okOf("website") ? PINTEREST_CLAIM : PINTEREST_SETTINGS,
+      cta: okOf("website") ? "Claim it on Pinterest" : "Fix on Pinterest",
+    },
+    {
+      key: "social",
+      label: "Pinterest connected",
+      ok: okOf("social"),
+      value: snapshot?.username ? `@${snapshot.username}` : null,
+      hint: "Connect the account so Pinearn can read your profile and pins.",
+      href: null,
+      cta: "Connect in Settings",
+    },
+  ];
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.2 }}
+      onClick={onClose}
+      className="fixed inset-0 z-[65] flex items-end justify-center bg-background/70 backdrop-blur-sm sm:items-center sm:p-4"
+    >
+      <motion.div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="pinterest-profile-title"
+        onClick={(e) => e.stopPropagation()}
+        initial={{ y: 48, opacity: 0.5 }}
+        animate={{ y: 0, opacity: 1 }}
+        exit={{ y: 48, opacity: 0 }}
+        transition={{ type: "spring", stiffness: 360, damping: 34 }}
+        className="max-h-[92dvh] w-full max-w-md overflow-y-auto rounded-t-3xl border border-border bg-surface p-5 shadow-elevate sm:rounded-3xl"
+        style={{ paddingBottom: "max(1.25rem, env(safe-area-inset-bottom))" }}
+      >
+        <div className="mx-auto mb-4 h-1.5 w-10 rounded-full bg-border sm:hidden" />
+
+        {/* The profile as Pinterest has it — avatar, name, real counts. */}
+        <div className="flex items-start gap-3">
+          <div className="relative h-14 w-14 shrink-0 overflow-hidden rounded-full bg-surface-2 ring-1 ring-border">
+            {snapshot?.profileImage ? (
+              <img src={snapshot.profileImage} alt="" className="h-full w-full object-cover" />
+            ) : (
+              <div className="grid h-full w-full place-items-center text-muted-foreground">
+                <UserCheck className="h-6 w-6" />
+              </div>
+            )}
+          </div>
+          <div className="min-w-0 flex-1">
+            <h2
+              id="pinterest-profile-title"
+              className="truncate font-display text-lg font-bold leading-tight"
+            >
+              {snapshot?.businessName ??
+                (snapshot?.username ? `@${snapshot.username}` : "Your Pinterest profile")}
+            </h2>
+            <p className="mt-0.5 text-[11px] text-muted-foreground">
+              <span className={`font-bold ${tone.text}`}>{score}%</span> complete
+              {connected && (
+                <>
+                  {" · "}
+                  {snapshot!.followerCount.toLocaleString()} followers ·{" "}
+                  {snapshot!.pinCount.toLocaleString()} pins
+                </>
+              )}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="-mr-1 -mt-1 grid h-9 w-9 shrink-0 place-items-center rounded-full text-muted-foreground transition hover:bg-surface-2"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        {/* This is read-only on purpose — say so once, at the top. */}
+        <p className="mt-3 rounded-2xl bg-surface-2/70 p-3 text-[12px] leading-snug text-muted-foreground ring-1 ring-inset ring-border/70">
+          {connected ? (
+            <>
+              This is your live Pinterest profile — the page anyone who taps a pin lands on. Pinearn
+              can&apos;t edit it, so each fix opens the exact Pinterest setting. Come back and hit
+              recheck when you&apos;re done.
+            </>
+          ) : (
+            <>
+              {snapshot?.reason ?? "Pinterest isn't connected"} — so these checks fall back to what
+              Pinearn knows locally. Connect Pinterest in Settings to score the real profile.
+            </>
+          )}
+        </p>
+
+        <div className="mt-3 space-y-2">
+          {rows.map((row) => (
+            <div
+              key={row.key}
+              className={`rounded-2xl border p-3 ${
+                row.ok ? "border-border bg-surface" : "border-amber-500/30 bg-amber-500/[0.06]"
+              }`}
+            >
+              <div className="flex items-start gap-2.5">
+                <span
+                  className={`mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full ${
+                    row.ok ? "bg-emerald-500/15 text-emerald-600" : "bg-amber-500/20 text-amber-700"
+                  }`}
+                >
+                  {row.ok ? (
+                    <CheckCircle2 className="h-3.5 w-3.5" />
+                  ) : (
+                    <X className="h-3 w-3" strokeWidth={3} />
+                  )}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-[13px] font-bold">{row.label}</p>
+                  {row.value ? (
+                    <p className="mt-0.5 line-clamp-2 break-words text-[12px] text-foreground/75">
+                      {row.value}
+                    </p>
+                  ) : (
+                    <p className="mt-0.5 text-[12px] italic text-muted-foreground">
+                      Not set on Pinterest
+                    </p>
+                  )}
+                  {!row.ok && (
+                    <p className="mt-1 text-[11px] leading-snug text-muted-foreground">
+                      {row.hint}
+                    </p>
+                  )}
+                </div>
+
+                {row.href ? (
+                  <a
+                    href={row.href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={`inline-flex min-h-8 shrink-0 items-center gap-1 rounded-full px-3 text-[11px] font-bold transition ${
+                      row.ok
+                        ? "bg-surface-2 text-muted-foreground ring-1 ring-border hover:text-foreground"
+                        : "bg-gradient-primary text-primary-foreground shadow-glow"
+                    }`}
+                  >
+                    {row.ok ? "Edit" : row.cta} <ArrowRight className="h-3 w-3" />
+                  </a>
+                ) : (
+                  <Link
+                    to="/profile"
+                    search={{ focus: "pinterest" }}
+                    className={`inline-flex min-h-8 shrink-0 items-center gap-1 rounded-full px-3 text-[11px] font-bold transition ${
+                      row.ok
+                        ? "bg-surface-2 text-muted-foreground ring-1 ring-border hover:text-foreground"
+                        : "bg-gradient-primary text-primary-foreground shadow-glow"
+                    }`}
+                  >
+                    {row.ok ? "Manage" : row.cta} <ArrowRight className="h-3 w-3" />
+                  </Link>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="mt-4 flex gap-2">
+          <button
+            type="button"
+            onClick={onRecheck}
+            disabled={refreshing}
+            className="inline-flex min-h-[48px] flex-1 items-center justify-center gap-1.5 rounded-2xl border-2 border-primary bg-surface text-[13px] font-bold text-primary transition disabled:opacity-50"
+          >
+            <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
+            {refreshing ? "Rechecking…" : "Recheck profile"}
+          </button>
+          {connected && snapshot?.username && (
+            <a
+              href={`https://www.pinterest.com/${snapshot.username}/`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex min-h-[48px] shrink-0 items-center justify-center gap-1.5 rounded-2xl bg-surface-2 px-4 text-[13px] font-bold text-muted-foreground ring-1 ring-border transition hover:text-foreground"
+            >
+              <Link2 className="h-4 w-4" /> View
+            </a>
+          )}
+        </div>
       </motion.div>
     </motion.div>
   );

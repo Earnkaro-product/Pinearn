@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useServerFn } from "@tanstack/react-start";
 import { supabase } from "@/integrations/supabase/client";
 import {
   computeHealthReport,
@@ -7,15 +8,29 @@ import {
   type HealthPin,
   type HealthProfile,
 } from "@/lib/health-score";
+import {
+  getPinterestProfile,
+  type PinterestProfileSnapshot,
+} from "@/lib/pinterest-profile.functions";
 
 // One query key for everything Health Score reads — the fix flows invalidate
 // this after applying suggestions so the dashboard re-scores immediately.
 export const HEALTH_SCORE_QUERY_KEY = ["health-score-data"];
 
+// The Pinterest profile is a separate query on purpose. It's a round trip to
+// Pinterest's API, and every fix flow invalidates the health data on exit — folding
+// it into the same request would have made the pins/boards the deck needs wait on
+// a third-party call each time. Its own key means it caches for minutes, refreshes
+// independently, and the score simply recomputes when it lands.
+export const PINTEREST_PROFILE_QUERY_KEY = ["pinterest-profile"];
+
 export type HealthData = {
   pins: HealthPin[];
   boards: HealthBoard[];
   profile: HealthProfile;
+  // The raw Pinterest profile behind the profile sub-score, so the fix sheet can
+  // show the creator their actual bio/website instead of just pass/fail.
+  pinterestProfile: PinterestProfileSnapshot | null;
 };
 
 async function fetchHealthData(): Promise<HealthData> {
@@ -25,6 +40,7 @@ async function fetchHealthData(): Promise<HealthData> {
     pins: [],
     boards: [],
     profile: { bioFilled: false, avatarSet: false, websiteClaimed: false, socialLinked: false },
+    pinterestProfile: null,
   };
   if (!userId) return empty;
 
@@ -72,29 +88,74 @@ async function fetchHealthData(): Promise<HealthData> {
   return {
     pins: (pinsRes.data ?? []) as HealthPin[],
     boards: (boardsRes.data ?? []) as HealthBoard[],
+    // The local fallback, used until (or unless) the Pinterest profile can be
+    // read — see mergePinterestProfile below.
     profile: {
-      // Bio = the storefront description — the closest field we own to a bio.
       bioFilled: !!storefrontRes.data?.description?.trim(),
       avatarSet: !!profileRes.data?.avatar_url?.trim(),
-      // Website claimed = their public storefront link is live.
       websiteClaimed: !!storefrontRes.data?.is_published,
-      // Social link = Pinterest account connected.
       socialLinked: !!profileRes.data?.pinterest_connected,
+      fromPinterest: false,
     },
+    pinterestProfile: null,
+  };
+}
+
+/** Profile Completeness scores the PINTEREST profile — the page a pin's traffic
+ * actually lands on. When Pinterest can't be read (not connected, token revoked,
+ * trial-tier account) the local signals stand in and `fromPinterest` stays false,
+ * so the UI can say the score is a stand-in instead of reporting an unknown
+ * profile as an empty one. */
+function mergePinterestProfile(
+  data: HealthData,
+  snapshot: PinterestProfileSnapshot | undefined,
+): HealthData {
+  if (!snapshot?.connected) return { ...data, pinterestProfile: snapshot ?? null };
+  return {
+    ...data,
+    profile: {
+      bioFilled: !!snapshot.about,
+      avatarSet: !!snapshot.profileImage,
+      websiteClaimed: !!snapshot.websiteUrl,
+      socialLinked: true,
+      fromPinterest: true,
+    },
+    pinterestProfile: snapshot,
   };
 }
 
 /** Everything the Health Score surfaces need: raw data + the computed report. */
 export function useHealthScore() {
+  const loadPinterestProfile = useServerFn(getPinterestProfile);
   const query = useQuery({ queryKey: HEALTH_SCORE_QUERY_KEY, queryFn: fetchHealthData });
+  const profileQuery = useQuery({
+    queryKey: PINTEREST_PROFILE_QUERY_KEY,
+    queryFn: () => loadPinterestProfile(),
+    // Pinterest profiles change once in a blue moon, and the handler never
+    // throws — so cache it hard and don't retry a failure into a stampede.
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
 
-  const report = useMemo(
-    () =>
-      query.data
-        ? computeHealthReport(query.data.pins, query.data.boards, query.data.profile)
-        : null,
-    [query.data],
+  const data = useMemo(
+    () => (query.data ? mergePinterestProfile(query.data, profileQuery.data) : undefined),
+    [query.data, profileQuery.data],
   );
 
-  return { ...query, report };
+  const report = useMemo(
+    () => (data ? computeHealthReport(data.pins, data.boards, data.profile) : null),
+    [data],
+  );
+
+  return {
+    ...query,
+    data,
+    // Both halves feed one score, so callers see one loading/refetch surface.
+    isFetching: query.isFetching || profileQuery.isFetching,
+    refetch: async () => {
+      const [health] = await Promise.all([query.refetch(), profileQuery.refetch()]);
+      return health;
+    },
+    report,
+  };
 }

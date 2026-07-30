@@ -80,7 +80,9 @@ export type Database = {
           hidden_from_storefront_at: string | null;
           id: string;
           name: string;
+          pinterest_board_id: string | null;
           position: number;
+          source: string;
           storefront_id: string;
           updated_at: string;
           user_id: string;
@@ -91,7 +93,9 @@ export type Database = {
           hidden_from_storefront_at?: string | null;
           id?: string;
           name: string;
+          pinterest_board_id?: string | null;
           position?: number;
+          source?: string;
           storefront_id: string;
           updated_at?: string;
           user_id: string;
@@ -102,7 +106,9 @@ export type Database = {
           hidden_from_storefront_at?: string | null;
           id?: string;
           name?: string;
+          pinterest_board_id?: string | null;
           position?: number;
+          source?: string;
           storefront_id?: string;
           updated_at?: string;
           user_id?: string;

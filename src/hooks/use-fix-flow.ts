@@ -45,6 +45,13 @@ export function useFixFlow<C extends BaseFixCard>(opts: {
   applyToCache: (data: HealthData, id: string, values: FixValues) => HealthData;
   // Extra query keys to invalidate on exit (other surfaces showing this data).
   invalidateKeys: ReadonlyArray<ReadonlyArray<unknown>>;
+  // Side effects that must happen once per SUCCESSFUL apply / revert, and never
+  // on the other one. `persist` can't carry them: revertFix writes through the
+  // same persist call with the original values, so a debit placed there would
+  // charge again for an undo. Both are awaited but must not throw — a failed
+  // side effect leaves the row written.
+  onApplied?: (id: string) => void | Promise<void>;
+  onReverted?: (id: string) => void | Promise<void>;
 }) {
   const qc = useQueryClient();
   const { data, report, isLoading } = useHealthScore();
@@ -52,9 +59,14 @@ export function useFixFlow<C extends BaseFixCard>(opts: {
   // Frozen on first load — later cache patches update the live score but must
   // never reshuffle the deck out from under the cursor.
   const [deck, setDeck] = useState<C[] | null>(null);
+  // The deck as first built, kept whole so a focused run (see focusDeck) can be
+  // widened back out without rebuilding from data the flow has since patched.
+  const fullDeckRef = useRef<C[] | null>(null);
   useEffect(() => {
     if (deck !== null || !data) return;
-    setDeck(opts.buildDeck(data));
+    const built = opts.buildDeck(data);
+    fullDeckRef.current = built;
+    setDeck(built);
     // Build once; opts is recreated each render but buildDeck is pure.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, deck]);
@@ -135,7 +147,9 @@ export function useFixFlow<C extends BaseFixCard>(opts: {
       const slot = cards.findIndex((c) => c.id === card.id);
       if (slot >= 0) setIndex((i) => Math.min(i, slot));
       toast.error("Couldn't save that change — it's back in the queue");
+      return;
     }
+    await opts.onApplied?.(card.id);
   };
 
   const revertFix = async (card: C) => {
@@ -145,7 +159,11 @@ export function useFixFlow<C extends BaseFixCard>(opts: {
     setRev((r) => r + 1);
     patch(card.id, original);
     const { error } = await opts.persist(card.id, original);
-    if (error) toast.error("Couldn't undo that change");
+    if (error) {
+      toast.error("Couldn't undo that change");
+      return;
+    }
+    await opts.onReverted?.(card.id);
   };
 
   const decide = (card: C, decision: SwipeDecision) => {
@@ -187,20 +205,39 @@ export function useFixFlow<C extends BaseFixCard>(opts: {
    * the database, and silently changing it would desync the undo snapshot. */
   const patchCard = (id: string, values: Record<string, string>) => {
     if (appliedRef.current.has(id)) return;
-    setDeck((d) =>
-      d
-        ? d.map((c) =>
-            c.id === id
-              ? {
-                  ...c,
-                  fields: c.fields.map((f) =>
-                    f.key in values ? { ...f, value: values[f.key] } : f,
-                  ),
-                }
-              : c,
-          )
-        : d,
-    );
+    const patchList = (list: C[]) =>
+      list.map((c) =>
+        c.id === id
+          ? {
+              ...c,
+              fields: c.fields.map((f) => (f.key in values ? { ...f, value: values[f.key] } : f)),
+            }
+          : c,
+      );
+    // Both copies, or copy that arrived during a focused run would be lost the
+    // moment the deck is widened again.
+    if (fullDeckRef.current) fullDeckRef.current = patchList(fullDeckRef.current);
+    setDeck((d) => (d ? patchList(d) : d));
+  };
+
+  /** Narrow the run to `ids`, in the order given — for a picker where the
+   * creator chooses which items this pass covers. `null` restores the full
+   * deck. Decisions already made are keyed by id, so they survive both ways. */
+  const focusDeck = (ids: string[] | null) => {
+    const full = fullDeckRef.current;
+    if (!full) return;
+    if (ids === null) {
+      setDeck(full);
+      setIndex(0);
+      return;
+    }
+    const order = new Map(ids.map((id, i) => [id, i]));
+    const next = full
+      .filter((c) => order.has(c.id))
+      .sort((a, b) => order.get(a.id)! - order.get(b.id)!);
+    if (next.length === 0) return;
+    setDeck(next);
+    setIndex(0);
   };
 
   const editCurrent = (values: Record<string, string>) => {
@@ -272,6 +309,7 @@ export function useFixFlow<C extends BaseFixCard>(opts: {
     appliedCards,
     decide,
     goTo,
+    focusDeck,
     undo,
     editCurrent,
     patchCard,

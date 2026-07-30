@@ -24,6 +24,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { AffiliateLinkDialog, openAffiliateLinkDialog } from "@/components/affiliate-link-dialog";
 import { Skeleton } from "@/components/ui/skeleton";
+import { WalletPill } from "@/components/wallet-pill";
 
 const NAV = [
   { to: "/dashboard", label: "Home", icon: Home },
@@ -218,6 +219,11 @@ export function AppShell({
                   </>
                 )}
               </div>
+              {/* Coin balance, top right on every screen — it's spent from the
+                  Boost flows but it's account-level, so it lives in the shell
+                  rather than being re-mounted per route. */}
+              <WalletPill />
+
               {!hideHeaderActions && (
                 <div
                   className={

@@ -4,6 +4,7 @@ import {
   ArrowRight,
   Check,
   CheckCircle2,
+  Coins,
   Pencil,
   RotateCcw,
   Sparkles,
@@ -173,15 +174,29 @@ export function FixEditSheet({
 export function ApproveAllSheet({
   cards,
   unitLabel,
+  costCoins,
+  balance,
   onConfirm,
   onCancel,
 }: {
   cards: BaseFixCard[];
   unitLabel: string; // "pins" | "boards"
+  // Coin cost of this batch, and the balance it's charged against. Omitted by
+  // flows that don't cost coins (board structure), which then render no
+  // cost row at all rather than a misleading "0 coins".
+  costCoins?: number;
+  balance?: number | null;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
   const samples = cards.slice(0, 2);
+  const showCost = costCoins != null && costCoins > 0 && balance != null;
+  // The weekly allowance is smaller than a full deck, so a batch bigger than the
+  // balance is trimmed rather than refused: it covers as many items as there are
+  // coins and says so. Only a completely empty wallet blocks the action.
+  const covered = showCost ? Math.min(cards.length, balance) : cards.length;
+  const trimmed = showCost && covered < cards.length;
+  const affordable = covered > 0;
   return (
     <Sheet onClose={onCancel} labelledBy="approveall-title">
       <div className="flex items-start gap-3">
@@ -229,6 +244,45 @@ export function ApproveAllSheet({
         </div>
       )}
 
+      {/* What the batch costs, before it's charged — one coin per pin, against
+          the balance in the header. */}
+      {showCost && (
+        <div
+          className={`mt-4 flex items-center justify-between gap-3 rounded-2xl p-3 ring-1 ring-inset ${
+            affordable ? "bg-surface-2/70 ring-border/70" : "bg-amber-500/10 ring-amber-500/25"
+          }`}
+        >
+          <div className="min-w-0">
+            <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-muted-foreground">
+              Cost
+            </p>
+            <p className="text-[13px] font-semibold">
+              {covered} {covered === 1 ? unitLabel.replace(/s$/, "") : unitLabel} × 1 coin
+            </p>
+            {trimmed && (
+              <p className="mt-0.5 text-[11px] font-semibold leading-snug text-amber-800">
+                Covers the first {covered} of {cards.length} — the rest stay queued until your
+                weekly refill.
+              </p>
+            )}
+          </div>
+          <div className="shrink-0 text-right">
+            <p
+              className={`font-display text-lg font-bold leading-none tabular-nums ${
+                trimmed ? "text-amber-800" : "text-foreground"
+              }`}
+            >
+              −{covered.toLocaleString()}
+            </p>
+            <p className="mt-0.5 text-[10px] font-semibold tabular-nums text-muted-foreground">
+              {balance - covered === 0
+                ? "empties your wallet"
+                : `${(balance - covered).toLocaleString()} coins left`}
+            </p>
+          </div>
+        </div>
+      )}
+
       <div className="mt-5 flex gap-2.5">
         <button
           type="button"
@@ -239,13 +293,21 @@ export function ApproveAllSheet({
         </button>
         <button
           type="button"
+          disabled={!affordable}
           onClick={() => {
             onConfirm();
             onCancel();
           }}
-          className="min-h-[48px] flex-[1.5] rounded-2xl bg-gradient-primary text-sm font-bold text-primary-foreground shadow-glow"
+          className="min-h-[48px] flex-[1.5] rounded-2xl bg-gradient-primary text-sm font-bold text-primary-foreground shadow-glow disabled:opacity-50"
         >
-          Apply {cards.length} fixes
+          {affordable ? (
+            <>
+              Apply {covered} {covered === 1 ? "fix" : "fixes"}
+              {showCost && <span className="font-semibold opacity-85"> · {covered} coins</span>}
+            </>
+          ) : (
+            "Out of coins this week"
+          )}
         </button>
       </div>
     </Sheet>
@@ -360,6 +422,7 @@ export function DoneState({
   skippedCount,
   total,
   appliedCards,
+  coinsSpent,
   onRevertOne,
   onUndoAll,
   onBack,
@@ -372,6 +435,8 @@ export function DoneState({
   skippedCount: number;
   total: number;
   appliedCards: BaseFixCard[];
+  // Coins this run cost. Omitted by flows that don't charge.
+  coinsSpent?: number;
   onRevertOne: (card: BaseFixCard) => void;
   onUndoAll: () => void;
   onBack: () => void;
@@ -411,6 +476,13 @@ export function DoneState({
         <p className="mt-0.5 text-[11px] text-muted-foreground">
           {approvedCount} applied · {skippedCount} skipped · {total} reviewed
         </p>
+        {coinsSpent != null && coinsSpent > 0 && (
+          <p className="mt-1.5 inline-flex items-center gap-1.5 rounded-full bg-amber-500/10 px-2.5 py-1 text-[11px] font-bold text-amber-800 ring-1 ring-inset ring-amber-500/20">
+            <Coins className="h-3 w-3" /> {coinsSpent} {coinsSpent === 1 ? "coin" : "coins"} spent
+            {/* Undo refunds them, so say so where the undo lives. */}
+            <span className="font-semibold opacity-75">· undo refunds</span>
+          </p>
+        )}
 
         <button
           onClick={onBack}
