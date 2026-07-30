@@ -31,14 +31,29 @@ async function fetchHealthData(): Promise<HealthData> {
   const [pinsRes, boardsRes, profileRes, storefrontRes] = await Promise.all([
     supabase
       .from("pins")
-      .select("id, title, description, image_url, collection_id, created_at")
+      // origin_collection_id matters: once a pin goes live it is re-homed into
+      // its own per-pin collection, and only this column still remembers which
+      // real board it came from. Without it, a board whose pins are all live
+      // looks empty — no covers, and falsely stale.
+      .select(
+        "id, title, description, image_url, collection_id, origin_collection_id, impressions, clicks, created_at",
+      )
       .eq("user_id", userId)
       .eq("is_owner", true)
       .order("created_at", { ascending: false }),
     supabase
       .from("collections")
+      // `collections` holds two unrelated things: real Pinterest boards
+      // (source 'pinterest', pinterest_board_id set) and local storefront
+      // groupings — including one auto-created per pin that goes live, named
+      // from the pin title or "Pin collection". Only the former are boards
+      // that exist on Pinterest and can rank there, so only those belong in
+      // the Board Structure score and the Board Boost deck. Scoring the
+      // per-pin containers as undescribed "boards" was both wrong and a
+      // permanent drag on the score.
       .select("id, name, description, cover_image_url")
       .eq("user_id", userId)
+      .not("pinterest_board_id", "is", null)
       .order("position", { ascending: true }),
     supabase
       .from("profiles")

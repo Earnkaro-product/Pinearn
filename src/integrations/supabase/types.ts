@@ -176,12 +176,47 @@ export type Database = {
           },
         ];
       };
+      pinterest_trend_cache: {
+        Row: {
+          as_of: string | null;
+          cache_key: string;
+          country: string;
+          fetched_at: string;
+          mode: string;
+          seed: string | null;
+          terms: Json;
+        };
+        Insert: {
+          as_of?: string | null;
+          cache_key: string;
+          country: string;
+          fetched_at?: string;
+          mode: string;
+          seed?: string | null;
+          terms: Json;
+        };
+        Update: {
+          as_of?: string | null;
+          cache_key?: string;
+          country?: string;
+          fetched_at?: string;
+          mode?: string;
+          seed?: string | null;
+          terms?: Json;
+        };
+        Relationships: [];
+      };
       pin_suggestion_history: {
         Row: {
           angle: string | null;
           created_at: string;
           id: string;
+          issues: Json | null;
+          keywords: Json | null;
+          model: string | null;
           pin_id: string;
+          primary_keyword: string | null;
+          seo_score: number | null;
           status: string;
           suggested_description: string;
           suggested_title: string;
@@ -191,7 +226,12 @@ export type Database = {
           angle?: string | null;
           created_at?: string;
           id?: string;
+          issues?: Json | null;
+          keywords?: Json | null;
+          model?: string | null;
           pin_id: string;
+          primary_keyword?: string | null;
+          seo_score?: number | null;
           status?: string;
           suggested_description: string;
           suggested_title: string;
@@ -201,7 +241,12 @@ export type Database = {
           angle?: string | null;
           created_at?: string;
           id?: string;
+          issues?: Json | null;
+          keywords?: Json | null;
+          model?: string | null;
           pin_id?: string;
+          primary_keyword?: string | null;
+          seo_score?: number | null;
           status?: string;
           suggested_description?: string;
           suggested_title?: string;

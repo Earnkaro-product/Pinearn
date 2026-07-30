@@ -1,6 +1,6 @@
--- SEO suggestion history for pins. Every Gemini-generated title/description
--- lands here regardless of outcome, so the pipeline can (a) return a fresh
--- pending suggestion instead of re-calling Gemini within 24h, and (b) feed
+-- SEO suggestion history for pins. Every AI-generated title/description lands
+-- here regardless of outcome, so the pipeline can (a) return a fresh pending
+-- suggestion instead of paying for another model call within 24h, and (b) feed
 -- previously rejected phrasings back into the prompt as "avoid these".
 CREATE TABLE IF NOT EXISTS public.pin_suggestion_history (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
