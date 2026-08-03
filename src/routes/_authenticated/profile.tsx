@@ -5,6 +5,7 @@ import { useServerFn } from "@tanstack/react-start";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { AppShell } from "@/components/app-shell";
+import { PinterestSyncBanner } from "@/components/pinterest-sync-banner";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Loader2, Save, User as UserIcon, ImagePlus, Link2 } from "lucide-react";
 import { startPinterestOAuth } from "@/lib/pinterest-oauth.functions";
@@ -204,11 +205,17 @@ function ProfilePage() {
                 )}
               </div>
               {connected ? (
-                <Field label="Pinterest username" icon={UserIcon}>
-                  <span className="w-full py-2 text-sm text-muted-foreground">
-                    @{pinterestUsername || "connected"}
-                  </span>
-                </Field>
+                <>
+                  <Field label="Pinterest username" icon={UserIcon}>
+                    <span className="w-full py-2 text-sm text-muted-foreground">
+                      @{pinterestUsername || "connected"}
+                    </span>
+                  </Field>
+                  {/* Connection health lives with the connection itself: what's
+                      imported, how fresh it is, and the manual re-sync (or a
+                      reconnect prompt when the token has died). */}
+                  <PinterestSyncBanner />
+                </>
               ) : (
                 <button
                   ref={connectButtonRef}

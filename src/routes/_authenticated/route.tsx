@@ -1,5 +1,6 @@
-import { createFileRoute, Outlet, redirect } from "@tanstack/react-router";
+import { createFileRoute, Outlet, redirect, useRouterState } from "@tanstack/react-router";
 import { supabase } from "@/integrations/supabase/client";
+import { usePinterestAutoSync } from "@/hooks/use-pinterest-sync";
 
 export const Route = createFileRoute("/_authenticated")({
   ssr: false,
@@ -23,5 +24,15 @@ export const Route = createFileRoute("/_authenticated")({
     }
     return { user: data.user };
   },
-  component: () => <Outlet />,
+  component: AuthenticatedLayout,
 });
+
+function AuthenticatedLayout() {
+  // Mounted once for the whole signed-in app: re-reads Pinterest whenever the
+  // local copy has gone stale (including on tab focus, which is exactly when
+  // someone returns from editing their boards on pinterest.com). Skipped during
+  // onboarding, where the connect flow runs its own explicit import.
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  usePinterestAutoSync(pathname !== "/onboarding");
+  return <Outlet />;
+}

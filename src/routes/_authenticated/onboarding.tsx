@@ -16,7 +16,7 @@ import {
   User,
 } from "lucide-react";
 import { useServerFn } from "@tanstack/react-start";
-import { importPinterestBoards } from "@/lib/pinterest.functions";
+import { syncPinterestAccount } from "@/lib/pinterest-sync.functions";
 import { startPinterestOAuth } from "@/lib/pinterest-oauth.functions";
 import { PinterestSyncModal, type SyncStatus } from "@/components/pinterest-sync-modal";
 
@@ -39,10 +39,24 @@ function PinterestIcon({ className = "h-4 w-4" }: { className?: string }) {
   );
 }
 
+/**
+ * Has this creator actually told us their name?
+ *
+ * Sign-up seeds `display_name` with the phone number (see auth.tsx:
+ * `options: { data: { display_name: phone } }`), so a non-empty display_name is
+ * NOT the same as a name the user chose — every brand-new account already has
+ * one. Checking only for non-empty is what skipped the name step for new users.
+ * A real name contains at least one letter; "+918619596704" doesn't.
+ */
+function hasRealName(value: string | null | undefined): boolean {
+  const v = (value ?? "").trim();
+  return v.length >= 2 && /\p{L}/u.test(v);
+}
+
 function OnboardingPage() {
   const navigate = useNavigate();
   const search = Route.useSearch();
-  const runImport = useServerFn(importPinterestBoards);
+  const runSync = useServerFn(syncPinterestAccount);
   const runStartOAuth = useServerFn(startPinterestOAuth);
 
   const [userId, setUserId] = useState<string | null>(null);
@@ -61,9 +75,21 @@ function OnboardingPage() {
   const [syncError, setSyncError] = useState<string | null>(null);
 
   useEffect(() => {
-    supabase.auth.getUser().then(({ data }) => {
+    supabase.auth.getUser().then(async ({ data }) => {
       if (!data.user) return;
       setUserId(data.user.id);
+      // Someone who already told us their name — a returning creator reconnecting
+      // Pinterest, say — shouldn't be asked for it again on the way back in.
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("display_name")
+        .eq("id", data.user.id)
+        .maybeSingle();
+      const existing = profile?.display_name?.trim();
+      if (hasRealName(existing)) {
+        setName(existing!);
+        setPhase((p) => (p === "name" ? "authorize" : p));
+      }
     });
     if (search.connected === "1") {
       toast.success("Pinterest connected");
@@ -105,8 +131,31 @@ function OnboardingPage() {
     setSyncError(null);
     setSyncResult(null);
     try {
-      const r = await runImport({ data: undefined as unknown as never });
-      setSyncResult(r);
+      const r = await runSync({ data: { analytics: true } });
+      if (!r.ok) {
+        setSyncError(
+          r.needsReconnect
+            ? "Pinterest's access expired before we could import. Connect it again to finish."
+            : (r.error ?? "Sync failed"),
+        );
+        setSyncStatus("error");
+        return;
+      }
+      // The modal counts what landed: fresh imports plus anything that was
+      // already here and got refreshed from Pinterest.
+      const landed = r.pins.created + r.pins.updated + r.pins.rehomed;
+      setSyncResult({
+        boardsCreated: r.boards.created + r.boards.updated,
+        pinsCreated: landed,
+      });
+      // "0 pins" with a board full of saves isn't a failure, but it looks exactly
+      // like one — say which it is.
+      if (landed === 0 && r.pins.savedSkipped > 0) {
+        toast.info(
+          `Found ${r.pins.savedSkipped} saved ${r.pins.savedSkipped === 1 ? "pin" : "pins"} on your boards. Pinearn works on pins you created — create one on Pinterest and sync again.`,
+          { duration: 8000 },
+        );
+      }
       setSyncStatus("success");
     } catch (e) {
       setSyncError(e instanceof Error ? e.message : "Sync failed");

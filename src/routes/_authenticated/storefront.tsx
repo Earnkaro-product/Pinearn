@@ -31,7 +31,9 @@ import { Reorder, motion } from "framer-motion";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
-import { importPinterestBoards, takeDownCollection } from "@/lib/pinterest.functions";
+import { takeDownCollection } from "@/lib/pinterest.functions";
+import { syncPinterestAccount } from "@/lib/pinterest-sync.functions";
+import { usePinterestSync } from "@/hooks/use-pinterest-sync";
 import { PinterestSyncModal } from "@/components/pinterest-sync-modal";
 import { SuggestionCard, realProductPrice } from "@/components/suggestion-card";
 import { hostBrand } from "@/lib/brands";
@@ -143,7 +145,10 @@ function StorefrontPage() {
     if (search.edit) setShowEditStore(true);
   }, [search.edit]);
 
-  const importBoards = useServerFn(importPinterestBoards);
+  // The unified reconcile — same call the connect flow and the auto-sync use, so
+  // "Sync boards & pins" here can't drift from what happens elsewhere.
+  const importBoards = useServerFn(syncPinterestAccount);
+  const { invalidateAll: invalidatePinterestData } = usePinterestSync();
 
   const { data: profile } = useQuery({
     queryKey: ["me-profile"],
@@ -238,14 +243,26 @@ function StorefrontPage() {
   });
 
   const runImport = useMutation({
-    mutationFn: async () => importBoards({ data: undefined as unknown as never }),
+    mutationFn: async () => importBoards({ data: { analytics: false } }),
     onSuccess: (r) => {
       qc.invalidateQueries({ queryKey: ["collections", storefront?.id] });
       qc.invalidateQueries({ queryKey: ["storefront-pins", storefront?.id] });
-      if (r.boardsCreated === 0 && r.pinsCreated === 0) {
+      invalidatePinterestData();
+      if (!r.ok) {
+        toast.error(r.needsReconnect ? "Pinterest needs reconnecting" : (r.error ?? "Sync failed"));
+        return;
+      }
+      // A re-sync now also pulls edits and deletions, not just new boards, so the
+      // "already up to date" case is genuinely nothing-changed rather than
+      // nothing-new.
+      const created = r.boards.created + r.pins.created;
+      const changed = r.boards.updated + r.pins.updated + r.pins.rehomed + r.pins.removed;
+      if (created === 0 && changed === 0) {
         toast("Your store is already up to date");
+      } else if (created > 0) {
+        toast.success(`Imported ${r.boards.created} boards, ${r.pins.created} pins`);
       } else {
-        toast.success(`Imported ${r.boardsCreated} boards, ${r.pinsCreated} pins`);
+        toast.success(`Updated ${changed} ${changed === 1 ? "item" : "items"} from Pinterest`);
       }
     },
     onError: (e: Error) => toast.error(e.message),
@@ -986,8 +1003,24 @@ function StorefrontPage() {
                 ? "success"
                 : "idle"
         }
-        result={runImport.data ?? null}
-        error={runImport.error ? (runImport.error as Error).message : null}
+        result={
+          runImport.data
+            ? {
+                boardsCreated: runImport.data.boards.created + runImport.data.boards.updated,
+                pinsCreated:
+                  runImport.data.pins.created +
+                  runImport.data.pins.updated +
+                  runImport.data.pins.rehomed,
+              }
+            : null
+        }
+        error={
+          runImport.error
+            ? (runImport.error as Error).message
+            : runImport.data && !runImport.data.ok
+              ? (runImport.data.error ?? "Sync failed")
+              : null
+        }
         onClose={() => {
           setSyncOpen(false);
           runImport.reset();
