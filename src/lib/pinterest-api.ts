@@ -88,7 +88,19 @@ async function hmacSign(message: string): Promise<string> {
 // request that started it, without needing a server-side session store.
 // ---------------------------------------------------------------
 
-type OAuthState = { uid: string; nonce: string; exp: number; returnTo: string };
+// `redirectUri` rides along because OAuth requires the token exchange to present
+// the SAME redirect_uri the authorize call used. Deriving it twice from the
+// environment looked equivalent but wasn't: a dev server that starts on :8081
+// because :8080 is taken silently changes the origin between the two calls, and
+// Pinterest answers the exchange with an opaque invalid_grant. Signing it into
+// the state makes the pair provably identical.
+type OAuthState = {
+  uid: string;
+  nonce: string;
+  exp: number;
+  returnTo: string;
+  redirectUri?: string;
+};
 
 export async function signOAuthState(payload: Omit<OAuthState, "nonce" | "exp">): Promise<string> {
   const state: OAuthState = {
@@ -112,14 +124,56 @@ export async function verifyOAuthState(state: string, expectedUid: string): Prom
   return parsed;
 }
 
-export function buildAuthorizeUrl(state: string): string {
+export function buildAuthorizeUrl(state: string, redirectUri?: string): string {
   const url = new URL(AUTHORIZE_URL);
   url.searchParams.set("client_id", requireEnv("PINTEREST_APP_ID"));
-  url.searchParams.set("redirect_uri", requireEnv("PINTEREST_REDIRECT_URI"));
+  url.searchParams.set("redirect_uri", redirectUri || requireEnv("PINTEREST_REDIRECT_URI"));
   url.searchParams.set("response_type", "code");
   url.searchParams.set("scope", SCOPES);
   url.searchParams.set("state", state);
   return url.toString();
+}
+
+/**
+ * The redirect URI to use for THIS round-trip.
+ *
+ * Pinterest matches redirect_uri against the exact strings registered in the app
+ * dashboard, so the environment variable stays the default. The one case it gets
+ * wrong is local development: the dev server picks another port when its usual
+ * one is busy, and every OAuth attempt then bounces to a port nothing is
+ * listening on. For a localhost origin, trust the origin the request actually
+ * came from and let the caller warn when that differs from the registered URI —
+ * a loud, fixable error beats a silent dead end.
+ */
+export function resolveRedirectUri(requestOrigin: string | null): {
+  redirectUri: string;
+  configured: string;
+  mismatch: boolean;
+} {
+  const configured = requireEnv("PINTEREST_REDIRECT_URI");
+  if (!requestOrigin) return { redirectUri: configured, configured, mismatch: false };
+
+  let origin: URL;
+  let configuredUrl: URL;
+  try {
+    origin = new URL(requestOrigin);
+    configuredUrl = new URL(configured);
+  } catch {
+    return { redirectUri: configured, configured, mismatch: false };
+  }
+
+  if (origin.origin === configuredUrl.origin) {
+    return { redirectUri: configured, configured, mismatch: false };
+  }
+
+  const isLocal = ["localhost", "127.0.0.1", "[::1]"].includes(origin.hostname);
+  if (!isLocal) return { redirectUri: configured, configured, mismatch: true };
+
+  return {
+    redirectUri: `${origin.origin}${configuredUrl.pathname}`,
+    configured,
+    mismatch: true,
+  };
 }
 
 // ---------------------------------------------------------------
@@ -151,12 +205,13 @@ async function tokenRequest(body: URLSearchParams): Promise<PinterestTokens> {
   return res.json() as Promise<PinterestTokens>;
 }
 
-export function exchangeCode(code: string): Promise<PinterestTokens> {
+export function exchangeCode(code: string, redirectUri?: string): Promise<PinterestTokens> {
   return tokenRequest(
     new URLSearchParams({
       grant_type: "authorization_code",
       code,
-      redirect_uri: requireEnv("PINTEREST_REDIRECT_URI"),
+      // Must be byte-identical to the authorize call's — see OAuthState.redirectUri.
+      redirect_uri: redirectUri || requireEnv("PINTEREST_REDIRECT_URI"),
     }),
   );
 }
@@ -223,6 +278,20 @@ export type PinterestBoard = {
   createdAt: string | null;
 };
 
+function toBoard(b: {
+  id: string;
+  name: string;
+  description?: string | null;
+  created_at?: string | null;
+}): PinterestBoard {
+  return {
+    id: b.id,
+    name: b.name,
+    description: b.description ?? null,
+    createdAt: toUtcIso(b.created_at),
+  };
+}
+
 export async function listBoards(accessToken: string): Promise<PinterestBoard[]> {
   const boards: PinterestBoard[] = [];
   let bookmark: string | undefined;
@@ -230,17 +299,33 @@ export async function listBoards(accessToken: string): Promise<PinterestBoard[]>
     const qs = new URLSearchParams({ page_size: "100" });
     if (bookmark) qs.set("bookmark", bookmark);
     const data = await pinterestFetch(accessToken, `/boards?${qs.toString()}`);
-    for (const b of data.items ?? []) {
-      boards.push({
-        id: b.id,
-        name: b.name,
-        description: b.description ?? null,
-        createdAt: toUtcIso(b.created_at),
-      });
-    }
+    for (const b of data.items ?? []) boards.push(toBoard(b));
     bookmark = data.bookmark || undefined;
   } while (bookmark);
   return boards;
+}
+
+/**
+ * One board by id.
+ *
+ * Needed because `GET /boards` is not a complete list of the account's boards.
+ * Verified against a live account: a board holding three pins the creator had
+ * just made never appeared in the listing, yet fetching it by id returns it
+ * normally (privacy PUBLIC, nothing unusual about it). Any board id we learn
+ * about some other way — from a pin's `board_id` — can therefore still be
+ * resolved, which is what keeps those pins from vanishing.
+ */
+export async function getBoard(
+  accessToken: string,
+  boardId: string,
+): Promise<PinterestBoard | null> {
+  try {
+    const b = await pinterestFetch(accessToken, `/boards/${boardId}`);
+    return b?.id ? toBoard(b) : null;
+  } catch (e) {
+    if (e instanceof PinterestAuthError) throw e;
+    return null;
+  }
 }
 
 export type PinterestPin = {
@@ -250,6 +335,9 @@ export type PinterestPin = {
   link: string | null;
   imageUrl: string | null;
   createdAt: string | null;
+  /** Which board Pinterest says this pin lives on — the only reliable way to
+   * place pins found through the account-wide listing. */
+  boardId: string | null;
   // Pinterest's own "authored by this account" flag — false means this pin
   // was saved/repinned from someone else's content, not created by the
   // creator. Confirmed against the real API: is_owner tracks parent_pin_id
@@ -284,6 +372,19 @@ function largestImage(media: unknown): string | null {
   return best?.url ?? null;
 }
 
+function toPin(p: Record<string, unknown>, fallbackBoardId: string | null): PinterestPin {
+  return {
+    id: p.id as string,
+    title: (p.title as string) ?? null,
+    description: (p.description as string) ?? null,
+    link: (p.link as string) ?? null,
+    imageUrl: largestImage(p.media),
+    createdAt: toUtcIso(p.created_at as string),
+    boardId: ((p.board_id as string) ?? null) || fallbackBoardId,
+    isOwner: p.is_owner !== false,
+  };
+}
+
 export async function listBoardPins(accessToken: string, boardId: string): Promise<PinterestPin[]> {
   const pins: PinterestPin[] = [];
   let bookmark: string | undefined;
@@ -291,17 +392,30 @@ export async function listBoardPins(accessToken: string, boardId: string): Promi
     const qs = new URLSearchParams({ page_size: "100" });
     if (bookmark) qs.set("bookmark", bookmark);
     const data = await pinterestFetch(accessToken, `/boards/${boardId}/pins?${qs.toString()}`);
-    for (const p of data.items ?? []) {
-      pins.push({
-        id: p.id,
-        title: p.title ?? null,
-        description: p.description ?? null,
-        link: p.link ?? null,
-        imageUrl: largestImage(p.media),
-        createdAt: toUtcIso(p.created_at),
-        isOwner: p.is_owner !== false,
-      });
-    }
+    for (const p of data.items ?? []) pins.push(toPin(p, boardId));
+    bookmark = data.bookmark || undefined;
+  } while (bookmark);
+  return pins;
+}
+
+/**
+ * Every pin on the account, walking Pinterest's own pin listing rather than the
+ * boards.
+ *
+ * `include_protected_pins` is the whole point. Without it this endpoint returned
+ * 19 pins for a live account — all of them saves — and hid the 3 pins the creator
+ * had actually made. With it, all 22 come back. Those 3 are also the ones that
+ * never appear under any board `GET /boards` lists, so walking boards alone can
+ * never find them: "connected Pinterest, imported 0 pins" was exactly this.
+ */
+export async function listUserPins(accessToken: string): Promise<PinterestPin[]> {
+  const pins: PinterestPin[] = [];
+  let bookmark: string | undefined;
+  do {
+    const qs = new URLSearchParams({ page_size: "100", include_protected_pins: "true" });
+    if (bookmark) qs.set("bookmark", bookmark);
+    const data = await pinterestFetch(accessToken, `/pins?${qs.toString()}`);
+    for (const p of data.items ?? []) pins.push(toPin(p, null));
     bookmark = data.bookmark || undefined;
   } while (bookmark);
   return pins;
@@ -429,6 +543,7 @@ export async function createPin(
     link: data.link ?? null,
     imageUrl: largestImage(data.media),
     createdAt: toUtcIso(data.created_at),
+    boardId: data.board_id ?? null,
     // Just published through our own create-pin flow — always owned.
     isOwner: true,
   };

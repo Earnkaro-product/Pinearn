@@ -1,4 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
+import { getRequest } from "@tanstack/react-start/server";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { getServiceSupabase } from "@/integrations/supabase/service-client";
@@ -8,6 +9,7 @@ import {
   getUserAccount,
   PinterestAuthError,
   refreshAccessToken,
+  resolveRedirectUri,
   signOAuthState,
   verifyOAuthState,
 } from "@/lib/pinterest-api";
@@ -20,9 +22,35 @@ export const startPinterestOAuth = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .validator((d: { returnTo: string }) => z.object({ returnTo: z.string().min(1) }).parse(d))
   .handler(async ({ data, context }) => {
-    const state = await signOAuthState({ uid: context.userId, returnTo: data.returnTo });
-    return { url: buildAuthorizeUrl(state) };
+    // Resolve the redirect URI against the origin this request actually came
+    // from, then sign it into the state so the token exchange presents exactly
+    // the same string (Pinterest compares them byte for byte).
+    const request = getRequest();
+    const origin = request?.headers?.get("origin") ?? originOf(request?.url);
+    const { redirectUri, configured, mismatch } = resolveRedirectUri(origin);
+    if (mismatch) {
+      console.warn(
+        `[pinterest-oauth] This app is being served from ${origin} but PINTEREST_REDIRECT_URI is ${configured}. ` +
+          `Using ${redirectUri} for this round-trip — Pinterest will reject it unless that exact URL is registered ` +
+          `as a redirect URI in the Pinterest app dashboard. Either start the app on ${configured} or add ${redirectUri} there.`,
+      );
+    }
+    const state = await signOAuthState({
+      uid: context.userId,
+      returnTo: data.returnTo,
+      redirectUri,
+    });
+    return { url: buildAuthorizeUrl(state, redirectUri), redirectUri, mismatch };
   });
+
+function originOf(url: string | undefined): string | null {
+  if (!url) return null;
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
+}
 
 // -------------------------------------------------------------
 // Exchange the authorization code, store tokens, mark the profile connected.
@@ -39,9 +67,11 @@ export const completePinterestOAuthCallback = createServerFn({ method: "POST" })
         `OAuth state check failed: ${e instanceof Error ? e.message : e}. Try connecting again from a fresh link — state tokens expire after 10 minutes.`,
       );
     });
-    const tokens = await exchangeCode(data.code).catch((e) => {
+    const tokens = await exchangeCode(data.code, verified.redirectUri).catch((e) => {
       throw new Error(
-        `Pinterest token exchange failed: ${e instanceof Error ? e.message : e}. Check PINTEREST_APP_ID/PINTEREST_APP_SECRET/PINTEREST_REDIRECT_URI match the Pinterest app dashboard exactly.`,
+        `Pinterest token exchange failed: ${e instanceof Error ? e.message : e}. ` +
+          `The redirect URI used was ${verified.redirectUri ?? "(from PINTEREST_REDIRECT_URI)"} — it must be registered ` +
+          `verbatim in the Pinterest app dashboard, and PINTEREST_APP_ID/PINTEREST_APP_SECRET must match that same app.`,
       );
     });
     const account = await getUserAccount(tokens.access_token).catch((e) => {
@@ -66,6 +96,15 @@ export const completePinterestOAuthCallback = createServerFn({ method: "POST" })
       { onConflict: "user_id" },
     );
     if (connErr) throw new Error(connErr.message);
+
+    // A fresh token clears any "reconnect Pinterest" state from the dead one it
+    // replaces. Optional columns (see 20260803120000_pinterest_sync_state.sql) —
+    // ignore the failure when the migration hasn't been applied.
+    await service
+      .from("pinterest_connections")
+      .update({ needs_reauth: false, last_sync_error: null } as never)
+      .eq("user_id", context.userId)
+      .then(undefined, () => undefined);
 
     const { error: profileErr } = await service
       .from("profiles")

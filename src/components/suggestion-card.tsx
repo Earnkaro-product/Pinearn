@@ -46,6 +46,7 @@ export function SuggestionCard({
   link,
   price,
   mrp: realMrp,
+  priceUnverified,
   selected,
   pending,
   onToggle,
@@ -60,6 +61,12 @@ export function SuggestionCard({
   // known — omit it to fall back to a synthesized "was" price, which only
   // applies to real stored products that have no MRP field of their own.
   mrp?: number | null;
+  // The retailer's product page couldn't be reached, so this price is Google
+  // Lens's snapshot rather than a confirmed live figure. Deliberately invisible
+  // — no badge, no styling difference — but it still suppresses the synthesized
+  // "was" price below, because inventing a discount on top of a number nobody
+  // verified would be a fabricated claim, not a display choice.
+  priceUnverified?: boolean;
   selected?: boolean;
   // Image/title/source are already known (progressive rendering) but price/
   // stock/earning are still being confirmed — shows shimmer placeholders in
@@ -74,7 +81,7 @@ export function SuggestionCard({
 }) {
   const pct = commissionPct ?? estimateCommissionPct(source);
   const earning = price ? Math.round(price.extractedValue * (pct / 100)) : null;
-  const mrp = realMrp ?? (price ? computeMrp(price.extractedValue) : null);
+  const mrp = realMrp ?? (price && !priceUnverified ? computeMrp(price.extractedValue) : null);
   const hasDiscount = !!(price && mrp && mrp > price.extractedValue);
   const discountPct = hasDiscount ? Math.round((1 - price!.extractedValue / mrp!) * 100) : null;
   const effectiveOnToggle = onToggle;
@@ -259,6 +266,10 @@ export function ProgressiveSuggestionCard({
   const ckDetails = query.isSuccess ? (query.data?.details ?? null) : null;
   // Live CK price wins; otherwise keep whatever Lens gave us.
   const details = ckDetails ?? fallback;
+  // Showing the Lens price is the right call — a real listing shouldn't
+  // disappear because a pricing service is down — but the card has to admit
+  // which number it's showing.
+  const priceUnverified = !ckDetails && !!fallback;
 
   useEffect(() => {
     if (settledRef.current || query.isLoading) return;
@@ -299,7 +310,8 @@ export function ProgressiveSuggestionCard({
             }
           : null
       }
-      mrp={details?.mrp ?? null}
+      mrp={priceUnverified ? null : (details?.mrp ?? null)}
+      priceUnverified={priceUnverified}
       selected={selected}
       onToggle={onToggle}
     />

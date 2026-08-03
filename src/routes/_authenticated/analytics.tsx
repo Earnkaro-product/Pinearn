@@ -25,7 +25,9 @@ import {
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { pickPlaceholderImage } from "@/lib/placeholder-image";
-import { getPinterestAnalytics, syncPinterestAnalytics } from "@/lib/pinterest.functions";
+import { getPinterestAnalytics } from "@/lib/pinterest.functions";
+import { syncPinterestAccount } from "@/lib/pinterest-sync.functions";
+import { PinterestSyncBanner } from "@/components/pinterest-sync-banner";
 import { ALL_BRANDS, hostBrand, type Brand } from "@/lib/brands";
 import { BrandLogo } from "@/components/brand-card";
 
@@ -123,18 +125,150 @@ function mockOrder(
 }
 
 const ORDERS: Order[] = [
-  mockOrder("1", "AMZ-84213905", "confirmed", "confirmed", 2, 2499, 187, "Amazon", "Wireless earbuds", "Everyday tech picks"),
-  mockOrder("2", "MYN-77120044", "confirmed", "paid", 4, 3599, 432, "Myntra", "Floral wrap dress", "Autumn capsule wardrobe"),
-  mockOrder("3", "NYK-55098211", "confirmed", "confirmed", 6, 1299, 156, "Nykaa", "Matte lipstick set", "Everyday glam routine"),
-  mockOrder("4", "FLP-33471290", "pending", undefined, 1, 4999, 300, "Flipkart", "Air fryer 4L", "Kitchen upgrades"),
-  mockOrder("5", "AJO-99820113", "confirmed", "requested", 9, 2199, 220, "Ajio", "Denim jacket", "Street style board"),
-  mockOrder("6", "MAM-12093344", "confirmed", "paid", 14, 899, 108, "Mamaearth", "Vitamin C serum", "Skincare shelfie"),
-  mockOrder("7", "BOA-44120987", "confirmed", "confirmed", 19, 1799, 144, "Boat", "Bluetooth speaker", "Everyday tech picks"),
-  mockOrder("8", "MEE-88342100", "cancelled", undefined, 7, 599, 48, "Meesho", "Cotton kurti", "Festive fits"),
-  mockOrder("9", "AMZ-84999120", "pending", undefined, 3, 3299, 231, "Amazon", "Standing desk lamp", "Home office setup"),
-  mockOrder("10", "LEN-20114588", "confirmed", "confirmed", 24, 2999, 360, "Lenskart", "Blue-light glasses", "Home office setup"),
-  mockOrder("11", "MYN-77552310", "confirmed", "paid", 41, 4299, 516, "Myntra", "Running sneakers", "Fitness essentials"),
-  mockOrder("12", "SUG-61200934", "confirmed", "confirmed", 55, 749, 90, "Sugar Cosmetics", "Liquid eyeliner", "Everyday glam routine"),
+  mockOrder(
+    "1",
+    "AMZ-84213905",
+    "confirmed",
+    "confirmed",
+    2,
+    2499,
+    187,
+    "Amazon",
+    "Wireless earbuds",
+    "Everyday tech picks",
+  ),
+  mockOrder(
+    "2",
+    "MYN-77120044",
+    "confirmed",
+    "paid",
+    4,
+    3599,
+    432,
+    "Myntra",
+    "Floral wrap dress",
+    "Autumn capsule wardrobe",
+  ),
+  mockOrder(
+    "3",
+    "NYK-55098211",
+    "confirmed",
+    "confirmed",
+    6,
+    1299,
+    156,
+    "Nykaa",
+    "Matte lipstick set",
+    "Everyday glam routine",
+  ),
+  mockOrder(
+    "4",
+    "FLP-33471290",
+    "pending",
+    undefined,
+    1,
+    4999,
+    300,
+    "Flipkart",
+    "Air fryer 4L",
+    "Kitchen upgrades",
+  ),
+  mockOrder(
+    "5",
+    "AJO-99820113",
+    "confirmed",
+    "requested",
+    9,
+    2199,
+    220,
+    "Ajio",
+    "Denim jacket",
+    "Street style board",
+  ),
+  mockOrder(
+    "6",
+    "MAM-12093344",
+    "confirmed",
+    "paid",
+    14,
+    899,
+    108,
+    "Mamaearth",
+    "Vitamin C serum",
+    "Skincare shelfie",
+  ),
+  mockOrder(
+    "7",
+    "BOA-44120987",
+    "confirmed",
+    "confirmed",
+    19,
+    1799,
+    144,
+    "Boat",
+    "Bluetooth speaker",
+    "Everyday tech picks",
+  ),
+  mockOrder(
+    "8",
+    "MEE-88342100",
+    "cancelled",
+    undefined,
+    7,
+    599,
+    48,
+    "Meesho",
+    "Cotton kurti",
+    "Festive fits",
+  ),
+  mockOrder(
+    "9",
+    "AMZ-84999120",
+    "pending",
+    undefined,
+    3,
+    3299,
+    231,
+    "Amazon",
+    "Standing desk lamp",
+    "Home office setup",
+  ),
+  mockOrder(
+    "10",
+    "LEN-20114588",
+    "confirmed",
+    "confirmed",
+    24,
+    2999,
+    360,
+    "Lenskart",
+    "Blue-light glasses",
+    "Home office setup",
+  ),
+  mockOrder(
+    "11",
+    "MYN-77552310",
+    "confirmed",
+    "paid",
+    41,
+    4299,
+    516,
+    "Myntra",
+    "Running sneakers",
+    "Fitness essentials",
+  ),
+  mockOrder(
+    "12",
+    "SUG-61200934",
+    "confirmed",
+    "confirmed",
+    55,
+    749,
+    90,
+    "Sugar Cosmetics",
+    "Liquid eyeliner",
+    "Everyday glam routine",
+  ),
 ];
 
 function nonCancelled(list: Order[]) {
@@ -246,10 +380,16 @@ function Analytics() {
   // pin get backfilled a batch at a time rather than fetched live. This runs
   // silently in the background (no button, no toast) — one batch per page
   // visit — so pin-wise data keeps getting fresher over time regardless.
-  const runSync = useServerFn(syncPinterestAnalytics);
+  // The unified reconcile with analytics on: the page used to backfill per-pin
+  // numbers but never re-read boards or pins, so a pin created on Pinterest since
+  // the last visit had no row to attach impressions to and stayed invisible here.
+  const runSync = useServerFn(syncPinterestAccount);
   const syncMutation = useMutation({
-    mutationFn: () => runSync({ data: undefined as unknown as never }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["pinterest-analytics"] }),
+    mutationFn: () => runSync({ data: { analytics: true } }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["pinterest-analytics"] });
+      qc.invalidateQueries({ queryKey: ["analytics-live-pins"] });
+    },
   });
   const syncStartedRef = useRef(false);
   useEffect(() => {
@@ -326,14 +466,15 @@ function Analytics() {
 
       // Legacy fallback: pins monetised before pin_id tagging carry a single
       // product_id — surface it so their breakdown isn't empty.
-      const legacy = (livePinRows ?? []).filter(
-        (p) => p.product_id && !byPin.get(p.id)?.length,
-      );
+      const legacy = (livePinRows ?? []).filter((p) => p.product_id && !byPin.get(p.id)?.length);
       if (legacy.length) {
         const { data: legacyProducts } = await supabase
           .from("storefront_products")
           .select("id, title, image_url, affiliate_url")
-          .in("id", legacy.map((p) => p.product_id as string));
+          .in(
+            "id",
+            legacy.map((p) => p.product_id as string),
+          );
         const prById = new Map((legacyProducts ?? []).map((p) => [p.id, p]));
         for (const p of legacy) {
           const pr = prById.get(p.product_id as string);
@@ -413,6 +554,12 @@ function Analytics() {
       backButton
       backTo="/dashboard"
     >
+      {/* Connection health first: every number below is only as fresh as the
+          last sync, and a dead connection silently zeroes all of them. */}
+      <div className="mb-4">
+        <PinterestSyncBanner />
+      </div>
+
       {/* Total earnings card */}
       <div className="rounded-3xl border border-border bg-surface p-5">
         <div className="flex items-start justify-between gap-3">
@@ -994,10 +1141,7 @@ function PinBreakdownDialog({
   onClose: () => void;
 }) {
   const agg = pinAggFor(pin);
-  const pinProducts = useMemo(
-    () => products.filter((p) => p.pinId === pin.id),
-    [products, pin.id],
-  );
+  const pinProducts = useMemo(() => products.filter((p) => p.pinId === pin.id), [products, pin.id]);
 
   return (
     <ModalShell onClose={onClose} z={60}>

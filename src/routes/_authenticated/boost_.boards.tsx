@@ -5,16 +5,28 @@ import { AnimatePresence, motion } from "framer-motion";
 import {
   Check,
   CheckCheck,
-  Info,
+  Eye,
   LayoutGrid,
   Loader2,
   Pencil,
   RefreshCw,
   Sparkles,
+  Trophy,
   X,
 } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
-import { LiveScorePill } from "@/components/health-widgets";
+import {
+  FilterChipRow,
+  LaunchScreen,
+  PickerHeader,
+  QueueToolbar,
+  RailLabel,
+  ReviewProgressHeader,
+  SelectDot,
+  SelectionBar,
+} from "@/components/boost-picker-kit";
+import { useLongPress } from "@/hooks/use-long-press";
+import { metricLabel, pointsLabel } from "@/lib/boost-picker";
 import {
   ApproveAllSheet,
   DeckSkeleton,
@@ -33,14 +45,20 @@ import { useAiRewrites, type AiRewriteState } from "@/hooks/use-ai-rewrites";
 import { suggestBoardSeo, type SuggestBoardSeoResult } from "@/lib/board-seo.functions";
 import { BOARD_DESC_MAX, BOARD_DESC_MIN, BOARD_NAME_MAX, BOARD_NAME_MIN } from "@/lib/board-seo";
 import type { HealthData } from "@/hooks/use-health-score";
-import { boardIdOf, boardIssues, byIssueCountDesc, SCORE_CRITERIA } from "@/lib/health-score";
+import {
+  boardIdOf,
+  boardIssues,
+  byIssueCountDesc,
+  SCORE_CRITERIA,
+  SUB_SCORE_WEIGHTS,
+} from "@/lib/health-score";
 
 // How to drive the deck — surfaced any time via the header's "How it works".
 const BOARD_GUIDE_STEPS = [
-  "Tap Apply fix to accept the suggested name & description for this board.",
-  "Tap Skip to leave a board untouched and move on.",
-  "Tap Edit to adjust the wording, or Redo for a different angle.",
-  "Jump between boards from the strip up top — and undo any fix anytime.",
+  "Queue boards one by one or with Select all — then start the run.",
+  "Hold any board to flip it and see what fixing it adds to your score.",
+  "In the run, Apply fix accepts the suggested name & description; Skip leaves the board untouched.",
+  "Tap Edit to adjust the wording first — and undo any fix anytime.",
 ];
 
 // Filmstrip sizing — mirrors the pin review navigator so the two flows feel
@@ -48,11 +66,23 @@ const BOARD_GUIDE_STEPS = [
 const NAV_SLOT = 72;
 const NAV_VISIBLE = 4;
 
+// The picker reveals a page of boards at a time — same reasoning as the pin
+// grid, and the Suggested rail stays short because it's a shortcut, not
+// another backlog.
+const SUGGESTED_BOARDS_COUNT = 8;
+const BOARD_GRID_PAGE_SIZE = 12;
+
 export const Route = createFileRoute("/_authenticated/boost_/boards")({
   component: FixBoardsPage,
 });
 
-type BoardFixCard = BaseFixCard & { covers: string[]; pinCount: number };
+type BoardFixCard = BaseFixCard & {
+  covers: string[];
+  pinCount: number;
+  // Reach of everything on the board — the picker ranks by it, so a messy
+  // board that people actually see outranks a messy board nobody lands on.
+  impressions: number;
+};
 
 /** A card is applyable only once every field holds real copy. Cards start
  * empty and are filled by the pipeline, so this is the single gate that keeps
@@ -95,6 +125,7 @@ function buildDeck(data: HealthData): BoardFixCard[] {
       title: b.name?.trim() || "Unnamed board",
       issues: boardIssues(b),
       pinCount: boardPins.length,
+      impressions: boardPins.reduce((sum, p) => sum + (p.impressions ?? 0), 0),
       // The board's own cover leads when it has one — that's the image the
       // creator (or Pinterest) chose to represent it.
       covers: [
@@ -140,9 +171,22 @@ function FixBoardsPage() {
     invalidateKeys: [["dashboard-boards-collections"], ["collections"]],
   });
 
+  const [editing, setEditing] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [guide, setGuide] = useState(false);
+  const [gridOpen, setGridOpen] = useState(false);
+  const [mode, setMode] = useState<"picker" | "launching" | "review">("picker");
+  const [launchCard, setLaunchCard] = useState<BoardFixCard | null>(null);
+  const [runSize, setRunSize] = useState(0);
+
   // Stable across renders so the rewrite scheduler doesn't re-evaluate its
   // fetch window on every keystroke — the deck itself is frozen after build.
-  const boardIds = useMemo(() => flow.deck?.map((c) => c.id) ?? null, [flow.deck]);
+  // The picker is intentionally API-quiet: generation starts only once the
+  // creator has chosen boards and entered the work surface.
+  const boardIds = useMemo(
+    () => (mode === "review" ? (flow.deck?.map((c) => c.id) ?? null) : null),
+    [flow.deck, mode],
+  );
   const patchCard = flow.patchCard;
   const runSuggest = useServerFn(suggestBoardSeo);
   const ai = useAiRewrites<SuggestBoardSeoResult>({
@@ -155,11 +199,6 @@ function FixBoardsPage() {
       [patchCard],
     ),
   });
-
-  const [editing, setEditing] = useState(false);
-  const [confirming, setConfirming] = useState(false);
-  const [guide, setGuide] = useState(false);
-  const [gridOpen, setGridOpen] = useState(false);
 
   const backToScore = () => navigate({ to: "/boost" });
   const paused = editing || confirming;
@@ -189,7 +228,40 @@ function FixBoardsPage() {
     await flowRef.current.approveAll(hasCopy);
   };
 
-  const reviewing = !flow.isLoading && flow.deck !== null && flow.deck.length > 0 && !flow.done;
+  // Start a run over exactly the boards the creator queued, in the order they
+  // were ranked. The deck is narrowed to that set, so the filmstrip, the
+  // progress bar, "approve all remaining" and the rewrite generation all cover
+  // the chosen boards and nothing else.
+  const launchTimer = useRef<number | null>(null);
+  useEffect(() => () => window.clearTimeout(launchTimer.current ?? undefined), []);
+
+  const startRun = (ids: string[]) => {
+    if (ids.length === 0) return;
+    setRunSize(ids.length);
+    setLaunchCard(flow.cards.find((c) => c.id === ids[0]) ?? null);
+    flow.focusDeck(ids);
+    setMode("launching");
+    launchTimer.current = window.setTimeout(() => {
+      setMode("review");
+      setLaunchCard(null);
+    }, 1150);
+  };
+
+  // Back out of a run to re-pick. Decisions already made are keyed by board id,
+  // so anything applied stays applied and shows as done when it reappears.
+  const backToPicker = () => {
+    window.clearTimeout(launchTimer.current ?? undefined);
+    flow.focusDeck(null);
+    setLaunchCard(null);
+    setMode("picker");
+  };
+
+  const reviewing =
+    mode === "review" &&
+    !flow.isLoading &&
+    flow.deck !== null &&
+    flow.deck.length > 0 &&
+    !flow.done;
 
   // Keyboard parity with the pin deck: → apply, ← skip, ⌘/Ctrl+Z undo.
   useEffect(() => {
@@ -214,7 +286,15 @@ function FixBoardsPage() {
   }, [reviewing, paused, current, currentPending, currentReady, flow.canUndo]);
 
   return (
-    <AppShell title="Board Boost" backButton backTo="/boost" hideBottomNav>
+    <AppShell
+      title="Board Boost"
+      backButton
+      backTo="/boost"
+      // Mid-run, back means "back to the queue", not "leave Boost" — the run is
+      // a sub-view of the picker, so it shouldn't cost the whole page to exit.
+      onBack={mode !== "picker" && !flow.done ? backToPicker : undefined}
+      hideBottomNav
+    >
       <div className="mx-auto flex h-[calc(100dvh-6.5rem)] max-w-md flex-col px-1">
         {flow.isLoading || flow.deck === null ? (
           <DeckSkeleton />
@@ -234,34 +314,30 @@ function FixBoardsPage() {
             onBack={backToScore}
             busy={flow.bulkApplying || flow.pendingIds.size > 0}
           />
+        ) : mode === "picker" ? (
+          <BoardBoostPicker
+            cards={flow.cards}
+            score={flow.score}
+            statusById={flow.statusById}
+            onStart={startRun}
+            onGuide={() => setGuide(true)}
+          />
+        ) : mode === "launching" ? (
+          <BoardLaunch card={launchCard ?? flow.current ?? flow.cards[0]} count={runSize} />
         ) : (
           <>
-            {/* Progress summary — reviewed / applied / skipped. */}
-            <div className="flex shrink-0 items-center justify-center gap-2 pb-2 text-[11px] font-medium text-muted-foreground">
-              <span className="tabular-nums">
-                Reviewed {flow.index}/{flow.total}
-              </span>
-              <span className="text-muted-foreground/40">•</span>
-              <span className="font-semibold text-emerald-600">{flow.approvedCount} applied</span>
-              <span className="text-muted-foreground/40">•</span>
-              <span>{flow.skippedCount} skipped</span>
-            </div>
-
-            <p className="shrink-0 pb-2 text-center text-[11px] text-muted-foreground">
-              Rewriting <span className="font-semibold text-foreground">every</span> board name
-              &amp; description — strongest gains first
-            </p>
-
-            <div className="flex shrink-0 items-center justify-center gap-3 pb-2">
-              <LiveScorePill label="Board Structure" score={flow.score} />
-              <button
-                type="button"
-                onClick={() => setGuide(true)}
-                className="inline-flex items-center gap-1 text-[11px] font-semibold text-primary transition hover:underline"
-              >
-                <Info className="h-3 w-3" /> How it works
-              </button>
-            </div>
+            {/* One compact status bar: live score, position in the run, a
+                segmented progress track, and the applied/skipped split. */}
+            <ReviewProgressHeader
+              label="Board Structure"
+              hint="Strongest gains first"
+              score={flow.score}
+              index={flow.index}
+              total={flow.total}
+              approvedCount={flow.approvedCount}
+              skippedCount={flow.skippedCount}
+              onGuide={() => setGuide(true)}
+            />
 
             <div className="flex min-h-0 flex-1 flex-col">
               <div className="relative z-20 shrink-0 rounded-t-3xl bg-surface-2 px-6 pb-2 pt-6">
@@ -414,6 +490,489 @@ function BoardCover({
         ))}
       </div>
     </div>
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * The picker — where a run gets built.
+ *
+ * Same interaction model as the pin picker: tap a board to queue it, hold it
+ * to flip it over and see what it's worth, then launch from the bottom bar.
+ * The screen stays almost wordless; the CTA carries the instruction.
+ * ------------------------------------------------------------------ */
+
+// Fixing one failing board moves Board Structure by 1/total of its 100 points,
+// and Board Structure is worth SUB_SCORE_WEIGHTS.boardStructure of the overall
+// score. A board that already passes is worth zero points — its rewrite is a
+// keyword play, not a score play, and the flip side says exactly that instead
+// of inventing a number.
+function overallPointsFor(failingCount: number, totalBoards: number): number {
+  if (totalBoards === 0) return 0;
+  return SUB_SCORE_WEIGHTS.boardStructure * (failingCount / totalBoards) * 100;
+}
+
+/** Worst first, reach as the tie-breaker: a board with a generic name and no
+ * description outranks a merely nameless one, and between two equally messy
+ * boards the one people actually see comes first. */
+function boardOpportunityScore(card: BoardFixCard): number {
+  const issueWeight = Math.max(1, card.issues.length) * 100_000;
+  return issueWeight + card.impressions * 2 + card.pinCount * 50;
+}
+
+type SortKey = "opportunity" | "impressions" | "pins" | "fixes" | "name";
+
+const SORT_OPTIONS: {
+  key: SortKey;
+  label: string;
+  compare: (a: BoardFixCard, b: BoardFixCard) => number;
+}[] = [
+  {
+    key: "opportunity",
+    label: "Biggest win",
+    compare: (a, b) => boardOpportunityScore(b) - boardOpportunityScore(a),
+  },
+  {
+    key: "impressions",
+    label: "Most impressions",
+    compare: (a, b) => b.impressions - a.impressions,
+  },
+  { key: "pins", label: "Most pins", compare: (a, b) => b.pinCount - a.pinCount },
+  { key: "fixes", label: "Most to fix", compare: (a, b) => b.issues.length - a.issues.length },
+  { key: "name", label: "A–Z", compare: (a, b) => a.title.localeCompare(b.title) },
+];
+
+/** Lenses over the grid — "the ones with no description", "the ones already
+ * getting traffic" — one tap instead of scrolling the whole library. Counts
+ * live on the chips so an empty bucket is obvious before it's tapped. */
+type QueueFilter = "all" | "name" | "description" | "traffic";
+
+const QUEUE_FILTERS: { key: QueueFilter; label: string; match: (c: BoardFixCard) => boolean }[] = [
+  { key: "all", label: "All", match: () => true },
+  { key: "name", label: "Generic name", match: (c) => c.issues.some((i) => /name/i.test(i)) },
+  {
+    key: "description",
+    label: "No description",
+    match: (c) => c.issues.some((i) => /description/i.test(i)),
+  },
+  { key: "traffic", label: "Getting traffic", match: (c) => c.impressions > 0 },
+];
+
+function BoardBoostPicker({
+  cards,
+  score,
+  statusById,
+  onStart,
+  onGuide,
+}: {
+  cards: BoardFixCard[];
+  score: number;
+  statusById: Record<string, "approved" | "skipped">;
+  onStart: (ids: string[]) => void;
+  onGuide: () => void;
+}) {
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const [flippedId, setFlippedId] = useState<string | null>(null);
+  const [sort, setSort] = useState<SortKey>("opportunity");
+  const [filter, setFilter] = useState<QueueFilter>("all");
+  const [query, setQuery] = useState("");
+  const [limit, setLimit] = useState(BOARD_GRID_PAGE_SIZE);
+
+  // Ranked once — the run order for everything on this screen, so "biggest
+  // win first" holds whether the creator queued the rail, a lens, or the lot.
+  const ranked = useMemo(
+    () => [...cards].sort((a, b) => boardOpportunityScore(b) - boardOpportunityScore(a)),
+    [cards],
+  );
+  const failingTotal = useMemo(() => ranked.filter((c) => c.issues.length > 0).length, [ranked]);
+  const suggested = useMemo(
+    () => ranked.filter((c) => c.issues.length > 0).slice(0, SUGGESTED_BOARDS_COUNT),
+    [ranked],
+  );
+
+  const counts = useMemo(
+    () =>
+      Object.fromEntries(
+        QUEUE_FILTERS.map((f) => [f.key, ranked.filter(f.match).length]),
+      ) as Record<QueueFilter, number>,
+    [ranked],
+  );
+
+  const visible = useMemo(() => {
+    const match = QUEUE_FILTERS.find((f) => f.key === filter)!.match;
+    const compare = SORT_OPTIONS.find((o) => o.key === sort)!.compare;
+    const q = query.trim().toLowerCase();
+    return ranked
+      .filter(match)
+      .filter(
+        (c) =>
+          !q ||
+          c.title.toLowerCase().includes(q) ||
+          (c.original.description?.toString() ?? "").toLowerCase().includes(q),
+      )
+      .sort(compare);
+  }, [ranked, filter, sort, query]);
+
+  const shown = visible.slice(0, limit);
+  const hidden = visible.length - shown.length;
+
+  // Selection is a set of ids; every list on the page reads and writes it, and
+  // the run is always played back in ranked order regardless of how it was
+  // built (rail order, grid order, or a mix).
+  const selectedIds = useMemo(
+    () => ranked.filter((c) => selected.has(c.id)).map((c) => c.id),
+    [ranked, selected],
+  );
+  const selectedFailing = useMemo(
+    () => ranked.filter((c) => selected.has(c.id) && c.issues.length > 0).length,
+    [ranked, selected],
+  );
+
+  const toggleOne = useCallback((id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const setMany = useCallback((ids: string[], on: boolean) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      for (const id of ids) {
+        if (on) next.add(id);
+        else next.delete(id);
+      }
+      return next;
+    });
+  }, []);
+
+  const visibleIds = visible.map((c) => c.id);
+  const allVisibleSelected = visible.length > 0 && visibleIds.every((id) => selected.has(id));
+  const perBoardPoints = overallPointsFor(1, ranked.length);
+
+  return (
+    <motion.div
+      key="board-picker"
+      initial={{ opacity: 0, y: 18 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -12 }}
+      transition={{ duration: 0.38, ease: [0.22, 1, 0.36, 1] }}
+      className="flex min-h-0 flex-1 flex-col"
+    >
+      <div className="no-scrollbar min-h-0 flex-1 space-y-4 overflow-y-auto px-1 pb-2">
+        <PickerHeader
+          eyebrow="Board Structure"
+          heading="Pick boards to boost"
+          score={score}
+          points={overallPointsFor(failingTotal, ranked.length)}
+          onGuide={onGuide}
+        />
+
+        {suggested.length > 0 && (
+          <SuggestedBoardsRail cards={suggested} selected={selected} onToggle={toggleOne} />
+        )}
+
+        <QueueToolbar
+          query={query}
+          onQuery={(v) => {
+            setQuery(v);
+            setLimit(BOARD_GRID_PAGE_SIZE);
+          }}
+          placeholder="Search boards…"
+          sort={sort}
+          onSort={setSort}
+          options={SORT_OPTIONS}
+          neutralSort="opportunity"
+        />
+
+        <FilterChipRow
+          filters={QUEUE_FILTERS}
+          active={filter}
+          counts={counts}
+          onFilter={(key) => {
+            setFilter(key);
+            setLimit(BOARD_GRID_PAGE_SIZE);
+          }}
+          allSelected={allVisibleSelected}
+          onToggleAll={() => setMany(visibleIds, !allVisibleSelected)}
+          toggleDisabled={visible.length === 0}
+        />
+
+        {shown.length === 0 ? (
+          <p className="rounded-2xl border border-dashed border-border py-10 text-center text-[12px] text-muted-foreground">
+            No boards match that.
+          </p>
+        ) : (
+          <div className="grid grid-cols-2 gap-3">
+            {shown.map((card, i) => (
+              <BoardPickCard
+                key={card.id}
+                card={card}
+                index={i}
+                selected={selected.has(card.id)}
+                flipped={flippedId === card.id}
+                boosted={statusById[card.id] === "approved"}
+                points={card.issues.length > 0 ? perBoardPoints : 0}
+                structureNow={score}
+                structureDelta={card.issues.length > 0 ? 100 / Math.max(1, ranked.length) : 0}
+                onToggle={() => toggleOne(card.id)}
+                onFlip={() => setFlippedId((cur) => (cur === card.id ? null : card.id))}
+              />
+            ))}
+          </div>
+        )}
+
+        {(hidden > 0 || limit > BOARD_GRID_PAGE_SIZE) && (
+          <div className="flex gap-2">
+            {hidden > 0 && (
+              <button
+                type="button"
+                onClick={() => setLimit((l) => l + BOARD_GRID_PAGE_SIZE)}
+                className="inline-flex min-h-10 flex-1 items-center justify-center gap-1.5 rounded-2xl border border-dashed border-border bg-surface/70 text-[12px] font-bold text-primary transition hover:bg-primary/[0.04]"
+              >
+                Show more
+                <span className="font-semibold tabular-nums text-muted-foreground">
+                  · {hidden} left
+                </span>
+              </button>
+            )}
+            {limit > BOARD_GRID_PAGE_SIZE && (
+              <button
+                type="button"
+                onClick={() => setLimit(BOARD_GRID_PAGE_SIZE)}
+                className="inline-flex min-h-10 shrink-0 items-center justify-center rounded-2xl border border-border bg-surface px-3.5 text-[12px] font-bold text-muted-foreground transition hover:text-foreground"
+              >
+                Collapse
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
+      <SelectionBar
+        selectedCount={selectedIds.length}
+        unit="board"
+        unitPlural="boards"
+        emptyLabel="Select boards to boost"
+        selectedPoints={overallPointsFor(selectedFailing, ranked.length)}
+        onStart={() => selectedIds.length > 0 && onStart(selectedIds)}
+        onClear={() => setSelected(new Set())}
+      />
+    </motion.div>
+  );
+}
+
+/** The messiest boards, as a quiet rail of covers. Rank #1 wears the trophy,
+ * and each cover carries the numbers it was ranked by — fixes and reach.
+ * Tapping queues, the same gesture as everywhere else on the page. */
+function SuggestedBoardsRail({
+  cards,
+  selected,
+  onToggle,
+}: {
+  cards: BoardFixCard[];
+  selected: Set<string>;
+  onToggle: (id: string) => void;
+}) {
+  return (
+    <div>
+      <RailLabel text="Suggested boards" metric="most fixes · most reach" />
+      <div className="no-scrollbar -mx-1 flex snap-x gap-2 overflow-x-auto px-1">
+        {cards.map((card, i) => {
+          const on = selected.has(card.id);
+          return (
+            <motion.button
+              key={card.id}
+              type="button"
+              onClick={() => onToggle(card.id)}
+              aria-pressed={on}
+              aria-label={`${on ? "Remove" : "Queue"} board ${card.title}`}
+              whileTap={{ scale: 0.96 }}
+              initial={{ opacity: 0, x: 12 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{
+                delay: Math.min(i, 6) * 0.04,
+                duration: 0.28,
+                ease: [0.22, 1, 0.36, 1],
+              }}
+              className="w-32 shrink-0 snap-start text-left"
+            >
+              <div
+                className={`relative h-[72px] overflow-hidden rounded-xl transition ${
+                  on ? "ring-2 ring-primary" : "ring-1 ring-border/60"
+                }`}
+              >
+                <BoardCover covers={card.covers} flat />
+                {i === 0 ? (
+                  <span className="absolute left-1 top-1 grid h-5 w-5 place-items-center rounded-full bg-primary text-primary-foreground shadow">
+                    <Trophy className="h-2.5 w-2.5" />
+                  </span>
+                ) : (
+                  <span className="absolute left-1 top-1 inline-flex items-center gap-0.5 rounded-full bg-black/45 px-1.5 py-0.5 text-[8.5px] font-bold text-white backdrop-blur-sm">
+                    <Sparkles className="h-2 w-2 text-amber-300" /> {card.issues.length}
+                  </span>
+                )}
+                <span className="absolute right-1 top-1">
+                  <SelectDot on={on} small />
+                </span>
+              </div>
+              <p className="mt-1 line-clamp-1 px-0.5 text-[10.5px] font-bold">{card.title}</p>
+              <p className="px-0.5 text-[9px] font-medium text-muted-foreground">
+                {card.pinCount} {card.pinCount === 1 ? "pin" : "pins"}
+                {card.impressions > 0 && <> · {metricLabel(card.impressions)} views</>}
+              </p>
+            </motion.button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/** One grid card: the board as its cover collage, with what's wrong with it in
+ * the corner and a check dot. Hold it and it flips to the one sentence that
+ * matters — what fixing it adds to the health score. */
+function BoardPickCard({
+  card,
+  index,
+  selected,
+  flipped,
+  boosted,
+  points,
+  structureNow,
+  structureDelta,
+  onToggle,
+  onFlip,
+}: {
+  card: BoardFixCard;
+  index: number;
+  selected: boolean;
+  flipped: boolean;
+  boosted: boolean;
+  points: number;
+  structureNow: number;
+  structureDelta: number;
+  onToggle: () => void;
+  onFlip: () => void;
+}) {
+  const { fired, handlers } = useLongPress(onFlip);
+  const fixes = card.issues.length;
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay: Math.min(index, 8) * 0.03, duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+      style={{ perspective: 800 }}
+    >
+      <motion.div
+        animate={{ rotateY: flipped ? 180 : 0, scale: selected ? 0.97 : 1 }}
+        transition={{ type: "spring", stiffness: 260, damping: 26 }}
+        style={{ transformStyle: "preserve-3d" }}
+        className="relative aspect-[4/3] w-full"
+      >
+        {/* Front */}
+        <button
+          type="button"
+          aria-pressed={selected}
+          aria-label={`${selected ? "Remove" : "Queue"} board ${card.title}`}
+          onClick={() => {
+            if (fired.current) {
+              fired.current = false;
+              return;
+            }
+            onToggle();
+          }}
+          {...handlers}
+          style={{ backfaceVisibility: "hidden", pointerEvents: flipped ? "none" : "auto" }}
+          className={`absolute inset-0 touch-manipulation select-none overflow-hidden rounded-2xl bg-surface-2 text-left transition-shadow ${
+            selected ? "shadow-elevate ring-2 ring-primary" : "ring-1 ring-border/60"
+          }`}
+        >
+          <BoardCover covers={card.covers} flat />
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-black/75 via-black/25 to-transparent" />
+
+          <span className="absolute right-1.5 top-1.5">
+            <SelectDot on={selected} />
+          </span>
+
+          {boosted ? (
+            <span className="absolute left-1.5 top-1.5 grid h-6 w-6 place-items-center rounded-full bg-emerald-500 text-white shadow">
+              <Check className="h-3.5 w-3.5" strokeWidth={3.5} />
+            </span>
+          ) : fixes > 0 ? (
+            <span className="absolute left-1.5 top-1.5 inline-flex items-center gap-1 rounded-full bg-black/45 px-2 py-0.5 text-[10px] font-bold text-white backdrop-blur-sm">
+              <Sparkles className="h-3 w-3 text-amber-300" /> {fixes}{" "}
+              {fixes === 1 ? "fix" : "fixes"}
+            </span>
+          ) : null}
+
+          <div className="absolute inset-x-2 bottom-1.5">
+            <p className="line-clamp-1 text-[12px] font-bold text-white">{card.title}</p>
+            <p className="flex items-center gap-2 text-[10px] font-bold text-white/85">
+              <span className="inline-flex items-center gap-1">
+                <LayoutGrid className="h-2.5 w-2.5 opacity-80" />
+                <span className="tabular-nums">{card.pinCount}</span>
+              </span>
+              {card.impressions > 0 && (
+                <span className="inline-flex items-center gap-1">
+                  <Eye className="h-2.5 w-2.5 opacity-80" />
+                  <span className="tabular-nums">{metricLabel(card.impressions)}</span>
+                </span>
+              )}
+            </p>
+          </div>
+        </button>
+
+        {/* Back — the score story, one glance long. */}
+        <button
+          type="button"
+          onClick={onFlip}
+          aria-label="Hide score impact"
+          style={{
+            backfaceVisibility: "hidden",
+            transform: "rotateY(180deg)",
+            pointerEvents: flipped ? "auto" : "none",
+          }}
+          className="absolute inset-0 flex flex-col items-center justify-center gap-1 overflow-hidden rounded-2xl border-2 border-primary/40 bg-surface p-2 text-center"
+        >
+          <span className="font-display text-[26px] font-bold leading-none tabular-nums text-primary">
+            {points > 0 ? `+${pointsLabel(points)}` : "+0"}
+          </span>
+          <span className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
+            health pts
+          </span>
+          <span className="text-[11px] font-semibold leading-snug text-muted-foreground">
+            {points > 0 ? (
+              <>
+                Structure {structureNow}% →{" "}
+                <span className="text-emerald-600">
+                  {Math.min(100, Math.round(structureNow + structureDelta))}%
+                </span>
+              </>
+            ) : (
+              "Already passing"
+            )}
+          </span>
+          {fixes > 0 && (
+            <span className="line-clamp-2 px-1 text-[10px] font-medium leading-snug text-foreground/70">
+              {card.issues.join(" · ")}
+            </span>
+          )}
+        </button>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+/* The run is whatever the creator queued — the launch beat says its size, so
+ * the transition confirms the selection landed. */
+function BoardLaunch({ card, count }: { card: BoardFixCard; count: number }) {
+  return (
+    <LaunchScreen title={count > 1 ? `Queuing ${count} boards` : "Locking onto this board"}>
+      <BoardCover covers={card?.covers ?? []} flat />
+    </LaunchScreen>
   );
 }
 

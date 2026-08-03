@@ -605,6 +605,16 @@ export type VisualMatch = {
   // Real MRP from the retailer's own product page (CK Product Details API),
   // once the match has been validated — see fetchCkProductDetails below.
   mrp: number | null;
+  // True when CK never confirmed this listing and the price shown is Google
+  // Lens's own snapshot instead of the retailer's live page.
+  //
+  // Keeping the match is right — a real, attachable listing shouldn't vanish
+  // because a pricing service is down — but presenting it identically to a
+  // verified one is not. When the product-details host is unreachable (it
+  // answers nginx 502s for every URL), EVERY match arrives this way: stale
+  // price, no MRP, unknown stock. The flag is what lets the UI say so instead
+  // of showing an unchecked number as though it were confirmed.
+  priceUnverified?: boolean;
 };
 
 // A visual-search hit before CK has confirmed it — real title/link/thumbnail/
@@ -662,17 +672,106 @@ const LENS_TIMEOUT_MS = 16_000;
 // timeoutMaxRetries 0 — re-scraping an unresolvable URL never helps).
 const CK_TIMEOUT_MS = 8_000;
 // Exponential backoff sequence for a retried attempt — attempt 2 waits
-// RETRY_BACKOFFS_MS[0], attempt 3 (if reached) waits RETRY_BACKOFFS_MS[1].
-const RETRY_BACKOFFS_MS = [250, 500];
+// RETRY_BACKOFFS_MS[0], and so on.
+//
+// The old sequence was [250, 500], which spent its whole budget inside ~1.2s.
+// That is shorter than the failures it exists for: a gateway restarting a worker
+// (the nginx 502s from the product-details host) is out for seconds, not
+// milliseconds, so every request in that window gave up and silently fell back
+// to unverified data. Reaching ~4s gives a brief outage a real chance to clear
+// while still failing fast enough for an interactive request.
+const RETRY_BACKOFFS_MS = [400, 1200, 2500];
+// Full jitter on top of the base delay. Without it, a batch of six product
+// lookups that all 502 together retries in perfect lockstep — six simultaneous
+// requests landing on a service that is already struggling, three times over.
+// Spreading them across the interval is what turns a thundering herd back into
+// ordinary traffic.
+function backoffWithJitter(attempt: number): number {
+  const base = RETRY_BACKOFFS_MS[Math.min(attempt, RETRY_BACKOFFS_MS.length - 1)];
+  return Math.round(base * (0.5 + Math.random() * 0.5));
+}
 // Default timeout-retry budget (CK still uses this): one retry, since a fast
 // service that times out under its budget is usually a transient blip worth a
 // single re-try. LENS overrides this to 0 — its budget is now wide enough that
 // a timeout means a genuine hang, and re-running a 16s query is pure waste.
-// A transient 429/502/503/504 gets up to two retries, since those usually
-// clear within a couple hundred ms.
+// A transient 429/502/503/504 gets up to three retries — with the backoffs
+// above that spans ~4s of outage, enough to ride out a gateway blip.
 const TIMEOUT_MAX_RETRIES = 1;
-const RETRYABLE_STATUS_MAX_RETRIES = 2;
+const RETRYABLE_STATUS_MAX_RETRIES = 3;
 const RETRYABLE_STATUSES = new Set([429, 502, 503, 504]);
+
+// -------------------------------------------------------------
+// Circuit breaker — stop retrying a service that is DOWN, as opposed to one
+// that hiccupped.
+//
+// Retries are sized for a blip: a few hundred ms of gateway trouble, worth
+// waiting out. They are exactly the wrong response to a sustained outage, where
+// every attempt is guaranteed to fail — a batch of six product lookups against a
+// host returning nginx 502s turns into 24 doomed requests and a wall of retry
+// logs, which is what "the 502s have increased" looks like from the outside.
+//
+// After OPEN_AFTER consecutive retryable failures on a label, the breaker opens:
+// subsequent calls fail immediately (still gracefully — callers already treat a
+// throw as "no result") for COOLDOWN_MS, and one line is logged instead of
+// dozens. The first call after the cooldown is a probe; if it succeeds the
+// breaker closes and normal retrying resumes.
+// -------------------------------------------------------------
+const BREAKER_OPEN_AFTER = 4;
+const BREAKER_COOLDOWN_MS = 60_000;
+
+type BreakerState = { failures: number; openedAt: number | null };
+const breakers = new Map<string, BreakerState>();
+
+function breakerFor(label: string): BreakerState {
+  let s = breakers.get(label);
+  if (!s) {
+    s = { failures: 0, openedAt: null };
+    breakers.set(label, s);
+  }
+  return s;
+}
+
+/** True while the label is being given a rest. */
+function breakerIsOpen(label: string): boolean {
+  const s = breakerFor(label);
+  if (s.openedAt == null) return false;
+  if (Date.now() - s.openedAt < BREAKER_COOLDOWN_MS) return true;
+  // Cooldown elapsed — let exactly one request through to test the water.
+  s.openedAt = null;
+  s.failures = 0;
+  logNet(`${label}.breaker`, { outcome: "half_open" });
+  return false;
+}
+
+function breakerRecordFailure(label: string): void {
+  const s = breakerFor(label);
+  s.failures++;
+  if (s.openedAt == null && s.failures >= BREAKER_OPEN_AFTER) {
+    s.openedAt = Date.now();
+    logNet(`${label}.breaker`, {
+      outcome: "open",
+      afterFailures: s.failures,
+      cooldownMs: BREAKER_COOLDOWN_MS,
+    });
+  }
+}
+
+function breakerRecordSuccess(label: string): void {
+  const s = breakerFor(label);
+  if (s.openedAt != null || s.failures > 0) logNet(`${label}.breaker`, { outcome: "closed" });
+  s.failures = 0;
+  s.openedAt = null;
+}
+
+// Thrown when the breaker is open — the request was never sent. Callers already
+// collapse a throw into their graceful "no result" path, so an open breaker
+// degrades exactly like a failed lookup, just instantly and quietly.
+class ServiceDownError extends Error {
+  constructor(label: string) {
+    super(`${label} is unavailable (circuit breaker open)`);
+    this.name = "ServiceDownError";
+  }
+}
 
 // Thrown when `withRetry`'s own AbortController fires. EXPECTED behavior
 // (the timeout doing its job), never a bug — callers catch this specifically
@@ -716,12 +815,16 @@ async function withRetry<T>(
   const { timeoutMs, label, timeoutMaxRetries = TIMEOUT_MAX_RETRIES } = opts;
   const overallStart = Date.now();
 
+  // Don't queue work for a service that just told us, repeatedly, that it's down.
+  if (breakerIsOpen(label)) throw new ServiceDownError(label);
+
   for (let attempt = 0; ; attempt++) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const result = await fn(controller.signal);
       clearTimeout(timer);
+      breakerRecordSuccess(label);
       logNet(`${label}.request`, {
         outcome: "success",
         attempt: attempt + 1,
@@ -739,6 +842,9 @@ async function withRetry<T>(
           : 0;
 
       if (attempt >= maxRetries) {
+        // Only a retryable failure counts toward the breaker. A 404 or a bad
+        // request says the URL is wrong, not that the service is down.
+        if (isTimeout || isRetryableHttp) breakerRecordFailure(label);
         if (isTimeout) {
           logNet(`${label}.request`, {
             outcome: "timeout",
@@ -757,7 +863,22 @@ async function withRetry<T>(
         throw e;
       }
 
-      const backoff = RETRY_BACKOFFS_MS[Math.min(attempt, RETRY_BACKOFFS_MS.length - 1)];
+      // A service already known to be failing gets its remaining retries
+      // cancelled mid-flight: once the breaker trips, continuing to walk the
+      // backoff ladder is just more doomed requests.
+      // Peeked, not tested via breakerIsOpen(): that helper resets state when a
+      // cooldown elapses, and consuming the half-open probe here would waste it.
+      if ((isTimeout || isRetryableHttp) && breakerFor(label).openedAt != null) {
+        logNet(`${label}.request`, {
+          outcome: "error",
+          attempt: attempt + 1,
+          reason: "breaker_open",
+          durationMs: Date.now() - overallStart,
+        });
+        throw e;
+      }
+
+      const backoff = backoffWithJitter(attempt);
       logNet(`${label}.retry`, {
         attempt: attempt + 1,
         backoffMs: backoff,
@@ -1772,7 +1893,7 @@ async function validateMatches(matches: RawVisualMatch[]): Promise<VisualMatch[]
       };
     }
     if (m.price) {
-      return { ...m, mrp: null, price: m.price };
+      return { ...m, mrp: null, price: m.price, priceUnverified: true };
     }
     return null;
   });
