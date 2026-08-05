@@ -145,3 +145,8 @@ vite.config.ts.timestamp-*
 .claude
 .lovable
 .DS_Store
+
+# Generated
+.tanstack/
+.wrangler/
+src/routeTree.gen.ts
