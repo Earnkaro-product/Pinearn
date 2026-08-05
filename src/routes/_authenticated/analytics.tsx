@@ -1500,7 +1500,13 @@ function BrandsPanel() {
   const { data: products = [], isLoading } = useQuery({
     queryKey: ["analytics-brand-products"],
     queryFn: async () => {
-      const { data, error } = await supabase.from("storefront_products").select("id,affiliate_url");
+      const { data: userRes } = await supabase.auth.getUser();
+      const userId = userRes.user?.id;
+      if (!userId) return [];
+      const { data, error } = await supabase
+        .from("storefront_products")
+        .select("id,affiliate_url")
+        .eq("user_id", userId);
       if (error) throw error;
       return data ?? [];
     },

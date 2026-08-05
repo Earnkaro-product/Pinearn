@@ -32,9 +32,13 @@ export function NewUserCta() {
   const { data: pinCount } = useQuery({
     queryKey: ["new-user-cta-pin-count"],
     queryFn: async () => {
+      const { data: userRes } = await supabase.auth.getUser();
+      const userId = userRes.user?.id;
+      if (!userId) return 0;
       const { count } = await supabase
         .from("pins")
         .select("id", { count: "exact", head: true })
+        .eq("user_id", userId)
         .eq("is_owner", true);
       return count ?? 0;
     },

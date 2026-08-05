@@ -1,3 +1,5 @@
+
+
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.boards TO authenticated;
 GRANT ALL ON public.boards TO service_role;
 GRANT SELECT ON public.boards TO anon;

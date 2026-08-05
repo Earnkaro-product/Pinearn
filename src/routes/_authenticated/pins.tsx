@@ -163,7 +163,13 @@ function PinsPage() {
   const { data: storefronts = [] } = useQuery({
     queryKey: ["storefronts"],
     queryFn: async () => {
-      const { data } = await supabase.from("storefronts").select("id,name,slug");
+      const { data: userRes } = await supabase.auth.getUser();
+      const userId = userRes.user?.id;
+      if (!userId) return [];
+      const { data } = await supabase
+        .from("storefronts")
+        .select("id,name,slug")
+        .eq("user_id", userId);
       return (data ?? []) as Storefront[];
     },
   });
@@ -171,11 +177,15 @@ function PinsPage() {
   const { data: products = [] } = useQuery({
     queryKey: ["all-products"],
     queryFn: async () => {
+      const { data: userRes } = await supabase.auth.getUser();
+      const userId = userRes.user?.id;
+      if (!userId) return [];
       const { data } = await supabase
         .from("storefront_products")
         .select(
           "id,title,affiliate_url,image_url,price_cents,currency,commission_pct,storefront_id,collection_id",
-        );
+        )
+        .eq("user_id", userId);
       return (data ?? []) as Product[];
     },
   });
@@ -536,12 +546,14 @@ export function PinDetailDialog({
     staleTime: Infinity,
     retry: false,
     refetchOnWindowFocus: false,
-    // Object detection runs ~35s in the BACKGROUND on first view. Poll a few
-    // times (cheap — the match is cache-served until crops land) so the tabbed,
-    // per-component view appears on its own the moment detection finishes,
-    // instead of waiting for a manual Retry. Stop as soon as tags arrive, or
-    // after ~80s if detection produced none. Pins seen before are already
-    // tagged on the first response, so this never even fires for them.
+    // An image nobody has scanned before answers from the whole image first,
+    // with detection (~6s) and the per-crop searches already running behind it.
+    // Poll so the tabbed, per-component view appears on its own the moment
+    // those land — normally on the first poll — instead of waiting for a manual
+    // Retry. Cheap: the crop searches are prefetched, so the poll is served
+    // from cache rather than starting a second round of them. Stop as soon as
+    // tags arrive, or after ~80s if detection produced none. An image scanned
+    // before is tagged on the very first response, so this never fires for it.
     refetchInterval: (query) => {
       const data = query.state.data;
       const hasTags = !!data?.suggestions?.some((s) => s.tag);

@@ -60,10 +60,14 @@ function AttachToCollectionPage() {
   const { data: collection, isLoading } = useQuery({
     queryKey: ["collection", id],
     queryFn: async () => {
+      const { data: userRes } = await supabase.auth.getUser();
+      const userId = userRes.user?.id;
+      if (!userId) return null;
       const { data, error } = await supabase
         .from("collections")
         .select("id,name,cover_image_url,storefront_id")
         .eq("id", id)
+        .eq("user_id", userId)
         .maybeSingle();
       if (error) throw error;
       return data as CollectionRow | null;
@@ -73,10 +77,14 @@ function AttachToCollectionPage() {
   const { data: products = [] } = useQuery({
     queryKey: ["collection-products", id],
     queryFn: async () => {
+      const { data: userRes } = await supabase.auth.getUser();
+      const userId = userRes.user?.id;
+      if (!userId) return [];
       const { data, error } = await supabase
         .from("storefront_products")
         .select("id,title,image_url,affiliate_url,collection_id,price_cents,commission_pct")
         .eq("collection_id", id)
+        .eq("user_id", userId)
         .order("created_at", { ascending: false });
       if (error) throw error;
       return (data ?? []) as ProductRow[];

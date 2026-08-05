@@ -1789,10 +1789,14 @@ function CollectionPinsDialog({
   const { data: products = [] } = useQuery({
     queryKey: ["collection-products", collection.id],
     queryFn: async () => {
+      const { data: userRes } = await supabase.auth.getUser();
+      const userId = userRes.user?.id;
+      if (!userId) return [];
       const { data, error } = await supabase
         .from("storefront_products")
         .select("id,title,image_url,affiliate_url,price_cents,commission_pct")
         .eq("collection_id", collection.id)
+        .eq("user_id", userId)
         .order("created_at", { ascending: false });
       if (error) throw error;
       return data as {

@@ -182,6 +182,30 @@ export type Database = {
           },
         ];
       };
+      image_detections: {
+        Row: {
+          detected_at: string;
+          height: number | null;
+          image_url: string;
+          objects: Json;
+          width: number | null;
+        };
+        Insert: {
+          detected_at?: string;
+          height?: number | null;
+          image_url: string;
+          objects?: Json;
+          width?: number | null;
+        };
+        Update: {
+          detected_at?: string;
+          height?: number | null;
+          image_url?: string;
+          objects?: Json;
+          width?: number | null;
+        };
+        Relationships: [];
+      };
       pinterest_trend_cache: {
         Row: {
           as_of: string | null;

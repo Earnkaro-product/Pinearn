@@ -64,10 +64,14 @@ function PinPreviewPage() {
   const { data: pin, isLoading: pinLoading } = useQuery({
     queryKey: ["pin", pinId],
     queryFn: async () => {
+      const { data: userRes } = await supabase.auth.getUser();
+      const userId = userRes.user?.id;
+      if (!userId) return null;
       const { data, error } = await supabase
         .from("pins")
         .select("id,title,image_url,external_url,storefront_id,collection_id")
         .eq("id", pinId)
+        .eq("user_id", userId)
         .maybeSingle();
       if (error) throw error;
       return data as Pin | null;
@@ -79,10 +83,14 @@ function PinPreviewPage() {
     queryKey: ["storefront", pin?.storefront_id],
     queryFn: async () => {
       if (!pin?.storefront_id) return null;
+      const { data: userRes } = await supabase.auth.getUser();
+      const userId = userRes.user?.id;
+      if (!userId) return null;
       const { data } = await supabase
         .from("storefronts")
         .select("id,name,slug")
         .eq("id", pin.storefront_id)
+        .eq("user_id", userId)
         .maybeSingle();
       return (data ?? null) as Storefront | null;
     },
@@ -108,12 +116,16 @@ function PinPreviewPage() {
     queryKey: ["selected-products", stash.productIds.join(",")],
     queryFn: async () => {
       if (stash.productIds.length === 0) return [];
+      const { data: userRes } = await supabase.auth.getUser();
+      const userId = userRes.user?.id;
+      if (!userId) return [];
       const { data } = await supabase
         .from("storefront_products")
         .select(
           "id,title,affiliate_url,image_url,price_cents,currency,commission_pct,storefront_id,collection_id",
         )
-        .in("id", stash.productIds);
+        .in("id", stash.productIds)
+        .eq("user_id", userId);
       return (data ?? []) as Product[];
     },
   });

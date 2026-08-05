@@ -147,11 +147,15 @@ function CreatePinWizard() {
   const { data: products = [] } = useQuery({
     queryKey: ["all-products"],
     queryFn: async () => {
+      const { data: userRes } = await supabase.auth.getUser();
+      const userId = userRes.user?.id;
+      if (!userId) return [];
       const { data } = await supabase
         .from("storefront_products")
         .select(
           "id,title,affiliate_url,image_url,price_cents,currency,commission_pct,storefront_id,collection_id",
-        );
+        )
+        .eq("user_id", userId);
       return (data ?? []) as Product[];
     },
   });

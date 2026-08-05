@@ -115,11 +115,15 @@ function MonetizeBoardPage() {
   const { data: storeProducts = [] } = useQuery({
     queryKey: ["all-products"],
     queryFn: async () => {
+      const { data: userRes } = await supabase.auth.getUser();
+      const userId = userRes.user?.id;
+      if (!userId) return [];
       const { data } = await supabase
         .from("storefront_products")
         .select(
           "id,title,affiliate_url,image_url,price_cents,currency,commission_pct,storefront_id,collection_id",
-        );
+        )
+        .eq("user_id", userId);
       return (data ?? []) as Product[];
     },
   });
@@ -300,12 +304,13 @@ function MonetizeBoardPage() {
       // deliberate way to re-run it once.
       retry: false,
       refetchOnWindowFocus: false,
-      // Object detection runs ~35s in the BACKGROUND on first search, so the
-      // very first response is the untagged whole-image set. Poll a few times
-      // (cheap — the match is cache-served until crops land) so the per-
-      // component tag pills appear on their own the moment detection finishes,
-      // mirroring the pin attach screen. Stop as soon as tags arrive, or after
-      // ~80s if detection produced none.
+      // An image nobody has scanned before answers from the whole image first,
+      // with detection (~6s) and the per-crop searches already running behind
+      // it. Poll so the per-component tag pills appear on their own the moment
+      // those land — normally on the first poll — mirroring the pin attach
+      // screen. Cheap: the crop searches are prefetched, so the poll is served
+      // from cache rather than starting a second round of them. Stop as soon as
+      // tags arrive, or after ~80s if detection produced none.
       refetchInterval: (query: {
         state: { data?: { matches?: RawVisualMatch[] } };
         queryKey: unknown[];

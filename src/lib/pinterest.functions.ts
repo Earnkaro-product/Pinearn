@@ -18,6 +18,7 @@ import { withPinterestToken } from "@/lib/pinterest-oauth.functions";
 import { isSupportedRetailerLink } from "@/lib/brands";
 import { createLimiter } from "@/lib/concurrency-limiter";
 import { logNet } from "@/lib/net-logger";
+import { cropUrl, detectImage, type ProductCategory } from "@/lib/vision-detect.server";
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -652,7 +653,10 @@ export type CkResult = { mrp: number; discountedPrice: number; available: boolea
 // each spinning up its own capped loop still multiplies out to N × cap real
 // connections. These module-level limiters are the actual ceiling.
 const CK_CONCURRENCY = 6;
-const LENS_CONCURRENCY = 6;
+// One pin now fans out to as many as five Lens calls (four crops plus the
+// whole image) and they are all issued at once. At six, a single pin filled the
+// limiter and the next user's search queued behind it for a full round trip.
+const LENS_CONCURRENCY = 10;
 const ckLimit = createLimiter(CK_CONCURRENCY);
 const lensLimit = createLimiter(LENS_CONCURRENCY);
 
@@ -1253,61 +1257,65 @@ async function searchGoogleLensLive(imageUrl: string): Promise<LensMatch[]> {
 }
 
 // -------------------------------------------------------------
-// STEP (pre-Lens, OFF the critical path): object detection → component crops.
+// STEP (pre-Lens): object detection → component crops.
 //
-// The vision model isolates each product in a busy pin (e.g. shoes + bag) and
-// returns a cropped image per component. Running Lens on a tight crop instead
-// of the whole scene gives far more accurate matches. But the detector is SLOW
-// (~30s) and Lens needs a public URL (it can't take the base64 crops), so this
-// NEVER runs synchronously in the match: the first time an image is seen the
-// match uses the fast full-image Lens (today's behaviour) and detection is
-// fired in the BACKGROUND, hosting the crops in Supabase Storage and caching
-// their URLs. Later matches reuse those crops. Net: match latency is never
-// affected; accuracy improves as crops become available. Every failure falls
-// back to the full image.
+// The vision model isolates each product in a busy pin (e.g. shoes + bag) so
+// Lens can run on a crop instead of the whole scene, and tells us what CATEGORY
+// each one is. Detection is the OpenAI vision proxy (see
+// vision-detect.server.ts); it returns bounding boxes, and the crops are
+// rendered as image-proxy URLs — nothing is downloaded, encoded or uploaded.
+//
+// Timing, which is the whole game here:
+//
+//   - Detection now takes ~6s and Lens ~14s, so detection is started BEFORE the
+//     whole-image Lens call rather than after it. It used to be kicked off on
+//     the line after `await searchGoogleLens(...)`, which meant crops didn't
+//     even begin until the search they exist to improve had finished.
+//   - A cached detection (see `detectImage`) resolves in ~100ms, so the request
+//     waits a beat for it — long enough to take the crop path when the answer
+//     is already known, never long enough to hold up a cold pin.
+//   - As soon as crops are built, their Lens searches are prefetched in the
+//     background. The client polls for the tagged view; by the time it asks,
+//     the searches are cache hits instead of a fresh 14s wave.
+//
+// Every failure falls back to the whole image.
 // -------------------------------------------------------------
 
-const DETECT_URL =
-  process.env.VISION_DETECT_API_URL || "https://automation.ekarostats.com/vision/detect-objects";
-// Master switch. Verified working for real product/fashion pins (returns
-// component crops in ~27–50s); the earlier "no_objects" cases were text/quote/
-// painting pins that genuinely have nothing to detect. It runs entirely off
-// the match path, so it's ON by default; set VISION_DETECT_ENABLED=false to
-// disable (e.g. if the vision service is down).
+// Master switch. Set VISION_DETECT_ENABLED=false to force the whole-image path.
 const DETECT_ENABLED = process.env.VISION_DETECT_ENABLED !== "false";
-// Detector runs ~27–50s. 55s stays just under its own ~60s gateway timeout, so
-// we don't abandon a call that's about to succeed (the old 45s cap was cutting
-// those off). Off-path, so a long ceiling costs nothing on the match.
-const DETECT_TIMEOUT_MS = 55_000;
 const DETECT_CONCURRENCY = 2;
 const detectLimit = createLimiter(DETECT_CONCURRENCY);
-const CROP_BUCKET = "pin-crops";
-const CROP_MAX = 6; // cap crops per image → bounds Lens fan-out + storage
+const CROP_MAX = 4; // cap crops per image → bounds Lens fan-out
 const CROP_SUCCESS_TTL_MS = 24 * 60 * 60 * 1000;
 const CROP_EMPTY_TTL_MS = 60 * 60 * 1000; // genuine "no products in image"
 // Transient failures (502/504/timeout/fetch) — retry soon so we recover the
 // moment the (flaky) vision service comes back, instead of blocking for an hour.
 const CROP_ERROR_TTL_MS = 5 * 60 * 1000;
+// How long a request will wait for detection before giving up and answering
+// from the whole image. Sized for a cache hit (a DB read), not for a live model
+// call: either we already know this image's products or we don't hold the user.
+const CROP_WAIT_MS = 1_500;
 // Max products shown per detected component tag. Once every tag is full, the
 // pipeline emits nothing more — this cap IS the hard stop.
 const PER_TAG_MAX = 8;
+// Rank handicap applied to a whole-image match borrowed to fill a tab. Larger
+// than any bonus a match can earn, so a product the object's OWN crop found
+// always sorts above one merely inferred from the same category.
+const POOL_PENALTY = 100;
+// How long the tagged path will wait for the whole-image search once the crop
+// searches are done. It only supplies filler, so it never delays the answer.
+const POOL_GRACE_MS = 2_500;
 // Max products in the whole-image fallback (no detection tags). Capping here
 // means only this many cards render, so only this many CK price lookups ever
 // fire — a hard stop so we never waste calls on a long tail.
 const FULL_IMAGE_MAX = 10;
 
-type Crop = { url: string; label: string };
+type Crop = { url: string; label: string; category: ProductCategory };
 
-// imageUrl -> hosted crops (URL + detection label). An empty array means
+// imageUrl -> crops (URL + detection label + category). An empty array means
 // "detected, nothing usable" (so we don't re-detect); absent = not attempted.
 const cropCache = new Map<string, { expires: number; crops: Crop[] }>();
 const cropInFlight = new Map<string, Promise<Crop[]>>();
-
-function shortHash(s: string): string {
-  let h = 0;
-  for (let i = 0; i < s.length; i++) h = (Math.imul(31, h) + s.charCodeAt(i)) | 0;
-  return (h >>> 0).toString(36);
-}
 
 // Turn a raw detector label ("shirt t - shirt", "shoes sneakers") into a clean,
 // human tab title ("Shirt T Shirt"). Empty/unknown → "Product".
@@ -1330,140 +1338,44 @@ function getCrops(imageUrl: string): Crop[] | undefined {
   return undefined;
 }
 
-type DetectResponse = {
-  // Bounding boxes the model found (present even when it didn't return crops).
-  objects?: Array<{ id?: string; label?: string; confidence?: number }>;
-  extracted_objects?: Array<{
-    id?: string;
-    label?: string;
-    confidence?: number;
-    image_base64?: string;
-  }>;
-};
-
-// Background-only. Fetches the image, runs object detection, hosts each crop in
-// Supabase Storage, and caches the public URLs. Never throws — any failure
-// caches an empty result so the match path just keeps using the full image.
-async function detectAndHostCrops(imageUrl: string): Promise<Crop[]> {
+// Runs object detection and turns each box into a crop URL. Never throws — any
+// failure caches an empty result so the match path just keeps using the full
+// image. Concurrent callers for the same image share one run.
+//
+// Without pixel dimensions there is no way to express a pixel crop, so that
+// failure degrades to the whole-image path.
+async function detectAndBuildCrops(imageUrl: string): Promise<Crop[]> {
   const existing = cropInFlight.get(imageUrl);
   if (existing) return existing;
 
   const run = (async (): Promise<Crop[]> => {
     const startedAt = Date.now();
     try {
-      // 1. Fetch the pin image and base64-encode it for the detector. Pinterest
-      //    (and other) CDNs often reject a bare Node fetch, so send a real
-      //    browser UA + Accept, and bound it with a timeout so a stuck fetch
-      //    never wedges detection. Logged distinctly so image-fetch failures
-      //    are obvious vs. detector failures.
-      let b64: string;
-      try {
-        const imgController = new AbortController();
-        const imgTimer = setTimeout(() => imgController.abort(), 15_000);
-        const imgRes = await fetch(imageUrl, {
-          headers: {
-            "User-Agent":
-              "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36",
-            Accept: "image/avif,image/webp,image/*,*/*;q=0.8",
-          },
-          signal: imgController.signal,
-        }).finally(() => clearTimeout(imgTimer));
-        if (!imgRes.ok) {
-          cropCache.set(imageUrl, { expires: Date.now() + CROP_ERROR_TTL_MS, crops: [] });
-          logNet("DETECT", { outcome: "image_http_error", status: imgRes.status });
-          return [];
-        }
-        b64 = Buffer.from(await imgRes.arrayBuffer()).toString("base64");
-      } catch (e) {
-        cropCache.set(imageUrl, { expires: Date.now() + CROP_ERROR_TTL_MS, crops: [] });
-        logNet("DETECT", {
-          outcome: "image_fetch_error",
-          reason: e instanceof Error ? e.message : String(e),
-        });
-        return [];
-      }
+      const { objects, size } = await detectLimit(() => detectImage(imageUrl));
 
-      // 2. Object detection (slow; long timeout, no retry — re-running a ~30s
-      //    call never helps).
-      const data = await detectLimit(() =>
-        withRetry(
-          async (signal) => {
-            const res = await fetch(DETECT_URL, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                image_base64: b64,
-                custom_labels: [],
-                min_box_area: 0.001,
-                image_name: `${shortHash(imageUrl)}.jpg`,
-                output_folder: "output",
-              }),
-              signal,
-            });
-            if (RETRYABLE_STATUSES.has(res.status)) throw new RetryableHttpError(res.status);
-            if (!res.ok) {
-              logNet("DETECT", { outcome: "http_error", status: res.status });
-              return {} as DetectResponse;
-            }
-            return (await res.json()) as DetectResponse;
-          },
-          { timeoutMs: DETECT_TIMEOUT_MS, label: "DETECT", timeoutMaxRetries: 0 },
-        ),
-      );
-
-      // Keep the highest-confidence components only.
-      const objs = (data.extracted_objects ?? [])
-        .filter((o) => o.image_base64)
-        .sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0))
-        .slice(0, CROP_MAX);
-
-      if (objs.length === 0) {
+      if (objects.length === 0) {
         cropCache.set(imageUrl, { expires: Date.now() + CROP_EMPTY_TTL_MS, crops: [] });
-        // Log both counts + top labels so we can tell "model found nothing" from
-        // "model found boxes but returned no crops".
-        logNet("DETECT", {
-          outcome: "no_objects",
-          durationMs: Date.now() - startedAt,
-          boxes: data.objects?.length ?? 0,
-          extracted: data.extracted_objects?.length ?? 0,
-          labels: (data.objects ?? [])
-            .slice(0, 5)
-            .map((o) => o.label ?? "?")
-            .join(","),
-        });
         return [];
       }
 
-      // 3. Host each crop so Lens (URL-only) can read it. Service-role client
-      //    (bypasses RLS); dynamic import keeps it out of the client bundle.
-      const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-      const dir = shortHash(imageUrl);
-      const crops: Crop[] = [];
-      for (const o of objs) {
-        const path = `${dir}/${o.id ?? crops.length}.png`;
-        const { error } = await supabaseAdmin.storage
-          .from(CROP_BUCKET)
-          .upload(path, Buffer.from(o.image_base64!, "base64"), {
-            contentType: "image/png",
-            upsert: true,
-          });
-        if (error) {
-          logNet("DETECT", { outcome: "upload_error", reason: error.message });
-          continue;
-        }
-        const pub = supabaseAdmin.storage.from(CROP_BUCKET).getPublicUrl(path).data.publicUrl;
-        if (pub) crops.push({ url: pub, label: normalizeLabel(o.label) });
+      if (!size) {
+        cropCache.set(imageUrl, { expires: Date.now() + CROP_ERROR_TTL_MS, crops: [] });
+        logNet("DETECT", { outcome: "size_unknown", objects: objects.length });
+        return [];
       }
 
-      cropCache.set(imageUrl, {
-        expires: Date.now() + (crops.length ? CROP_SUCCESS_TTL_MS : CROP_EMPTY_TTL_MS),
-        crops,
-      });
+      const crops = objects.slice(0, CROP_MAX).map((o) => ({
+        url: cropUrl(imageUrl, o.box, size),
+        label: normalizeLabel(o.label),
+        category: o.category,
+      }));
+
+      cropCache.set(imageUrl, { expires: Date.now() + CROP_SUCCESS_TTL_MS, crops });
       logNet("DETECT", {
         outcome: "completed",
         durationMs: Date.now() - startedAt,
-        objects: objs.length,
-        hosted: crops.length,
+        objects: objects.length,
+        crops: crops.length,
         tags: [...new Set(crops.map((c) => c.label))].join(","),
       });
       return crops;
@@ -1480,6 +1392,45 @@ async function detectAndHostCrops(imageUrl: string): Promise<Crop[]> {
 
   cropInFlight.set(imageUrl, run);
   return run;
+}
+
+// Detection followed by the per-crop Lens searches, all off the caller's
+// thread. This is what turns the client's follow-up poll into an instant
+// response: `searchGoogleLens` caches by URL and de-duplicates in-flight calls,
+// so by the time the tagged request runs, each crop's search has either
+// finished or is already underway and will be joined rather than re-issued.
+function warmCrops(imageUrl: string): void {
+  void detectAndBuildCrops(imageUrl).then((crops) => {
+    for (const c of crops) void searchGoogleLens(c.url).catch(() => []);
+  });
+}
+
+/** Detection if it's already known (or a beat away), otherwise nothing.
+ *
+ * Resolves to the crops on a cache hit — memory or DB — and to undefined when
+ * detection would mean a live model call, in which case it keeps running in the
+ * background and the caller answers from the whole image. */
+async function cropsIfReady(imageUrl: string): Promise<Crop[] | undefined> {
+  const cached = getCrops(imageUrl);
+  if (cached) return cached;
+  if (!DETECT_ENABLED) return undefined;
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const crops = await Promise.race([
+    detectAndBuildCrops(imageUrl),
+    new Promise<undefined>((resolve) => {
+      timer = setTimeout(() => resolve(undefined), CROP_WAIT_MS);
+    }),
+  ]).finally(() => clearTimeout(timer));
+
+  // Lost the race: detection is still running (the call below joins it rather
+  // than starting a second one). Let it finish and warm the crop searches so
+  // the client's next poll is served from cache.
+  if (!crops) {
+    warmCrops(imageUrl);
+    return undefined;
+  }
+  return crops.length > 0 ? crops : undefined;
 }
 
 // -------------------------------------------------------------
@@ -1734,21 +1685,146 @@ function rankMatches(
   const queryWords = extractKeywords(`${context.title ?? ""} ${context.description ?? ""}`);
   const niche = detectNiche(matches, context);
   return matches
-    .map((m) => {
-      const titleWords = extractKeywords(m.title);
-      const overlap = queryWords.size > 0 ? keywordOverlap(titleWords, queryWords) : 0;
-      // Niche fit is the strongest signal after direct title overlap: a match
-      // whose own title belongs to the detected niche is almost certainly the
-      // right object; its retailer selling that niche is a lighter confirm.
-      const nicheHits = niche ? countNicheHits(titleWords, niche) : 0;
-      const nicheBoost = niche
-        ? Math.min(nicheHits, 2) * 3 + (retailerMatchesNiche(m.source, niche) ? 1 : 0)
-        : 0;
-      const score = m.position - overlap * 5 - nicheBoost - (m.inStockHint ? 0.5 : 0);
-      return { m, score };
-    })
+    .map((m) => ({ m, score: baseScore(m, queryWords, niche) }))
     .sort((a, b) => a.score - b.score)
     .map((s) => s.m);
+}
+
+/** Rank score shared by both paths. Lower is better. */
+function baseScore(m: LensMatch, queryWords: Set<string>, niche: Niche | null): number {
+  const titleWords = extractKeywords(m.title);
+  const overlap = queryWords.size > 0 ? keywordOverlap(titleWords, queryWords) : 0;
+  // Niche fit is the strongest signal after direct title overlap: a match
+  // whose own title belongs to the detected niche is almost certainly the
+  // right object; its retailer selling that niche is a lighter confirm.
+  const nicheHits = niche ? countNicheHits(titleWords, niche) : 0;
+  const nicheBoost = niche
+    ? Math.min(nicheHits, 2) * 3 + (retailerMatchesNiche(m.source, niche) ? 1 : 0)
+    : 0;
+  return m.position - overlap * 5 - nicheBoost - (m.inStockHint ? 0.5 : 0);
+}
+
+// -------------------------------------------------------------
+// STEP: Category gate — the thing that keeps the product under a tab actually
+// BEING the thing the tab is named after.
+//
+// A crop is a rectangle, not a cut-out. Whatever else falls inside it — the
+// hem of the jeans above a pair of shoes, the wall beside a blazer — Lens sees
+// too, and it answers with what IT considers the subject, which is not always
+// the object we cropped for. That is the whole of the "labels are right but the
+// products under them are sometimes wrong" complaint: a t-shirt and a pair of
+// jeans coming back under a crop labelled "White Sneakers", because they really
+// were in the picture.
+//
+// So the detector now also reports each object's CATEGORY, and a match is only
+// allowed under that object's tab if its own title agrees. The rule is
+// deliberately asymmetric: a match is dropped only when its category is known
+// AND conflicts. Retailer titles are noisy ("BAESD Women Shrug 27764846") and
+// an unrecognised one is far more likely to be a title we can't parse than a
+// product from a different aisle — dropping those would cost real matches to
+// catch few mistakes.
+//
+// It costs nothing in latency: one regex pass over titles we already have.
+// -------------------------------------------------------------
+
+// Plural-only where the singular is a trap — `shorts`, never `short`, which
+// would swallow every "Short Sleeves Shirt" on Myntra.
+//
+// Order breaks ties only (see `categoryOfTitle`), so it matters far less than
+// it looks, but it still puts the more specific reading first: "Blazer" is
+// outerwear before it is the `top` it is worn over.
+const TITLE_CATEGORY_RULES: Array<[ProductCategory, RegExp]> = [
+  [
+    "footwear",
+    /\b(shoes?|sneakers?|trainers?|sandals?|slippers?|flip[- ]?flops?|heels?|pumps?|loafers?|boots?|juttis?|mojaris?|espadrilles?|sliders?|wedges?)\b/,
+  ],
+  [
+    "bag",
+    /\b(bags?|handbags?|totes?|backpacks?|rucksacks?|clutch(?:es)?|purses?|slings?|satchels?|duffels?|wallets?|pouch(?:es)?|haversacks?)\b/,
+  ],
+  ["watch", /\b(watch(?:es)?|smartwatch(?:es)?|chronographs?|timepieces?)\b/],
+  [
+    "eyewear",
+    /\b(sunglass(?:es)?|eyeglass(?:es)?|glasses|spectacles?|goggles|shades|eyewear|optical frames?)\b/,
+  ],
+  [
+    "jewellery",
+    /\b(earrings?|necklaces?|pendants?|bracelets?|bangles?|rings?|anklets?|jhumkas?|jewellery|jewelry|chokers?|studs?|mangalsutras?)\b/,
+  ],
+  ["headwear", /\b(caps?|hats?|beanies?|headbands?|turbans?)\b/],
+  [
+    "outerwear",
+    /\b(blazers?|jackets?|coats?|overcoats?|trench(?:es)?|shrugs?|cardigans?|waistcoats?|gilets?|parkas?|windcheaters?|bombers?)\b/,
+  ],
+  [
+    "dress",
+    /\b(dress(?:es)?|gowns?|frocks?|jumpsuits?|rompers?|playsuits?|lehengas?|sarees?|saris?|anarkalis?|kaftans?)\b/,
+  ],
+  [
+    "bottom",
+    /\b(jeans|trousers?|pants?|chinos?|joggers?|shorts|skirts?|palazzos?|leggings?|jeggings?|cargos?|culottes?|dhotis?|salwars?|churidars?)\b/,
+  ],
+  [
+    "top",
+    /\b(shirts?|t[- ]?shirts?|tees?|tops?|blouses?|kurtas?|kurtis?|tunics?|camisoles?|hoodies?|sweatshirts?|sweaters?|pullovers?|jerseys?|bodysuits?|bralettes?)\b/,
+  ],
+  [
+    "beauty",
+    /\b(lipsticks?|serums?|foundations?|concealers?|mascaras?|kajals?|perfumes?|fragrances?|moisturis\w*|moisturiz\w*|shampoos?|conditioners?|sunscreens?|makeup|cosmetics?|blush(?:es)?|eyeliners?)\b/,
+  ],
+  [
+    // Phone cases are spelled a dozen ways and are their own product; the
+    // multi-word forms are listed out rather than a bare `case|cover`, which
+    // would claim every cushion cover and suitcase on the page.
+    "electronics",
+    /\b(phones?|smartphones?|iphones?|laptops?|tablets?|cameras?|headphones?|earbuds?|earphones?|speakers?|chargers?|monitors?|keyboards?|consoles?|(?:phone|mobile|back)[- ](?:case|cover)s?)\b/,
+  ],
+  [
+    "furniture",
+    /\b(sofas?|chairs?|tables?|desks?|beds?|wardrobes?|shelves|shelf|cabinets?|stools?|bookcases?|recliners?)\b/,
+  ],
+  [
+    "decor",
+    /\b(cushions?|pillows?|curtains?|lamps?|vases?|rugs?|carpets?|bedsheets?|planters?|clocks?|mirrors?|candles?|wall art|paintings?|posters?)\b/,
+  ],
+];
+
+/** The category a retailer's product title reads as, or "other" when nothing in
+ * it is recognisable.
+ *
+ * When a title names more than one category, the LAST one wins. Product titles
+ * are head-final — the thing being sold is the noun at the end, and everything
+ * before it is brand, pattern and fit ("Buy ALDO Women Textured Sneakers -
+ * Casual Shoes for Women"). First-match-wins read `"7 rings" iPhone Case` as a
+ * ring and threw a perfectly good phone case out of the phone-case tab. */
+function categoryOfTitle(title: string): ProductCategory {
+  const t = title.toLowerCase();
+  let best: ProductCategory = "other";
+  let bestAt = -1;
+  for (const [category, re] of TITLE_CATEGORY_RULES) {
+    const at = t.search(re);
+    if (at > bestAt) {
+      best = category;
+      bestAt = at;
+    }
+  }
+  return best;
+}
+
+// Pairs the detector itself blurs, so treating them as a conflict would throw
+// away correct matches: a watch is routinely classified as jewellery, and a
+// one-piece is called a dress by one model pass and a top by the next.
+const COMPATIBLE_CATEGORIES: ReadonlyArray<readonly [ProductCategory, ProductCategory]> = [
+  ["watch", "jewellery"],
+  ["dress", "top"],
+];
+
+function categoriesAgree(tag: ProductCategory, match: ProductCategory): boolean {
+  if (tag === "other" || match === "other") return true; // nothing to disagree with
+  if (tag === match) return true;
+  return COMPATIBLE_CATEGORIES.some(
+    ([a, b]) => (tag === a && match === b) || (tag === b && match === a),
+  );
 }
 
 // -------------------------------------------------------------
@@ -1781,9 +1857,9 @@ function toRawVisualMatch(m: LensMatch): RawVisualMatch {
   };
 }
 
-// Composes every stage above, in the fixed order: Lens → filter → rank →
-// dedupe → project to the public shape. This is the fast half of
-// the pipeline (one external call, no CK wait) and is what the UI renders
+// Composes every stage above, in the fixed order: Lens → filter → category gate
+// → rank → assign to a tab → dedupe → project to the public shape. This is the
+// fast half of the pipeline (no CK wait) and is what the UI renders
 // immediately: image/title/source/link for every kept match, so cards paint
 // before a single CK request has even been sent. `validateMatches` (below)
 // is the slow half, run independently per card by the client.
@@ -1793,50 +1869,153 @@ async function searchByImageRaw(
   description = "",
 ): Promise<RawVisualMatch[]> {
   const totalStart = Date.now();
-  const crops = getCrops(imageUrl);
 
-  // COMPONENT-TAGGED PATH: detection done + usable crops. Run Lens per crop in
-  // parallel, keep results grouped by their detection tag, and cap each tag at
-  // PER_TAG_MAX. Once every tag is full nothing more is emitted — that cap is
-  // the pipeline's hard stop.
+  // The whole-image search starts FIRST and runs alongside everything below.
+  // On the tagged path it is not wasted work: it is the fallback pool that
+  // fills a tab whose own crop came back thin, at no extra wall-clock (it runs
+  // in parallel with the crop searches) and, being cached per URL, usually at
+  // no extra API call either.
+  const wholeImage = searchGoogleLens(imageUrl).catch(() => [] as LensMatch[]);
+  const crops = await cropsIfReady(imageUrl);
+
+  // COMPONENT-TAGGED PATH: usable crops. Run Lens per crop in parallel, gate
+  // each crop's matches to its own category, and cap each tag at PER_TAG_MAX.
+  // Once every tag is full nothing more is emitted — that cap is the pipeline's
+  // hard stop.
   if (crops && crops.length > 0) {
+    const queryWords = extractKeywords(`${title} ${description}`);
+
     const perCrop = await Promise.all(
-      crops.map(async (c) => {
-        const raw = await searchGoogleLens(c.url).catch(() => [] as LensMatch[]);
-        const ranked = rankMatches(filterSupportedRetailers(raw), { title, description });
-        return { label: c.label, matches: dedupeMatches(ranked) };
-      }),
+      crops.map(async (c) => ({
+        crop: c,
+        matches: filterSupportedRetailers(
+          await searchGoogleLens(c.url).catch(() => [] as LensMatch[]),
+        ),
+      })),
     );
-    // Merge crops that share a tag (e.g. two "Purse" boxes), globally dedupe by
-    // link, and enforce the per-tag ceiling.
-    const seen = new Set<string>();
-    const perTag = new Map<string, number>();
-    const out: RawVisualMatch[] = [];
-    for (const g of perCrop) {
-      for (const m of g.matches) {
-        const link = canonicalizeProductUrl(m.link);
-        if (seen.has(link)) continue;
-        const n = perTag.get(g.label) ?? 0;
-        if (n >= PER_TAG_MAX) continue; // tag is full → stop adding to it
-        seen.add(link);
-        perTag.set(g.label, n + 1);
-        out.push({ ...toRawVisualMatch(m), tag: g.label });
+    // The pool is a filler, so it never gets to hold the response up: it has
+    // been running since before the crops were known and gets only a short
+    // grace period to land once they're done.
+    let graceTimer: ReturnType<typeof setTimeout> | undefined;
+    const pool = await Promise.race([
+      wholeImage,
+      new Promise<LensMatch[]>((resolve) => {
+        graceTimer = setTimeout(() => resolve([]), POOL_GRACE_MS);
+      }),
+    ])
+      .then(filterSupportedRetailers)
+      .finally(() => clearTimeout(graceTimer));
+
+    const niche = detectNiche([...perCrop.flatMap((g) => g.matches), ...pool], {
+      title,
+      description,
+    });
+
+    // Every (match, tab) pairing that survives the gate, scored. A product Lens
+    // returned for two different crops is claimed by the tab it scores best
+    // under, rather than by whichever crop's search happened to finish first —
+    // that ordering accident is how a bag ended up filed under "Sneakers".
+    type Candidate = { m: LensMatch; tag: string; score: number };
+    const candidates: Candidate[] = [];
+    let gated = 0;
+
+    let junked = 0;
+
+    for (const { crop, matches } of perCrop) {
+      const categorised = matches.map((m) => ({ m, cat: categoryOfTitle(m.title) }));
+
+      // Did Lens find even one thing of the right KIND in this crop? When the
+      // box misses its object outright — and it sometimes does; the model is
+      // estimating a rectangle from a description of a scene — Lens dutifully
+      // answers about whatever the rectangle actually contains, and answers
+      // confidently. A crop of the wall beside a white shirt came back as a
+      // page of elevator control panels: nothing in it CONFLICTS with "top",
+      // because none of it is clothing at all, so the gate alone lets it
+      // through. One confirmed hit is the evidence that the crop landed. With
+      // none, the crop is discarded whole and the tab is filled from the pool
+      // (or left empty) instead of being furnished with junk.
+      if (crop.category !== "other" && !categorised.some((c) => c.cat === crop.category)) {
+        junked += matches.length;
+        continue;
+      }
+
+      const labelWords = extractKeywords(crop.label);
+      for (const { m, cat } of categorised) {
+        if (!categoriesAgree(crop.category, cat)) {
+          gated++;
+          continue;
+        }
+        // Naming the object beats every other signal we have: a title that
+        // repeats the detected label is the same kind of thing, whatever the
+        // crop happened to include around it.
+        const labelHits = keywordOverlap(extractKeywords(m.title), labelWords);
+        candidates.push({
+          m,
+          tag: crop.label,
+          score: baseScore(m, queryWords, niche) - labelHits * 6,
+        });
       }
     }
+
+    // Fallback pool: whole-image matches, offered to the one tab whose category
+    // they unambiguously belong to. Penalised so a crop's own findings always
+    // outrank them — this fills a thin tab, it never takes one over.
+    for (const m of pool) {
+      const cat = categoryOfTitle(m.title);
+      if (cat === "other") continue;
+      const owners = crops.filter(
+        (c) => c.category !== "other" && categoriesAgree(c.category, cat),
+      );
+      if (owners.length !== 1) continue; // ambiguous — leave it out
+      const labelHits = keywordOverlap(extractKeywords(m.title), extractKeywords(owners[0].label));
+      candidates.push({
+        m,
+        tag: owners[0].label,
+        score: baseScore(m, queryWords, niche) - labelHits * 6 + POOL_PENALTY,
+      });
+    }
+
+    // One tab per product, best-scoring pairing wins.
+    const bestByLink = new Map<string, Candidate>();
+    for (const c of candidates) {
+      const link = canonicalizeProductUrl(c.m.link);
+      const held = bestByLink.get(link);
+      if (!held || c.score < held.score) bestByLink.set(link, c);
+    }
+
+    // Emit tab by tab, in detection order (most prominent object first), each
+    // tab's own matches best-first.
+    const byTag = new Map<string, Candidate[]>();
+    for (const c of bestByLink.values()) {
+      const list = byTag.get(c.tag);
+      if (list) list.push(c);
+      else byTag.set(c.tag, [c]);
+    }
+    const out: RawVisualMatch[] = [];
+    for (const label of crops.map((c) => c.label)) {
+      const list = byTag.get(label);
+      if (!list) continue;
+      byTag.delete(label); // two crops can share a label — merge, don't repeat
+      for (const c of list.sort((a, b) => a.score - b.score).slice(0, PER_TAG_MAX)) {
+        out.push({ ...toRawVisualMatch(c.m), tag: label });
+      }
+    }
+
     logNet("TOTAL", {
       durationMs: Date.now() - totalStart,
       source: `crops:${crops.length}`,
-      tags: [...perTag.keys()].join(","),
+      tags: [...new Set(crops.map((c) => c.label))].join(","),
+      gated,
+      junked,
       final: out.length,
     });
     return out;
   }
 
-  // WHOLE-IMAGE PATH: detection not ready (or nothing usable). Today's fast
-  // path, unchanged latency. When not attempted yet, kick off background
-  // detection so LATER matches get tabs.
-  const raw = await searchGoogleLens(imageUrl);
-  if (crops === undefined && DETECT_ENABLED) void detectAndHostCrops(imageUrl);
+  // WHOLE-IMAGE PATH: detection isn't ready (or found nothing usable). The fast
+  // path, unchanged latency — `cropsIfReady` has already left detection running
+  // in the background, so a later request for this pin gets the tabbed view.
+  const raw = await wholeImage;
   const filtered = filterSupportedRetailers(raw);
   const ranked = rankMatches(filtered, { title, description });
   const deduped = dedupeMatches(ranked);

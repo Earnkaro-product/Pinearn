@@ -496,10 +496,14 @@ export function CollectionPicker({
   const { data: collections = [], isLoading } = useQuery({
     queryKey: ["picker-collections", product.storefront_id],
     queryFn: async () => {
+      const { data: userRes } = await supabase.auth.getUser();
+      const userId = userRes.user?.id;
+      if (!userId) return [];
       const { data, error } = await supabase
         .from("collections")
         .select("id,name,cover_image_url,cover_color")
         .eq("storefront_id", product.storefront_id)
+        .eq("user_id", userId)
         .is("hidden_from_storefront_at", null)
         .order("position", { ascending: true });
       if (error) throw error;
