@@ -25,7 +25,6 @@ import {
   LaunchScreen,
   PickerHeader,
   QueueToolbar,
-  RailLabel,
   ReviewProgressHeader,
   SelectDot,
   SelectionBar,
@@ -438,7 +437,7 @@ function FixPinSeoPage() {
                 selected pin sits inside the card's boundary, like the board
                 review screen. */}
             <div className="flex min-h-0 flex-1 flex-col">
-              <div className="relative z-20 shrink-0 rounded-t-3xl bg-surface-2 px-6 pb-2 pt-6">
+              <div className="relative z-20 shrink-0 rounded-t-3xl bg-surface-2 px-4 pb-1.5 pt-4">
                 <PinFilmstrip
                   cards={flow.cards}
                   currentIndex={flow.index}
@@ -450,16 +449,25 @@ function FixPinSeoPage() {
               </div>
 
               {/* The rewrite — the hero, in a red-bordered card that echoes the
-                  selected pin tab above. */}
-              <div className="no-scrollbar relative z-10 min-h-0 flex-1 overflow-y-auto rounded-3xl border-2 border-primary bg-surface p-4 shadow-sm">
-                {current && (
-                  <RewriteCard
-                    card={current}
-                    ai={currentAi}
-                    onEdit={() => setEditing(true)}
-                    onRegenerate={() => regenerate(current.id)}
-                  />
-                )}
+                  selected pin tab above. The card scrolls with its bar hidden,
+                  so a fade over the last few pixels is the only thing telling
+                  you there's more copy below the fold — without it the
+                  description just looks truncated. */}
+              <div className="relative z-10 min-h-0 flex-1">
+                <div className="no-scrollbar h-full overflow-y-auto rounded-3xl border-2 border-primary bg-surface p-4 shadow-sm">
+                  {current && (
+                    <RewriteCard
+                      card={current}
+                      ai={currentAi}
+                      onEdit={() => setEditing(true)}
+                      onRegenerate={() => regenerate(current.id)}
+                    />
+                  )}
+                </div>
+                <span
+                  aria-hidden
+                  className="pointer-events-none absolute inset-x-[3px] bottom-[3px] h-7 rounded-b-[1.4rem] bg-gradient-to-t from-surface via-surface/85 to-transparent"
+                />
               </div>
             </div>
 
@@ -484,7 +492,7 @@ function FixPinSeoPage() {
                       ? `Apply fix — costs ${coinLabel(COINS_PER_PIN_BOOST)}`
                       : "Out of coins"
                   }
-                  className="inline-flex flex-1 items-center justify-center gap-2 rounded-2xl bg-gradient-primary px-4 py-3.5 text-[15px] font-extrabold text-primary-foreground shadow-glow transition disabled:opacity-60"
+                  className="inline-flex flex-1 items-center justify-center gap-2 rounded-2xl bg-gradient-primary px-4 py-3.5 text-lead font-extrabold text-primary-foreground shadow-glow transition disabled:opacity-60"
                 >
                   {currentPending || currentGenerating ? (
                     <Loader2 className="h-5 w-5 animate-spin" />
@@ -500,50 +508,58 @@ function FixPinSeoPage() {
                       visible at the moment of tapping rather than only in the
                       header balance. */}
                   {showCoinCost && canAffordOne && !currentGenerating && (
-                    <span className="inline-flex items-center gap-1 rounded-full bg-white/20 px-2 py-0.5 text-[11px] font-bold tabular-nums">
+                    <span className="inline-flex items-center gap-1 rounded-full bg-white/20 px-2 py-0.5 text-mini font-bold tabular-nums">
                       <Coins className="h-3 w-3" /> {COINS_PER_PIN_BOOST}
                     </span>
                   )}
                 </motion.button>
               </div>
 
-              <motion.button
-                whileTap={{ scale: 0.98 }}
-                onClick={() => setConfirming(true)}
-                disabled={
-                  flow.bulkApplying || preparingBulk || remaining.length === 0 || bulkCovered === 0
-                }
-                className="inline-flex w-full items-center justify-center gap-1.5 rounded-2xl border-2 border-primary bg-surface px-3 py-3 text-[13px] font-bold text-primary transition disabled:opacity-40"
-              >
-                {preparingBulk ? (
-                  <>
-                    <Loader2 className="h-4 w-4 animate-spin" /> Writing rewrites… {bulkReady}/
-                    {remaining.length}
-                  </>
-                ) : (
-                  <>
-                    <CheckCheck className="h-4 w-4" />
-                    {bulkCovered === 0
-                      ? "Out of coins this week"
-                      : bulkTrimmed
-                        ? `Approve next ${bulkCovered} of ${remaining.length}`
-                        : `Approve all remaining (${remaining.length})`}
-                    {/* One coin per pin the batch will actually apply — the same
+              {/* "Approve all remaining (1)" is the Apply button with extra
+                  steps — a confirm sheet in front of the same single write. The
+                  bulk path only earns its row once there's more than one left. */}
+              {remaining.length > 1 && (
+                <motion.button
+                  whileTap={{ scale: 0.98 }}
+                  onClick={() => setConfirming(true)}
+                  disabled={
+                    flow.bulkApplying ||
+                    preparingBulk ||
+                    remaining.length === 0 ||
+                    bulkCovered === 0
+                  }
+                  className="inline-flex w-full items-center justify-center gap-1.5 rounded-2xl border-2 border-primary bg-surface px-3 py-3 text-body font-bold text-primary transition disabled:opacity-40"
+                >
+                  {preparingBulk ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" /> Writing rewrites… {bulkReady}/
+                      {remaining.length}
+                    </>
+                  ) : (
+                    <>
+                      <CheckCheck className="h-4 w-4" />
+                      {bulkCovered === 0
+                        ? "Out of coins this week"
+                        : bulkTrimmed
+                          ? `Approve next ${bulkCovered} of ${remaining.length}`
+                          : `Approve all remaining (${remaining.length})`}
+                      {/* One coin per pin the batch will actually apply — the same
                         number the confirm sheet charges. */}
-                    {showCoinCost && bulkCovered > 0 && (
-                      <span
-                        className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-bold tabular-nums ${
-                          bulkTrimmed
-                            ? "bg-amber-500/15 text-amber-800"
-                            : "bg-primary/10 text-primary"
-                        }`}
-                      >
-                        <Coins className="h-3 w-3" /> {bulkCost}
-                      </span>
-                    )}
-                  </>
-                )}
-              </motion.button>
+                      {showCoinCost && bulkCovered > 0 && (
+                        <span
+                          className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-mini font-bold tabular-nums ${
+                            bulkTrimmed
+                              ? "bg-amber-500/15 text-amber-800"
+                              : "bg-primary/10 text-primary"
+                          }`}
+                        >
+                          <Coins className="h-3 w-3" /> {bulkCost}
+                        </span>
+                      )}
+                    </>
+                  )}
+                </motion.button>
+              )}
             </div>
           </>
         )}
@@ -829,7 +845,18 @@ function PinBoostPicker({
               className="space-y-4"
             >
               {suggested.length > 0 && (
-                <SuggestedRail cards={suggested} selected={selected} onToggle={toggleOne} />
+                <SuggestedRail
+                  cards={suggested}
+                  selected={selected}
+                  onToggle={toggleOne}
+                  onQueueAll={setMany}
+                  flippedId={flippedId}
+                  onFlip={(id) => setFlippedId((cur) => (cur === id ? null : id))}
+                  statusById={statusById}
+                  perPinPoints={perPinPoints}
+                  score={score}
+                  totalRanked={ranked.length}
+                />
               )}
 
               <QueueToolbar
@@ -858,12 +885,28 @@ function PinBoostPicker({
                 toggleDisabled={visible.length === 0}
               />
 
+              {/* The grid was unlabelled, which left the suggested rail and 300
+                  more cards running together as one undifferentiated scroll.
+                  Naming it is what makes the rail above read as a shortcut. */}
+              {shown.length > 0 && (
+                <div className="flex items-baseline justify-between gap-2 pt-1">
+                  <h3 className="font-display text-lead font-bold tracking-tight">
+                    {filter === "all"
+                      ? "All pins"
+                      : QUEUE_FILTERS.find((f) => f.key === filter)?.label}
+                  </h3>
+                  <p className="text-mini font-semibold text-muted-foreground">
+                    {visible.length} {visible.length === 1 ? "pin" : "pins"}
+                  </p>
+                </div>
+              )}
+
               {shown.length === 0 ? (
-                <p className="rounded-2xl border border-dashed border-border py-10 text-center text-[12px] text-muted-foreground">
+                <p className="rounded-2xl border border-dashed border-border py-10 text-center text-xs text-muted-foreground">
                   No pins match that.
                 </p>
               ) : (
-                <div className="grid grid-cols-2 gap-2.5">
+                <div className="grid grid-cols-2 gap-x-2.5 gap-y-1">
                   {shown.map((card, i) => (
                     <PinPickCard
                       key={card.id}
@@ -888,7 +931,7 @@ function PinBoostPicker({
                     <button
                       type="button"
                       onClick={() => setLimit((l) => l + PIN_GRID_PAGE_SIZE)}
-                      className="inline-flex min-h-10 flex-1 items-center justify-center gap-1.5 rounded-2xl border border-dashed border-border bg-surface/70 text-[12px] font-bold text-primary transition hover:bg-primary/[0.04]"
+                      className="inline-flex min-h-10 flex-1 items-center justify-center gap-1.5 rounded-2xl border border-dashed border-border bg-surface/70 text-xs font-bold text-primary transition hover:bg-primary/[0.04]"
                     >
                       Show more
                       <span className="font-semibold tabular-nums text-muted-foreground">
@@ -900,7 +943,7 @@ function PinBoostPicker({
                     <button
                       type="button"
                       onClick={() => setLimit(PIN_GRID_PAGE_SIZE)}
-                      className="inline-flex min-h-10 shrink-0 items-center justify-center rounded-2xl border border-border bg-surface px-3.5 text-[12px] font-bold text-muted-foreground transition hover:text-foreground"
+                      className="inline-flex min-h-10 shrink-0 items-center justify-center rounded-2xl border border-border bg-surface px-3.5 text-xs font-bold text-muted-foreground transition hover:text-foreground"
                     >
                       Collapse
                     </button>
@@ -917,7 +960,7 @@ function PinBoostPicker({
               transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
             >
               {lanes.length === 0 ? (
-                <p className="rounded-2xl border border-dashed border-border py-10 text-center text-[12px] text-muted-foreground">
+                <p className="rounded-2xl border border-dashed border-border py-10 text-center text-xs text-muted-foreground">
                   No boards yet.
                 </p>
               ) : (
@@ -930,11 +973,14 @@ function PinBoostPicker({
                     />
                   )}
                   <div>
-                    {suggestedLanes.length > 0 && (
-                      <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.14em] text-muted-foreground">
+                    <div className="mb-2 flex items-baseline justify-between gap-2 pt-1">
+                      <h3 className="font-display text-lead font-bold tracking-tight">
                         All boards
+                      </h3>
+                      <p className="text-mini font-semibold text-muted-foreground">
+                        {lanes.length} {lanes.length === 1 ? "board" : "boards"}
                       </p>
-                    )}
+                    </div>
                     <div className="grid grid-cols-2 gap-3">
                       {lanes.map((lane, i) => {
                         const ids = lane.cards.map((c) => c.id);
@@ -972,7 +1018,7 @@ function PinBoostPicker({
           without turning the bar into a receipt. */}
       {selectedIds.length > 0 && (
         <p
-          className={`shrink-0 pb-1 text-center text-[10.5px] font-semibold ${
+          className={`shrink-0 pb-1 text-center text-micro font-semibold ${
             selectedIds.length > balance ? "text-amber-700" : "text-muted-foreground/80"
           }`}
         >
@@ -1005,7 +1051,7 @@ function PickerTab({
     <button
       type="button"
       onClick={onClick}
-      className={`relative -mb-px px-1 pb-2.5 pt-1 text-[15px] font-semibold transition ${
+      className={`relative -mb-px px-1 pb-2.5 pt-1 text-lead font-semibold transition ${
         active ? "text-foreground" : "text-muted-foreground hover:text-foreground"
       }`}
     >
@@ -1043,73 +1089,119 @@ function PinImage({ card, className }: { card: PinFixCard; className?: string })
 /** The best wins, as a quiet rail of pictures. Rank #1 wears the trophy, and
  * each thumb carries the numbers it was ranked by — fixes and reach. Tapping
  * queues, the same gesture as everywhere else on the page. */
+/** The shortcut, dressed as one. These are the pins worth fixing first, so the
+ * rail is the page's primary action and now looks like it: a bordered, tinted
+ * panel with a live pulse on the label and a one-tap "Queue top N".
+ *
+ * It used to be an unframed row of 78px thumbnails under a muted grey caption —
+ * indistinguishable from a decorative carousel, and smaller than the grid it
+ * was meant to shortcut past. Same cards as the grid now, at the same size, so
+ * the eye reads them as "the same thing, pre-picked for you". */
 function SuggestedRail({
   cards,
   selected,
   onToggle,
+  onQueueAll,
+  flippedId,
+  onFlip,
+  statusById,
+  perPinPoints,
+  score,
+  totalRanked,
 }: {
   cards: PinFixCard[];
   selected: Set<string>;
   onToggle: (id: string) => void;
+  onQueueAll: (ids: string[], on: boolean) => void;
+  flippedId: string | null;
+  onFlip: (id: string) => void;
+  statusById: Record<string, string | undefined>;
+  perPinPoints: number;
+  score: number;
+  totalRanked: number;
 }) {
+  const ids = cards.map((c) => c.id);
+  const allQueued = ids.length > 0 && ids.every((id) => selected.has(id));
+  const totalFixes = cards.reduce((n, c) => n + c.issues.length, 0);
+
   return (
-    <div>
-      <RailLabel text="Suggested pins" metric="most fixes · most reach" />
-      <div className="no-scrollbar -mx-1 flex snap-x gap-2 overflow-x-auto px-1">
-        {cards.map((card, i) => {
-          const on = selected.has(card.id);
-          return (
-            <motion.button
-              key={card.id}
-              type="button"
-              onClick={() => onToggle(card.id)}
-              aria-pressed={on}
-              aria-label={`${on ? "Remove" : "Queue"} ${card.title}`}
-              whileTap={{ scale: 0.94 }}
-              initial={{ opacity: 0, x: 12 }}
-              animate={{ opacity: 1, x: 0 }}
-              transition={{
-                delay: Math.min(i, 6) * 0.04,
-                duration: 0.28,
-                ease: [0.22, 1, 0.36, 1],
-              }}
-              className={`relative h-[104px] w-[78px] shrink-0 snap-start overflow-hidden rounded-xl transition ${
-                on ? "ring-2 ring-primary" : "ring-1 ring-border/60"
-              }`}
-            >
-              <PinImage card={card} />
-              <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-black/65 to-transparent" />
-              {i === 0 ? (
-                <span className="absolute left-1 top-1 grid h-5 w-5 place-items-center rounded-full bg-primary text-primary-foreground shadow">
-                  <Trophy className="h-2.5 w-2.5" />
-                </span>
-              ) : (
-                <span className="absolute left-1 top-1 grid h-5 w-5 place-items-center rounded-full bg-black/45 text-[9px] font-bold text-white backdrop-blur-sm">
-                  {i + 1}
-                </span>
-              )}
-              <span className="absolute right-1 top-1">
-                <SelectDot on={on} small />
-              </span>
-              {/* Why it's here: the two numbers the ranking reads. */}
-              <span className="absolute inset-x-1 bottom-1 flex items-center justify-between text-[8.5px] font-bold text-white/95">
-                {card.issues.length > 0 && (
-                  <span className="inline-flex items-center gap-0.5">
-                    <Sparkles className="h-2 w-2 text-amber-300" /> {card.issues.length}
-                  </span>
-                )}
-                {card.impressions > 0 && (
-                  <span className="ml-auto inline-flex items-center gap-0.5">
-                    <Eye className="h-2 w-2 opacity-80" />
-                    <span className="tabular-nums">{metricLabel(card.impressions)}</span>
-                  </span>
-                )}
-              </span>
-            </motion.button>
-          );
-        })}
+    <motion.section
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
+      aria-label="Suggested pins"
+      className="relative overflow-hidden rounded-3xl border-2 border-primary/45 bg-gradient-to-b from-primary/[0.07] via-surface to-surface p-3.5 shadow-glow"
+    >
+      {/* Breathing border — the one ambient motion on the page, and it sits on
+          the thing we want tapped. Slow and low-contrast on purpose: a hard
+          blink next to 300 thumbnails would read as an error state. */}
+      <motion.span
+        aria-hidden
+        className="pointer-events-none absolute inset-0 rounded-3xl border-2 border-primary"
+        animate={{ opacity: [0.35, 0.05, 0.35] }}
+        transition={{ duration: 2.8, repeat: Infinity, ease: "easeInOut" }}
+      />
+
+      <div className="relative mb-3 flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="flex items-center gap-1.5 text-micro font-bold uppercase tracking-[0.14em] text-primary">
+            <span className="relative grid h-1.5 w-1.5 place-items-center">
+              <span className="absolute h-full w-full animate-ping rounded-full bg-primary/70" />
+              <span className="h-full w-full rounded-full bg-primary" />
+            </span>
+            Start here
+          </p>
+          <h3 className="mt-1 font-display text-[17px] font-bold leading-tight tracking-tight">
+            Your {cards.length} biggest wins
+          </h3>
+          <p className="mt-0.5 text-mini font-medium text-muted-foreground">
+            {totalFixes} fixes · ranked by reach
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => onQueueAll(ids, !allQueued)}
+          className={`relative shrink-0 overflow-hidden rounded-full px-3.5 py-2 text-mini font-bold transition active:scale-[0.97] ${
+            allQueued
+              ? "bg-surface-2 text-muted-foreground ring-1 ring-border"
+              : "bg-gradient-primary text-primary-foreground shadow-glow"
+          }`}
+        >
+          {!allQueued && (
+            <span
+              aria-hidden
+              className="animate-sheen pointer-events-none absolute inset-y-0 w-1/3 bg-gradient-to-r from-transparent via-white/30 to-transparent"
+            />
+          )}
+          {allQueued ? "Clear" : `Queue all ${cards.length}`}
+        </button>
       </div>
-    </div>
+
+      {/* Same card, same size as the grid — just laid on a horizontal track.
+          The width tracks the grid's own column width so the two never drift. */}
+      <div className="no-scrollbar -mx-1 flex snap-x gap-2.5 overflow-x-auto px-1 pb-1">
+        {cards.map((card, i) => (
+          <div
+            key={card.id}
+            className="w-[calc((100vw-5rem)/2.4)] min-w-[124px] max-w-[162px] shrink-0 snap-start"
+          >
+            <PinPickCard
+              card={card}
+              index={i}
+              rank={i + 1}
+              selected={selected.has(card.id)}
+              flipped={flippedId === card.id}
+              boosted={statusById[card.id] === "approved"}
+              points={card.issues.length > 0 ? perPinPoints : 0}
+              seoNow={score}
+              seoDelta={card.issues.length > 0 ? 100 / Math.max(1, totalRanked) : 0}
+              onToggle={() => onToggle(card.id)}
+              onFlip={() => onFlip(card.id)}
+            />
+          </div>
+        ))}
+      </div>
+    </motion.section>
   );
 }
 
@@ -1124,10 +1216,64 @@ function SuggestedBoardsRail({
   selected: Set<string>;
   onToggleMany: (ids: string[], on: boolean) => void;
 }) {
+  const allIds = lanes.flatMap((l) => l.cards.map((c) => c.id));
+  const allQueued = allIds.length > 0 && allIds.every((id) => selected.has(id));
+  const totalFixes = lanes.reduce((n, l) => n + l.fixes, 0);
+
   return (
-    <div>
-      <RailLabel text="Suggested boards" metric="most fixes first" />
-      <div className="no-scrollbar -mx-1 flex snap-x gap-2 overflow-x-auto px-1">
+    // Same panel as the pins rail. Two tabs of the same page cannot present
+    // their shortcut two different ways — one bold and bordered, one a grey
+    // caption — without the quieter one reading as broken.
+    <motion.section
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
+      aria-label="Suggested boards"
+      className="relative overflow-hidden rounded-3xl border-2 border-primary/45 bg-gradient-to-b from-primary/[0.07] via-surface to-surface p-3.5 shadow-glow"
+    >
+      <motion.span
+        aria-hidden
+        className="pointer-events-none absolute inset-0 rounded-3xl border-2 border-primary"
+        animate={{ opacity: [0.35, 0.05, 0.35] }}
+        transition={{ duration: 2.8, repeat: Infinity, ease: "easeInOut" }}
+      />
+
+      <div className="relative mb-3 flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="flex items-center gap-1.5 text-micro font-bold uppercase tracking-[0.14em] text-primary">
+            <span className="relative grid h-1.5 w-1.5 place-items-center">
+              <span className="absolute h-full w-full animate-ping rounded-full bg-primary/70" />
+              <span className="h-full w-full rounded-full bg-primary" />
+            </span>
+            Start here
+          </p>
+          <h3 className="mt-1 font-display text-[17px] font-bold leading-tight tracking-tight">
+            Your {lanes.length} messiest {lanes.length === 1 ? "board" : "boards"}
+          </h3>
+          <p className="mt-0.5 text-mini font-medium text-muted-foreground">
+            {totalFixes} fixes · whole board per tap
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => onToggleMany(allIds, !allQueued)}
+          className={`relative shrink-0 overflow-hidden rounded-full px-3.5 py-2 text-mini font-bold transition active:scale-[0.97] ${
+            allQueued
+              ? "bg-surface-2 text-muted-foreground ring-1 ring-border"
+              : "bg-gradient-primary text-primary-foreground shadow-glow"
+          }`}
+        >
+          {!allQueued && (
+            <span
+              aria-hidden
+              className="animate-sheen pointer-events-none absolute inset-y-0 w-1/3 bg-gradient-to-r from-transparent via-white/30 to-transparent"
+            />
+          )}
+          {allQueued ? "Clear" : "Queue all"}
+        </button>
+      </div>
+
+      <div className="no-scrollbar -mx-1 flex snap-x gap-2.5 overflow-x-auto px-1 pb-1">
         {lanes.map((lane, i) => {
           const ids = lane.cards.map((c) => c.id);
           const on = ids.every((id) => selected.has(id));
@@ -1148,14 +1294,14 @@ function SuggestedBoardsRail({
                 duration: 0.28,
                 ease: [0.22, 1, 0.36, 1],
               }}
-              className="w-36 shrink-0 snap-start text-left"
+              className="w-[calc((100vw-5rem)/2.4)] min-w-[124px] max-w-[162px] shrink-0 snap-start text-left"
             >
               <div
                 className={`relative overflow-hidden rounded-xl transition ${
                   on ? "ring-2 ring-primary" : "ring-1 ring-border/60"
                 }`}
               >
-                <div className="flex h-[72px] gap-0.5">
+                <div className="flex h-[104px] gap-0.5">
                   <div
                     className={`relative flex-[2] bg-gradient-to-br ${GRADIENTS[i % GRADIENTS.length]}`}
                   >
@@ -1188,28 +1334,39 @@ function SuggestedBoardsRail({
                     ))}
                   </div>
                 </div>
-                <span className="absolute left-1 top-1 inline-flex items-center gap-0.5 rounded-full bg-black/45 px-1.5 py-0.5 text-[8.5px] font-bold text-white backdrop-blur-sm">
+                <span className="absolute left-1 top-1 inline-flex items-center gap-0.5 rounded-full bg-black/45 px-1.5 py-0.5 text-nano font-bold text-white backdrop-blur-sm">
                   <Sparkles className="h-2 w-2 text-amber-300" /> {lane.fixes}
                 </span>
                 <span className="absolute right-1 top-1">
                   <SelectDot on={on} small />
                 </span>
               </div>
-              <p className="mt-1 line-clamp-1 px-0.5 text-[10.5px] font-bold">{lane.name}</p>
-              <p className="px-0.5 text-[9px] font-medium text-muted-foreground">
-                {lane.cards.length} {lane.cards.length === 1 ? "pin" : "pins"}
+              <p className="mt-1.5 line-clamp-2 px-0.5 text-mini font-semibold leading-[1.35]">
+                {lane.name}
+              </p>
+              <p className="mt-0.5 px-0.5 text-micro font-semibold text-amber-600/90">
+                {lane.cards.length} {lane.cards.length === 1 ? "pin" : "pins"} · {lane.fixes} fixes
               </p>
             </motion.button>
           );
         })}
       </div>
-    </div>
+    </motion.section>
   );
 }
 
-/** One grid card, image-first and near-wordless: metrics in the corner, a fix
- * count, a check dot. Hold it and it flips to the one sentence that matters —
- * what fixing it adds to the health score. */
+/** One pin card — used BOTH in the suggested rail and in the grid below, which
+ * is the point: the same pin was previously a 78px thumbnail up top and a
+ * half-width card underneath, so the two read as different kinds of object and
+ * the rail looked like decoration rather than the shortcut it is. One
+ * component, one size, one set of affordances.
+ *
+ * Image-first, but no longer wordless: the title sits UNDER the photo where it
+ * is always legible, rather than being the thing a shopper has to infer from a
+ * cropped image. Overlaying it was never an option — half these pins are
+ * photographs with text baked in.
+ *
+ * Hold it and the image flips to what fixing it adds to the health score. */
 function PinPickCard({
   card,
   index,
@@ -1221,6 +1378,7 @@ function PinPickCard({
   seoDelta,
   onToggle,
   onFlip,
+  rank,
 }: {
   card: PinFixCard;
   index: number;
@@ -1232,6 +1390,9 @@ function PinPickCard({
   seoDelta: number;
   onToggle: () => void;
   onFlip: () => void;
+  /** 1-based position in the suggested rail; adds the rank pip and, at 1, the
+   * trophy. Absent in the grid, which has no meaningful order to advertise. */
+  rank?: number;
 }) {
   const { fired, handlers } = useLongPress(onFlip);
   const fixes = card.issues.length;
@@ -1274,18 +1435,30 @@ function PinPickCard({
             <SelectDot on={selected} />
           </span>
 
-          {boosted ? (
-            <span className="absolute left-2 top-2 grid h-6 w-6 place-items-center rounded-full bg-emerald-500 text-white shadow">
-              <Check className="h-3.5 w-3.5" strokeWidth={3.5} />
-            </span>
-          ) : fixes > 0 ? (
-            <span className="absolute left-2 top-2 inline-flex items-center gap-1 rounded-full bg-black/45 px-2 py-0.5 text-[10px] font-bold text-white backdrop-blur-sm">
-              <Sparkles className="h-3 w-3 text-amber-300" /> {fixes}{" "}
-              {fixes === 1 ? "fix" : "fixes"}
-            </span>
-          ) : null}
+          <div className="absolute left-2 top-2 flex items-center gap-1.5">
+            {rank !== undefined &&
+              (rank === 1 ? (
+                <span className="grid h-6 w-6 place-items-center rounded-full bg-primary text-primary-foreground shadow">
+                  <Trophy className="h-3 w-3" />
+                </span>
+              ) : (
+                <span className="grid h-6 w-6 place-items-center rounded-full bg-black/50 text-micro font-bold text-white backdrop-blur-sm">
+                  {rank}
+                </span>
+              ))}
+            {boosted ? (
+              <span className="grid h-6 w-6 place-items-center rounded-full bg-emerald-500 text-white shadow">
+                <Check className="h-3.5 w-3.5" strokeWidth={3.5} />
+              </span>
+            ) : fixes > 0 ? (
+              <span className="inline-flex items-center gap-1 rounded-full bg-black/45 px-2 py-0.5 text-micro font-bold text-white backdrop-blur-sm">
+                <Sparkles className="h-3 w-3 text-amber-300" /> {fixes}{" "}
+                {fixes === 1 ? "fix" : "fixes"}
+              </span>
+            ) : null}
+          </div>
 
-          <div className="absolute inset-x-2 bottom-2 flex items-center gap-2.5 text-[11px] font-bold text-white/95">
+          <div className="absolute inset-x-2 bottom-2 flex items-center gap-2.5 text-mini font-bold text-white/95">
             <span className="inline-flex items-center gap-1">
               <Eye className="h-3 w-3 opacity-80" />
               <span className="tabular-nums">{metricLabel(card.impressions)}</span>
@@ -1312,10 +1485,10 @@ function PinPickCard({
           <span className="font-display text-[28px] font-bold leading-none tabular-nums text-primary">
             {points > 0 ? `+${pointsLabel(points)}` : "+0"}
           </span>
-          <span className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
+          <span className="text-micro font-bold uppercase tracking-wide text-muted-foreground">
             health pts
           </span>
-          <span className="text-[11px] font-semibold leading-snug text-muted-foreground">
+          <span className="text-mini font-semibold leading-snug text-muted-foreground">
             {points > 0 ? (
               <>
                 SEO {seoNow}% →{" "}
@@ -1328,12 +1501,28 @@ function PinPickCard({
             )}
           </span>
           {fixes > 0 && (
-            <span className="line-clamp-2 px-1 text-[10px] font-medium leading-snug text-foreground/70">
+            <span className="line-clamp-2 px-1 text-micro font-medium leading-snug text-foreground/70">
               {card.issues.slice(0, 2).join(" · ")}
             </span>
           )}
         </button>
       </motion.div>
+
+      {/* The copy, under the photo rather than over it. A pin's title is the
+          thing being fixed, so hiding it behind a crop made the user pick
+          blind — and half these images already have text baked in, which is
+          why an overlay was never going to be legible. `h-8` reserves two
+          lines whether or not the title fills them, so the grid stays on a
+          rhythm instead of jostling row to row. */}
+      <div className="mt-2 h-8 px-0.5">
+        <p className="line-clamp-2 text-mini font-semibold leading-[1.35] text-foreground/90">
+          {card.title?.trim() || <span className="text-muted-foreground">Untitled pin</span>}
+        </p>
+      </div>
+      {/* What's actually weak about it — the reason it is in this list at all. */}
+      <p className="mt-0.5 line-clamp-1 px-0.5 text-micro font-semibold text-amber-600/90">
+        {fixes > 0 ? card.issues.slice(0, 2).join(" · ") : " "}
+      </p>
     </motion.div>
   );
 }
@@ -1405,14 +1594,14 @@ function BoardPickCard({
           <SelectDot on={queued} />
         </span>
         {lane.impressions > 0 && (
-          <span className="absolute left-1.5 top-1.5 inline-flex items-center gap-1 rounded-full bg-black/45 px-1.5 py-0.5 text-[9px] font-bold text-white backdrop-blur-sm">
+          <span className="absolute left-1.5 top-1.5 inline-flex items-center gap-1 rounded-full bg-black/45 px-1.5 py-0.5 text-nano font-bold text-white backdrop-blur-sm">
             <Eye className="h-2.5 w-2.5" /> {metricLabel(lane.impressions)}
           </span>
         )}
       </div>
       <div className="px-0.5 pt-1.5">
-        <h4 className="line-clamp-1 text-[12px] font-bold">{lane.name}</h4>
-        <p className="text-[10px] font-medium text-muted-foreground">
+        <h4 className="line-clamp-1 text-xs font-bold">{lane.name}</h4>
+        <p className="text-micro font-medium text-muted-foreground">
           {lane.cards.length} {lane.cards.length === 1 ? "pin" : "pins"}
           {lane.fixes > 0 && <> · {lane.fixes} fixes</>}
         </p>
@@ -1471,44 +1660,20 @@ function RewriteCard({
         <IssueChips issues={card.issues} />
       </div>
 
-      {/* AI rewrite header + Edit / Regenerate. */}
+      {/* AI rewrite header + Edit. */}
       <div className="flex items-center justify-between">
-        <p className="inline-flex items-center gap-1.5 text-[13px] font-extrabold text-foreground">
+        <p className="inline-flex items-center gap-1.5 text-body font-extrabold text-foreground">
           <Sparkles className="h-3.5 w-3.5 text-primary" /> AI rewrite
         </p>
-        <div className="flex items-center gap-1.5">
-          <button
-            type="button"
-            onClick={onRegenerate}
-            disabled={generating}
-            aria-label="Generate a different rewrite"
-            className="inline-flex min-h-8 shrink-0 items-center gap-1 rounded-full bg-surface px-3 text-[11px] font-bold text-muted-foreground ring-1 ring-border transition hover:text-primary disabled:opacity-40"
-          >
-            <RefreshCw className={`h-3 w-3 ${generating ? "animate-spin" : ""}`} /> Redo
-          </button>
-          <button
-            type="button"
-            onClick={onEdit}
-            disabled={generating}
-            className="inline-flex min-h-8 shrink-0 items-center gap-1 rounded-full bg-surface px-3 text-[11px] font-bold text-primary ring-1 ring-primary/25 transition hover:bg-primary/10 disabled:opacity-40"
-          >
-            <Pencil className="h-3 w-3" /> Edit
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={onEdit}
+          disabled={generating}
+          className="inline-flex min-h-8 shrink-0 items-center gap-1 rounded-full bg-surface px-3 text-mini font-bold text-primary ring-1 ring-primary/25 transition hover:bg-primary/10 disabled:opacity-40"
+        >
+          <Pencil className="h-3 w-3" /> Edit
+        </button>
       </div>
-
-      {generating ? (
-        <GeneratingNotice />
-      ) : ai.status === "error" ? (
-        <div className="rounded-2xl border border-amber-500/30 bg-amber-500/5 p-3">
-          <p className="text-[11px] font-semibold text-amber-800">Couldn&apos;t write this one</p>
-          <p className="mt-0.5 text-[11px] leading-snug text-amber-700/80">
-            Tap Redo to try again, or Skip to move on. Nothing was changed on your pin.
-          </p>
-        </div>
-      ) : (
-        <KeywordProof result={ai.result} />
-      )}
 
       <FieldDiff
         heading="Title"
@@ -1525,6 +1690,31 @@ function RewriteCard({
           loading={descLoading}
           lines={4}
         />
+      )}
+
+      {/* The keyword receipt sits under the copy it explains — the rewrite is
+          what's being judged, so it leads; the trends behind it follow. While
+          the pipeline runs, the same slot carries the progress ticker. */}
+      {generating ? (
+        <GeneratingNotice />
+      ) : ai.status === "error" ? (
+        <div className="rounded-2xl border border-amber-500/30 bg-amber-500/5 p-3">
+          <p className="text-mini font-semibold text-amber-800">Couldn&apos;t write this one</p>
+          <p className="mt-0.5 text-mini leading-snug text-amber-700/80">
+            Try again, or Skip to move on. Nothing was changed on your pin.
+          </p>
+          {/* The only retry path now that the always-on Redo chip is gone — it
+              belongs with the failure, not on top of every healthy rewrite. */}
+          <button
+            type="button"
+            onClick={onRegenerate}
+            className="mt-2 inline-flex min-h-8 items-center gap-1 rounded-full bg-surface px-3 text-mini font-bold text-amber-800 ring-1 ring-amber-500/30 transition hover:bg-amber-500/10"
+          >
+            <RefreshCw className="h-3 w-3" /> Try again
+          </button>
+        </div>
+      ) : (
+        <KeywordProof result={ai.result} />
       )}
     </motion.div>
   );
@@ -1714,7 +1904,7 @@ function BoardCoverButton({ cards, onClick }: { cards: PinFixCard[]; onClick: ()
           ))}
         </div>
       </div>
-      <span className="absolute inset-x-0 bottom-0 grid place-items-center bg-black/55 py-0.5 text-[8px] font-bold uppercase tracking-wide text-white backdrop-blur-sm">
+      <span className="absolute inset-x-0 bottom-0 grid place-items-center bg-black/55 py-0.5 text-nano font-bold uppercase tracking-wide text-white backdrop-blur-sm">
         Board
       </span>
     </button>
@@ -1822,7 +2012,7 @@ function PinGridSheet({
                 )}
 
                 {/* Title caption. */}
-                <span className="absolute inset-x-0 bottom-0 line-clamp-1 bg-gradient-to-t from-black/70 to-transparent px-2.5 pb-2 pt-6 text-left text-[11px] font-semibold text-white">
+                <span className="absolute inset-x-0 bottom-0 line-clamp-1 bg-gradient-to-t from-black/70 to-transparent px-2.5 pb-2 pt-6 text-left text-mini font-semibold text-white">
                   {cand.title}
                 </span>
 
@@ -1840,7 +2030,7 @@ function PinGridSheet({
                     <X className="h-3.5 w-3.5" strokeWidth={3} />
                   </span>
                 ) : active ? (
-                  <span className="absolute left-1.5 top-1.5 rounded-full bg-primary px-2 py-0.5 text-[10px] font-bold text-primary-foreground shadow">
+                  <span className="absolute left-1.5 top-1.5 rounded-full bg-primary px-2 py-0.5 text-micro font-bold text-primary-foreground shadow">
                     Editing
                   </span>
                 ) : null}

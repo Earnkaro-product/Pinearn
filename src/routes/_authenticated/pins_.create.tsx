@@ -19,26 +19,24 @@ import {
 } from "lucide-react";
 import { AnimatePresence, motion, Reorder } from "framer-motion";
 import { useScrollMorph } from "@/hooks/use-scroll-morph";
-import { PinScanOverlay, type ScanPhase } from "@/components/pin-scan-overlay";
+import { PinScanOverlay } from "@/components/pin-scan-overlay";
+import { useScanPhase } from "@/hooks/use-scan-phase";
 import { CollectionAddFlow, AddFromCollectionButton } from "@/components/collection-picker";
 import { suggestPinTitle, suggestPinDescription } from "@/lib/health-score";
 import { toast } from "sonner";
 import {
   SuggestionCard,
   ProgressiveSuggestionCard,
+  SuggestionCardSkeleton,
   realProductPrice,
 } from "@/components/suggestion-card";
 import { EducationalLoader, HINTS } from "@/components/rotating-hint";
+import { useVisualSearch } from "@/hooks/use-visual-search";
 import { AppShell } from "@/components/app-shell";
 import { supabase } from "@/integrations/supabase/client";
 import { hostBrand, estimateCommissionPct } from "@/lib/brands";
 import { getFriendlyMessage } from "@/lib/friendly-error";
-import {
-  visualSearchImage,
-  createPinterestPin,
-  type CkResult,
-  type RawVisualMatch,
-} from "@/lib/pinterest.functions";
+import { createPinterestPin, type CkResult, type RawVisualMatch } from "@/lib/pinterest.functions";
 import {
   CATEGORY_PILLS,
   TagTab,
@@ -147,11 +145,15 @@ function CreatePinWizard() {
   const { data: products = [] } = useQuery({
     queryKey: ["all-products"],
     queryFn: async () => {
+      const { data: userRes } = await supabase.auth.getUser();
+      const userId = userRes.user?.id;
+      if (!userId) return [];
       const { data } = await supabase
         .from("storefront_products")
         .select(
           "id,title,affiliate_url,image_url,price_cents,currency,commission_pct,storefront_id,collection_id",
-        );
+        )
+        .eq("user_id", userId);
       return (data ?? []) as Product[];
     },
   });
@@ -347,34 +349,34 @@ function CreatePinWizard() {
       {/* Sticky footer — step 3 renders its own attach-style footer
           (Add more + Next), identical to the attach-products dialog. */}
       {step !== 3 && (
-      <div
-        className="fixed inset-x-0 bottom-0 z-40 border-t border-border/60 bg-background/95 px-5 py-3 backdrop-blur-xl"
-        style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}
-      >
-        <div className="mx-auto flex max-w-2xl items-center justify-end gap-3">
-          {step < 4 ? (
-            <button
-              onClick={next}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground shadow-glow transition active:scale-[0.98]"
-            >
-              Next <ChevronRight className="h-4 w-4" />
-            </button>
-          ) : (
-            <button
-              onClick={() => publish.mutate()}
-              disabled={publish.isPending || !boardId}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground shadow-glow transition active:scale-[0.98] disabled:opacity-70"
-            >
-              {publish.isPending ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Sparkles className="h-4 w-4" />
-              )}
-              Publish to Pinterest
-            </button>
-          )}
+        <div
+          className="fixed inset-x-0 bottom-0 z-40 border-t border-border/60 bg-background/95 px-5 py-3 backdrop-blur-xl"
+          style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}
+        >
+          <div className="mx-auto flex max-w-2xl items-center justify-end gap-3">
+            {step < 4 ? (
+              <button
+                onClick={next}
+                className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground shadow-glow transition active:scale-[0.98]"
+              >
+                Next <ChevronRight className="h-4 w-4" />
+              </button>
+            ) : (
+              <button
+                onClick={() => publish.mutate()}
+                disabled={publish.isPending || !boardId}
+                className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground shadow-glow transition active:scale-[0.98] disabled:opacity-70"
+              >
+                {publish.isPending ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Sparkles className="h-4 w-4" />
+                )}
+                Publish to Pinterest
+              </button>
+            )}
+          </div>
         </div>
-      </div>
       )}
     </AppShell>
   );
@@ -612,7 +614,7 @@ function AiSuggestion({ text, onUse }: { text: string; onUse: () => void }) {
     <div className="mt-2 flex items-start gap-2.5 rounded-xl border border-primary/25 bg-primary/5 p-2.5">
       <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
       <div className="min-w-0 flex-1">
-        <p className="text-[11px] font-semibold uppercase tracking-wide text-primary">
+        <p className="text-mini font-semibold uppercase tracking-wide text-primary">
           AI suggestion
         </p>
         <p className="mt-0.5 text-sm leading-snug text-foreground/90">{text}</p>
@@ -652,7 +654,6 @@ function StepProducts({
   onNext: () => void;
 }) {
   const qc = useQueryClient();
-  const runVisualSearch = useServerFn(visualSearchImage);
 
   const [manualUrl, setManualUrl] = useState("");
   const [productUrlError, setProductUrlError] = useState<string | null>(null);
@@ -670,9 +671,7 @@ function StepProducts({
   const [showCollection, setShowCollection] = useState(false);
   // Active product-tag tab (null = "All") + static category pills.
   const [activeTag, setActiveTag] = useState<string | null>(null);
-  const [activeCategoryPill, setActiveCategoryPill] = useState<(typeof CATEGORY_PILLS)[number]>(
-    CATEGORY_PILLS[0],
-  );
+  // Active product-tag tab only; category pills removed in favor of live filters.
   // Explicit display order of the AI match grid, driven by the inline drag.
   const [aiOrder, setAiOrder] = useState<string[]>([]);
 
@@ -691,22 +690,15 @@ function StepProducts({
     };
   }, []);
 
-  const { data: aiData, isFetching: aiLoading } = useQuery({
-    // title/description ride along to the server fn but aren't used by the
-    // actual search (it only ever searches by imageUrl) — keeping them out
-    // of the key means editing the title text can't trigger a redundant
-    // re-search of the same image.
-    queryKey: ["visual-search-image", imageUrl],
-    queryFn: () => runVisualSearch({ data: { imageUrl, title, description } }),
-    enabled: !!imageUrl,
-    // Results are already fully validated (real matches, live price+stock) —
-    // never silently refetch this expensive pipeline in the background; a
-    // manual refetchAI() call is the only way it runs again.
-    staleTime: Infinity,
-    retry: false,
-    refetchOnWindowFocus: false,
-  });
-  const suggestions = aiData?.suggestions ?? [];
+  // Streamed in two stages — see useVisualSearch. The product pills land in
+  // ~6s; each pill's grid fills on its own after that, so the wizard shows
+  // what it found in the image long before it has finished pricing it.
+  const {
+    tabs,
+    matches: suggestions,
+    isDetecting,
+    isLoading: aiLoading,
+  } = useVisualSearch({ imageUrl, title, description, enabled: !!imageUrl });
 
   // Progressive rendering: `suggestions` paints immediately (image/title/
   // source + Lens price, no CK wait); each card resolves its live price/stock
@@ -715,38 +707,36 @@ function StepProducts({
   // resolving, `null` = no price from CK or Lens at all (rare).
   const [confirmedByLink, setConfirmedByLink] = useState<Map<string, CkResult>>(new Map());
 
-  // Reset AI selection tracking when a fresh set of suggestions arrives.
+  // Reset AI selection tracking when a fresh IMAGE is searched. Keyed on the
+  // image rather than on the results: results now arrive in pieces as each
+  // pill lands, and resetting on every piece would clear the user's picks
+  // under them mid-scan.
   useEffect(() => {
     setAiProductIds({});
     setConfirmedByLink(new Map());
     insertingLinksRef.current = new Set();
     setAiOrder([]);
     setActiveTag(null);
-  }, [aiData]);
+  }, [imageUrl]);
 
   // Full-screen scan experience shown while the visual search runs — same as
-  // the attach-products dialog. It resolves to `found` (brief success beat,
-  // then auto-dismiss to the matches) or `empty` (points the user at manual
-  // entry). `scanAck` = the overlay has been dismissed (auto or by tap).
-  const [scanAck, setScanAck] = useState(false);
-  // Revisiting this step with the search already cached — no scan to show.
-  useEffect(() => {
-    if (!aiLoading && aiData) setScanAck(true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-  const scanPhase: ScanPhase | null = scanAck
-    ? null
-    : aiLoading
-      ? "scanning"
-      : suggestions.length > 0
-        ? "found"
-        : "empty";
-  // Once matches are in, hold the success beat briefly, then reveal them.
-  useEffect(() => {
-    if (scanPhase !== "found") return;
-    const t = setTimeout(() => setScanAck(true), 1000);
-    return () => clearTimeout(t);
-  }, [scanPhase]);
+  // the attach-products dialog, and now on the same timing (see useScanPhase).
+  //
+  // It waits for DETECTION, then briefly for the first tab's products — long
+  // enough that the reveal lands on real cards instead of skeletons, capped so
+  // a slow pin never traps anyone (see useScanPhase). The remaining grids fill
+  // in underneath as their searches return. No image yet = no overlay.
+  // A named component is a result in itself — it becomes a tab. The untagged
+  // whole-image fallback has no label, so there it takes an actual match to
+  // count, which is what keeps a pin with nothing to sell out of the "found"
+  // ending and in the empty state that offers a manual link.
+  const firstTabReady = tabs.some((t) => !t.loading);
+  const { phase: scanPhase, dismiss: dismissScan } = useScanPhase({
+    searching: isDetecting,
+    hasResults: tabs.some((t) => !!t.label) || suggestions.length > 0,
+    productsReady: firstTabReady,
+    active: !!imageUrl,
+  });
 
   const checkedAI = new Set<string>(
     Object.entries(aiProductIds)
@@ -760,23 +750,41 @@ function StepProducts({
     ? Math.max(...suggestions.map((s) => estimateCommissionPct(s.source)))
     : 0;
 
-  // Product-tag tabs (from object detection). Unique tags in first-seen order,
-  // each with its match count. Tabs only show when detection produced ≥2
-  // distinct components; otherwise the grid is just one list.
+  // Product-tag tabs, one per detected component, in prominence order. Taken
+  // from `tabs` (detection) rather than from the matches, so a pill shows the
+  // moment it is named and carries a spinner until its own search lands.
   const tagByLink = useMemo(
     () => new Map(suggestions.map((s) => [s.link, s.tag] as const)),
     [suggestions],
   );
+  // A pill earns its place by having something to show. It appears while its
+  // search is running (that's the point — the user sees what was found in the
+  // pin immediately) and is withdrawn if that search settles empty, because a
+  // tab that opens onto nothing is worse than a tab that was never offered.
+  const namedTabs = useMemo(
+    () => tabs.filter((t) => !!t.label && (t.loading || t.matches.length > 0)),
+    [tabs],
+  );
+  const tags = useMemo(() => [...new Set(namedTabs.map((t) => t.label))], [namedTabs]);
   const tagCounts = useMemo(() => {
     const m = new Map<string, number>();
-    for (const s of suggestions) if (s.tag) m.set(s.tag, (m.get(s.tag) ?? 0) + 1);
+    for (const t of namedTabs) m.set(t.label, (m.get(t.label) ?? 0) + t.matches.length);
     return m;
-  }, [suggestions]);
-  const tags = useMemo(() => [...tagCounts.keys()], [tagCounts]);
+  }, [namedTabs]);
+  const tagLoading = useMemo(() => {
+    const m = new Map<string, boolean>();
+    for (const t of namedTabs) m.set(t.label, (m.get(t.label) ?? false) || t.loading);
+    return m;
+  }, [namedTabs]);
+  const pendingCardCount = activeTag
+    ? tagLoading.get(activeTag)
+      ? 3
+      : 0
+    : Math.min(6, namedTabs.filter((t) => t.loading).length * 3);
   // Keep the active tab valid as results change.
   useEffect(() => {
-    if (activeTag && !tagCounts.has(activeTag)) setActiveTag(null);
-  }, [activeTag, tagCounts]);
+    if (activeTag && !tags.includes(activeTag)) setActiveTag(null);
+  }, [activeTag, tags]);
 
   // Inline drag-reorder of the found-products grid, driven by `aiOrder`.
   const orderedAiLinks = useMemo(() => {
@@ -964,15 +972,15 @@ function StepProducts({
           <PinScanOverlay
             imageUrl={imageUrl || null}
             phase={scanPhase}
-            matchCount={suggestions.length}
+            found={tabs.map((t) => t.label).filter(Boolean)}
             onContinue={() => {
               // No matches → land on the step with the Add-more sheet already
               // open so they can paste a link or pick from a collection.
-              setScanAck(true);
+              dismissScan();
               setShowAddMore(true);
             }}
             onSkip={() => {
-              setScanAck(true);
+              dismissScan();
               setShowAddMore(true);
             }}
           />
@@ -986,7 +994,7 @@ function StepProducts({
           className="mb-2 flex items-center gap-1.5"
         >
           <Sparkles className="h-3 w-3 shrink-0 text-primary" />
-          <span className="truncate text-[10px] font-semibold uppercase tracking-wide text-primary">
+          <span className="truncate text-micro font-semibold uppercase tracking-wide text-primary">
             {aiLoading && suggestions.length === 0 ? "Scanning pin…" : "Visual match"}
           </span>
         </motion.div>
@@ -1018,62 +1026,59 @@ function StepProducts({
 
         {/* Results — manual entry lives in the "Add more" sheet, never
             inline here. */}
-        {aiLoading && suggestions.length === 0 ? (
+        {isDetecting ? (
           <div className="mt-6">
-            <EducationalLoader label="Finding matching products…" hints={HINTS.createScan} />
+            <EducationalLoader label="Finding products in your image…" hints={HINTS.createScan} />
           </div>
-        ) : suggestions.length === 0 ? (
+        ) : suggestions.length === 0 && !aiLoading ? (
           <div className="mt-6 rounded-2xl border border-dashed border-border bg-surface-2/40 p-6 text-center">
             <span className="mx-auto grid h-11 w-11 place-items-center rounded-full bg-amber-500/10 text-amber-600">
               <Sparkles className="h-5 w-5" />
             </span>
             <p className="mt-3 text-sm font-semibold">No matching products found</p>
             <p className="mt-1 text-xs text-muted-foreground">
-              Tap <span className="font-semibold text-primary">Add more</span> below to paste a
-              link or pick from a collection.
+              Tap <span className="font-semibold text-primary">Add more</span> below to paste a link
+              or pick from a collection.
             </p>
           </div>
         ) : (
           <>
-            {/* Earnings-led header — centred and prominent */}
+            {/* Earnings-led header — centred and prominent. While the pills are
+                still filling it names what was FOUND IN THE PIN, which is
+                already known and doesn't churn as each search lands; a bare
+                "Found 0 products" during that window would just look wrong. */}
             <div className="mt-6 text-center">
               <h5 className="font-display text-2xl font-extrabold leading-tight tracking-tight sm:text-3xl">
-                Found {suggestions.length} product{suggestions.length === 1 ? "" : "s"}
+                {aiLoading && namedTabs.length > 0
+                  ? `Found ${namedTabs.length} item${namedTabs.length === 1 ? "" : "s"} in your pin`
+                  : `Found ${suggestions.length} product${suggestions.length === 1 ? "" : "s"}`}
               </h5>
               <p className="mt-1.5 flex flex-wrap items-center justify-center gap-1.5 text-base font-medium text-muted-foreground">
-                Earn upto
-                <span className="inline-flex items-center rounded-full bg-emerald-500/10 px-3 py-0.5 text-base font-extrabold text-emerald-600">
-                  {topCommission}%
-                </span>
-                per sale
+                {aiLoading && suggestions.length === 0 ? (
+                  "Matching them to stores…"
+                ) : (
+                  <>
+                    Earn upto
+                    <span className="inline-flex items-center rounded-full bg-emerald-500/10 px-3 py-0.5 text-base font-extrabold text-emerald-600">
+                      {topCommission}%
+                    </span>
+                    per sale
+                  </>
+                )}
               </p>
             </div>
 
-            {/* Static category pills. */}
-            <div className="no-scrollbar mt-4 -mx-1 flex items-center gap-2 overflow-x-auto px-1">
-              {CATEGORY_PILLS.map((label) => (
-                <button
-                  key={label}
-                  type="button"
-                  onClick={() => setActiveCategoryPill(label)}
-                  className={`inline-flex shrink-0 items-center rounded-full px-3.5 py-1.5 text-xs font-bold transition ${
-                    activeCategoryPill === label
-                      ? "bg-gradient-primary text-primary-foreground shadow-glow"
-                      : "bg-surface-2 text-muted-foreground hover:text-foreground"
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
+            {/* Category pills removed — use live filtering instead. */}
 
             {/* Product-tag tabs — one per detected component. Below the pin,
-                above the products. Only shown when detection found ≥2. */}
-            {tags.length >= 2 && (
+                above the products. Shown whenever detection named at least one
+                component — a single category still gets "All" + its own pill. */}
+            {tags.length >= 1 && (
               <div className="no-scrollbar mt-4 -mx-1 flex items-center gap-2 overflow-x-auto px-1">
                 <TagTab
                   label="All"
                   count={suggestions.length}
+                  pending={aiLoading}
                   active={activeTag === null}
                   onClick={() => setActiveTag(null)}
                 />
@@ -1082,6 +1087,7 @@ function StepProducts({
                     key={t}
                     label={t}
                     count={tagCounts.get(t) ?? 0}
+                    pending={tagLoading.get(t) ?? false}
                     active={activeTag === t}
                     onClick={() => setActiveTag(t)}
                   />
@@ -1113,6 +1119,9 @@ function StepProducts({
                     </ReorderableCard>
                   );
                 })}
+                {Array.from({ length: pendingCardCount }).map((_, i) => (
+                  <SuggestionCardSkeleton key={`skeleton-${i}`} />
+                ))}
               </Reorder.Group>
             ) : (
               <div className="mt-3 grid grid-cols-2 gap-2.5 sm:grid-cols-3">
@@ -1129,6 +1138,9 @@ function StepProducts({
                     />
                   );
                 })}
+                {Array.from({ length: pendingCardCount }).map((_, i) => (
+                  <SuggestionCardSkeleton key={`skeleton-${i}`} />
+                ))}
               </div>
             )}
           </>
@@ -1259,7 +1271,7 @@ function StepProducts({
               )}
 
               {/* divider */}
-              <div className="my-4 flex items-center gap-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+              <div className="my-4 flex items-center gap-3 text-mini font-semibold uppercase tracking-wide text-muted-foreground/70">
                 <span className="h-px flex-1 bg-border" /> or{" "}
                 <span className="h-px flex-1 bg-border" />
               </div>
@@ -1310,7 +1322,11 @@ function StepProducts({
                           </span>
                           <div className="h-11 w-11 shrink-0 overflow-hidden rounded-xl bg-surface-2">
                             {p.image_url ? (
-                              <img src={p.image_url} alt="" className="h-full w-full object-cover" />
+                              <img
+                                src={p.image_url}
+                                alt=""
+                                className="h-full w-full object-cover"
+                              />
                             ) : (
                               <div className="grid h-full w-full place-items-center text-muted-foreground">
                                 <ImageIcon className="h-4 w-4" />
@@ -1318,7 +1334,7 @@ function StepProducts({
                             )}
                           </div>
                           <div className="min-w-0 flex-1">
-                            <p className="truncate text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
+                            <p className="truncate text-micro font-bold uppercase tracking-wide text-muted-foreground">
                               {hostBrand(p.affiliate_url)}
                             </p>
                             <p className="truncate text-sm font-semibold leading-tight">
@@ -1331,7 +1347,7 @@ function StepProducts({
                                 </span>
                               )}
                               {earn != null && (
-                                <span className="text-[11px] font-bold text-emerald-600">
+                                <span className="text-mini font-bold text-emerald-600">
                                   Earn ₹{earn}/sale
                                 </span>
                               )}
@@ -1516,7 +1532,7 @@ function Field({
     <label className="block">
       <div className="mb-1.5 flex items-center justify-between">
         <span className="text-sm font-medium">{label}</span>
-        {hint && <span className="text-[11px] text-muted-foreground">{hint}</span>}
+        {hint && <span className="text-mini text-muted-foreground">{hint}</span>}
       </div>
       {children}
     </label>

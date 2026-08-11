@@ -351,19 +351,19 @@ function MonetizePins() {
                 </div>
               )}
               <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/20 to-transparent" />
-              <div className="absolute left-2 top-2 inline-flex items-center gap-1 rounded-full bg-black/50 px-2 py-1 text-[10px] font-semibold text-white backdrop-blur">
+              <div className="absolute left-2 top-2 inline-flex items-center gap-1 rounded-full bg-black/50 px-2 py-1 text-micro font-semibold text-white backdrop-blur">
                 <Eye className="h-3 w-3" /> {fmt(p.impressions)}
               </div>
               <div className="absolute inset-x-2 bottom-11 text-white">
-                <p className="line-clamp-2 text-[11px] font-medium leading-tight">{p.title}</p>
-                <p className="mt-1 inline-flex items-center gap-1 text-[10px] opacity-80">
+                <p className="line-clamp-2 text-mini font-medium leading-tight">{p.title}</p>
+                <p className="mt-1 inline-flex items-center gap-1 text-micro opacity-80">
                   <MousePointerClick className="h-2.5 w-2.5" /> {fmt(p.clicks)} clicks
                 </p>
               </div>
               <Link
                 to="/pins/attach"
                 search={{ pinId: p.id, collection: undefined }}
-                className="absolute inset-x-2 bottom-2 flex items-center justify-center gap-1 rounded-full bg-white px-2 py-2 text-[11px] font-semibold text-foreground shadow-sm transition hover:bg-white/90"
+                className="absolute inset-x-2 bottom-2 flex items-center justify-center gap-1 rounded-full bg-white px-2 py-2 text-mini font-semibold text-foreground shadow-sm transition hover:bg-white/90"
               >
                 <Sparkles className="h-3 w-3 text-primary" /> Monetise
               </Link>
@@ -538,13 +538,13 @@ function MonetizeBoards() {
                     </div>
                   </div>
                   <div className="pointer-events-none absolute inset-x-0 bottom-0 h-14 bg-gradient-to-t from-black/70 to-transparent" />
-                  <div className="absolute left-2 top-2 inline-flex items-center gap-1 rounded-full bg-black/50 px-2 py-1 text-[10px] font-semibold text-white backdrop-blur">
+                  <div className="absolute left-2 top-2 inline-flex items-center gap-1 rounded-full bg-black/50 px-2 py-1 text-micro font-semibold text-white backdrop-blur">
                     <Eye className="h-3 w-3" /> {fmt(b.impressions)}
                   </div>
                   <Link
                     to="/pins/monetize-board"
                     search={{ collectionId: b.collection.id, resume: undefined }}
-                    className="absolute inset-x-2 bottom-2 flex items-center justify-center gap-1 rounded-full bg-white px-2 py-2 text-[11px] font-semibold text-foreground shadow-sm transition hover:bg-white/90"
+                    className="absolute inset-x-2 bottom-2 flex items-center justify-center gap-1 rounded-full bg-white px-2 py-2 text-mini font-semibold text-foreground shadow-sm transition hover:bg-white/90"
                   >
                     <Sparkles className="h-3 w-3 text-primary" /> Monetise
                   </Link>

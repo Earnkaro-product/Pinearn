@@ -1,13 +1,3 @@
-// Minimal, dependency-free concurrency limiter (p-limit equivalent).
-//
-// Create ONE limiter per external dependency at module scope and reuse it
-// across every call site/request. That's the difference that matters here:
-// a concurrency cap applied *inside* a single function call (e.g. a local
-// worker-pool loop) only bounds fan-out within that one call — if N
-// requests each independently run their own capped loop, the real
-// concurrency is still N × cap. A module-level limiter bounds the TOTAL
-// number of in-flight calls process-wide, no matter how many requests are
-// using it at once.
 export interface Limiter {
   <T>(fn: () => Promise<T>): Promise<T>;
   activeCount(): number;

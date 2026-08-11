@@ -271,7 +271,7 @@ function OnboardingPage() {
             <span className="font-display text-sm font-bold text-primary-foreground">P</span>
           </div>
           <span className="font-display text-lg font-semibold">Pinearn</span>
-          <span className="ml-auto inline-flex items-center gap-1 rounded-full border border-primary/30 bg-primary/10 px-2.5 py-0.5 text-[11px] font-medium text-primary">
+          <span className="ml-auto inline-flex items-center gap-1 rounded-full border border-primary/30 bg-primary/10 px-2.5 py-0.5 text-mini font-medium text-primary">
             <Lock className="h-3 w-3" /> Required
           </span>
         </div>
@@ -392,7 +392,7 @@ function OnboardingPage() {
               </button>
             )}
 
-            <p className="mt-4 text-center text-[11px] text-muted-foreground">
+            <p className="mt-4 text-center text-mini text-muted-foreground">
               You can't skip this step — Pinearn needs Pinterest data to build your storefront.
             </p>
           </div>

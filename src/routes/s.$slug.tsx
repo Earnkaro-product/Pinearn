@@ -287,7 +287,7 @@ function CoverCard({
         <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/10 to-transparent" />
         <div className="absolute inset-x-3 bottom-3 text-white">
           <div className="truncate text-sm font-semibold drop-shadow">{name}</div>
-          <div className="text-[10px] opacity-80">{subtitle}</div>
+          <div className="text-micro opacity-80">{subtitle}</div>
         </div>
       </div>
     </div>

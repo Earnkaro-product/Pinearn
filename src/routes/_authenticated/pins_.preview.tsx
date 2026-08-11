@@ -64,10 +64,14 @@ function PinPreviewPage() {
   const { data: pin, isLoading: pinLoading } = useQuery({
     queryKey: ["pin", pinId],
     queryFn: async () => {
+      const { data: userRes } = await supabase.auth.getUser();
+      const userId = userRes.user?.id;
+      if (!userId) return null;
       const { data, error } = await supabase
         .from("pins")
         .select("id,title,image_url,external_url,storefront_id,collection_id")
         .eq("id", pinId)
+        .eq("user_id", userId)
         .maybeSingle();
       if (error) throw error;
       return data as Pin | null;
@@ -79,10 +83,14 @@ function PinPreviewPage() {
     queryKey: ["storefront", pin?.storefront_id],
     queryFn: async () => {
       if (!pin?.storefront_id) return null;
+      const { data: userRes } = await supabase.auth.getUser();
+      const userId = userRes.user?.id;
+      if (!userId) return null;
       const { data } = await supabase
         .from("storefronts")
         .select("id,name,slug")
         .eq("id", pin.storefront_id)
+        .eq("user_id", userId)
         .maybeSingle();
       return (data ?? null) as Storefront | null;
     },
@@ -108,12 +116,16 @@ function PinPreviewPage() {
     queryKey: ["selected-products", stash.productIds.join(",")],
     queryFn: async () => {
       if (stash.productIds.length === 0) return [];
+      const { data: userRes } = await supabase.auth.getUser();
+      const userId = userRes.user?.id;
+      if (!userId) return [];
       const { data } = await supabase
         .from("storefront_products")
         .select(
           "id,title,affiliate_url,image_url,price_cents,currency,commission_pct,storefront_id,collection_id",
         )
-        .in("id", stash.productIds);
+        .in("id", stash.productIds)
+        .eq("user_id", userId);
       return (data ?? []) as Product[];
     },
   });
@@ -227,7 +239,7 @@ function PinPreviewPage() {
 
               <div className="flex items-center justify-between">
                 <h3 className="text-sm font-semibold">Products on this pin</h3>
-                <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">
+                <span className="rounded-full bg-primary/10 px-2 py-0.5 text-micro font-semibold text-primary">
                   {selectedProducts.length + stash.aiPicks.length} items
                 </span>
               </div>
@@ -271,7 +283,7 @@ function PinPreviewPage() {
           style={{ paddingBottom: "max(0.6rem, env(safe-area-inset-bottom))" }}
         >
           {selectedProducts.length + stash.aiPicks.length === 0 && (
-            <p className="mx-auto max-w-2xl pb-1.5 text-center text-[11px] text-muted-foreground">
+            <p className="mx-auto max-w-2xl pb-1.5 text-center text-mini text-muted-foreground">
               Attach at least one product to go live.
             </p>
           )}

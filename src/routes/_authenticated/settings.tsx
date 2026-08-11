@@ -229,7 +229,7 @@ function SettingsPage() {
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="rounded-2xl border border-border bg-surface/85 p-4 shadow-elevate">
-      <div className="mb-3 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
+      <div className="mb-3 text-mini font-semibold uppercase tracking-widest text-muted-foreground">
         {title}
       </div>
       <div className="space-y-2">{children}</div>

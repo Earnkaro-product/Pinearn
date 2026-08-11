@@ -204,7 +204,7 @@ export function SwipeDeck<T extends { id: string }>({
             onClick={() => decide("approved")}
             disabled={!current || currentPending || paused}
             aria-label={approveLabel}
-            className="inline-flex min-h-[52px] flex-1 items-center justify-center gap-2 rounded-2xl bg-gradient-primary px-4 text-[15px] font-extrabold text-primary-foreground shadow-glow transition disabled:opacity-60"
+            className="inline-flex min-h-[52px] flex-1 items-center justify-center gap-2 rounded-2xl bg-gradient-primary px-4 text-lead font-extrabold text-primary-foreground shadow-glow transition disabled:opacity-60"
           >
             {currentPending ? (
               <Loader2 className="h-5 w-5 animate-spin" />
@@ -230,7 +230,7 @@ function DeckHint() {
     setMac(/mac|iphone|ipad|ipod/i.test(navigator.platform || navigator.userAgent));
   }, []);
   return (
-    <p className="mt-2 text-center text-[11px] text-muted-foreground">
+    <p className="mt-2 text-center text-mini text-muted-foreground">
       {coarse ? (
         "Swipe right to apply · left to skip · shake to undo"
       ) : (
@@ -245,7 +245,7 @@ function DeckHint() {
 
 function Kbd({ children }: { children: ReactNode }) {
   return (
-    <kbd className="rounded border border-border bg-surface-2 px-1 font-sans text-[10px] font-bold text-foreground">
+    <kbd className="rounded border border-border bg-surface-2 px-1 font-sans text-micro font-bold text-foreground">
       {children}
     </kbd>
   );

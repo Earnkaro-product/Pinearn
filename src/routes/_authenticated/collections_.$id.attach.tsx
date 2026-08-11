@@ -9,13 +9,15 @@ import { toast } from "sonner";
 import {
   SuggestionCard,
   ProgressiveSuggestionCard,
+  SuggestionCardSkeleton,
   realProductPrice,
 } from "@/components/suggestion-card";
 import { EducationalLoader, HINTS } from "@/components/rotating-hint";
 import { AppShell } from "@/components/app-shell";
 import { supabase } from "@/integrations/supabase/client";
 import { hostBrand } from "@/lib/brands";
-import { visualSearchImage, type CkResult, type RawVisualMatch } from "@/lib/pinterest.functions";
+import { type CkResult, type RawVisualMatch } from "@/lib/pinterest.functions";
+import { useVisualSearch } from "@/hooks/use-visual-search";
 import { getFriendlyMessage } from "@/lib/friendly-error";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -50,7 +52,6 @@ function AttachToCollectionPage() {
   const { id } = Route.useParams();
   const navigate = useNavigate();
   const qc = useQueryClient();
-  const runVisualSearch = useServerFn(visualSearchImage);
   // Scroll-linked morph: the big cover preview shrinks into a small pinned
   // thumbnail as the results scroll down, and grows back on scroll up. This
   // page scrolls the window (no internal scroll container), so no ref is
@@ -60,10 +61,14 @@ function AttachToCollectionPage() {
   const { data: collection, isLoading } = useQuery({
     queryKey: ["collection", id],
     queryFn: async () => {
+      const { data: userRes } = await supabase.auth.getUser();
+      const userId = userRes.user?.id;
+      if (!userId) return null;
       const { data, error } = await supabase
         .from("collections")
         .select("id,name,cover_image_url,storefront_id")
         .eq("id", id)
+        .eq("user_id", userId)
         .maybeSingle();
       if (error) throw error;
       return data as CollectionRow | null;
@@ -73,10 +78,14 @@ function AttachToCollectionPage() {
   const { data: products = [] } = useQuery({
     queryKey: ["collection-products", id],
     queryFn: async () => {
+      const { data: userRes } = await supabase.auth.getUser();
+      const userId = userRes.user?.id;
+      if (!userId) return [];
       const { data, error } = await supabase
         .from("storefront_products")
         .select("id,title,image_url,affiliate_url,collection_id,price_cents,commission_pct")
         .eq("collection_id", id)
+        .eq("user_id", userId)
         .order("created_at", { ascending: false });
       if (error) throw error;
       return (data ?? []) as ProductRow[];
@@ -85,22 +94,23 @@ function AttachToCollectionPage() {
 
   const imageUrl = collection?.cover_image_url ?? "";
 
+  // Streamed in two stages — see useVisualSearch. Detection names the products
+  // in ~6s and each one's matches arrive on their own, so this list starts
+  // filling long before the slowest search is done.
   const {
-    data: aiData,
-    isFetching: aiLoading,
+    matches: suggestions,
+    tabs,
+    isDetecting,
+    isLoading: aiLoading,
     refetch: refetchAI,
-  } = useQuery({
-    queryKey: ["visual-search-collection", id, imageUrl],
-    queryFn: () => runVisualSearch({ data: { imageUrl, title: collection?.name ?? "" } }),
+  } = useVisualSearch({
+    imageUrl,
+    title: collection?.name ?? "",
     enabled: !!imageUrl,
-    // Results are already fully validated (real matches, live price+stock) —
-    // never silently refetch this expensive pipeline in the background; a
-    // manual refetchAI() call is the only way it runs again.
-    staleTime: Infinity,
-    retry: false,
-    refetchOnWindowFocus: false,
   });
-  const suggestions = aiData?.suggestions ?? [];
+  // One silhouette row per product still being searched, so the grid grows
+  // into its results instead of appearing all at once at the end.
+  const pendingCardCount = Math.min(6, tabs.filter((t) => t.loading).length * 3);
 
   // Progressive rendering: `suggestions` paints immediately (image/title/
   // source, no CK wait); each card resolves price/stock independently via
@@ -124,11 +134,14 @@ function AttachToCollectionPage() {
     };
   }, []);
 
+  // Reset attach tracking when a fresh IMAGE is searched. Keyed on the image
+  // rather than on the results: results now stream in per detected product,
+  // and resetting on every arrival would clear what the user just attached.
   useEffect(() => {
     setConfirmedByLink(new Map());
     setAttachedLinks(new Set());
     attachingLinksRef.current = new Set();
-  }, [aiData]);
+  }, [imageUrl]);
 
   const attachSuggestion = async (s: RawVisualMatch) => {
     if (attachingLinksRef.current.has(s.link) || attachedLinks.has(s.link)) return;
@@ -286,7 +299,7 @@ function AttachToCollectionPage() {
                   <span className="pointer-events-none absolute inset-0 ring-2 ring-inset ring-primary/50" />
                 </>
               )}
-              <div className="absolute left-2 top-2 inline-flex items-center gap-1 rounded-full bg-black/60 px-2 py-0.5 text-[10px] font-semibold text-white backdrop-blur">
+              <div className="absolute left-2 top-2 inline-flex items-center gap-1 rounded-full bg-black/60 px-2 py-0.5 text-micro font-semibold text-white backdrop-blur">
                 {aiLoading && suggestions.length === 0 ? (
                   <>
                     <Loader2 className="h-3 w-3 animate-spin" /> Visual search…
@@ -307,7 +320,7 @@ function AttachToCollectionPage() {
 
         {/* Manual link */}
         <div>
-          <label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          <label className="text-mini font-semibold uppercase tracking-wide text-muted-foreground">
             Product link
           </label>
           <div className="mt-1.5 flex items-center gap-2 rounded-xl border border-input bg-background px-3 py-2.5">
@@ -344,24 +357,24 @@ function AttachToCollectionPage() {
             </h5>
             <div className="flex items-center gap-2">
               {suggestions.length > 0 && (
-                <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">
+                <span className="rounded-full bg-primary/10 px-2 py-0.5 text-micro font-semibold text-primary">
                   {attachedLinks.size} attached
                 </span>
               )}
               <button
                 onClick={() => refetchAI()}
                 disabled={aiLoading || !imageUrl}
-                className="rounded-full bg-surface-2 px-2.5 py-1 text-[10px] font-semibold text-muted-foreground hover:text-foreground disabled:opacity-50"
+                className="rounded-full bg-surface-2 px-2.5 py-1 text-micro font-semibold text-muted-foreground hover:text-foreground disabled:opacity-50"
               >
                 {aiLoading ? "Scanning…" : "Retry"}
               </button>
             </div>
           </div>
-          {aiLoading && suggestions.length === 0 ? (
+          {isDetecting ? (
             <div className="mt-3">
-              <EducationalLoader label="Finding matching products…" hints={HINTS.matching} />
+              <EducationalLoader label="Finding products in this image…" hints={HINTS.matching} />
             </div>
-          ) : suggestions.length === 0 ? (
+          ) : suggestions.length === 0 && !aiLoading ? (
             <p className="mt-3 rounded-xl border border-dashed border-border bg-surface-2/40 p-4 text-center text-xs text-muted-foreground">
               No matching products found.
             </p>
@@ -376,6 +389,9 @@ function AttachToCollectionPage() {
                   onSettled={handleSuggestionSettled}
                 />
               ))}
+              {Array.from({ length: pendingCardCount }).map((_, i) => (
+                <SuggestionCardSkeleton key={`skeleton-${i}`} />
+              ))}
             </div>
           )}
         </div>
@@ -386,7 +402,7 @@ function AttachToCollectionPage() {
             <h5 className="flex items-center gap-1.5 text-sm font-semibold">
               <Store className="h-4 w-4 text-primary" />
               In this collection
-              <span className="ml-1 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">
+              <span className="ml-1 rounded-full bg-primary/10 px-2 py-0.5 text-micro font-semibold text-primary">
                 {products.length}
               </span>
             </h5>

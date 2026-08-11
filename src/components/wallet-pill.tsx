@@ -1,15 +1,16 @@
 import { useEffect, useRef, useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { RotateCcw, X } from "lucide-react";
+import { AppSheet } from "@/components/app-sheet";
 import { AnimatedNumber } from "@/components/health-widgets";
 import { useCoinLedger, useWallet } from "@/hooks/use-wallet";
 import { coinLabel, coinReasonLabel, resetCountdown } from "@/lib/coins";
 
-// Below this the wallet turns amber and the sheet leads with the refill date — a
+// Below this the wallet turns rose and the sheet leads with the refill date — a
 // creator about to run out mid-deck should find out before Apply goes dead.
 const LOW_BALANCE = 10;
 
-/** A gold coin. Drawn rather than iconified so it reads as currency at 20px — a
+/** A gold coin. Drawn rather than iconified so it reads as currency at 16px — a
  * flat outline icon at this size is just a circle. */
 function Coin({ className = "h-6 w-6" }: { className?: string }) {
   return (
@@ -26,15 +27,102 @@ function Coin({ className = "h-6 w-6" }: { className?: string }) {
 }
 
 /**
- * The header wallet — a closed billfold, shrunk to a single 30px line: dark
- * leather body, stitched edge, a gold card lip peeking over the top, and a
- * hairline meter along the bottom for what's left of the week. It reads as an
- * object you keep money in rather than as another status chip, while taking no
- * more room in the app bar than the avatar next to it.
+ * The coin, wearing what's left of the week as a ring around it.
+ *
+ * This replaces a hairline bar tucked along the bottom edge of a pill: the
+ * balance and its limit were two separate objects a few pixels apart, and at
+ * 2px tall the bar was decoration more than a gauge. One dial is legible at a
+ * glance and reads as a single thing you can tap.
+ */
+function CoinDial({
+  pct,
+  low,
+  size,
+  coin,
+  gradientId,
+  spin,
+}: {
+  pct: number;
+  low: boolean;
+  /** Outer ring diameter in px. */
+  size: number;
+  /** Coin diameter in px — the ring needs the difference as breathing room. */
+  coin: number;
+  gradientId: string;
+  /** Bumped on every balance change to flip the coin once. */
+  spin?: number;
+}) {
+  const reduce = useReducedMotion();
+  const r = (size - 3) / 2;
+  const c = 2 * Math.PI * r;
+  return (
+    <span
+      className="relative grid shrink-0 place-items-center"
+      style={{ width: size, height: size }}
+    >
+      <svg
+        viewBox={`0 0 ${size} ${size}`}
+        className="absolute inset-0 -rotate-90"
+        width={size}
+        height={size}
+        aria-hidden
+      >
+        <defs>
+          <linearGradient id={gradientId} x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor={low ? "#FB7185" : "#FDE9A9"} />
+            <stop offset="100%" stopColor={low ? "#E11D48" : "#E9A825"} />
+          </linearGradient>
+        </defs>
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={r}
+          fill="none"
+          strokeWidth="2.5"
+          className={low ? "stroke-rose-500/15" : "stroke-amber-500/15"}
+        />
+        <motion.circle
+          cx={size / 2}
+          cy={size / 2}
+          r={r}
+          fill="none"
+          stroke={`url(#${gradientId})`}
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeDasharray={c}
+          initial={{ strokeDashoffset: c }}
+          animate={{ strokeDashoffset: c * (1 - Math.max(0.03, pct / 100)) }}
+          transition={{ type: "spring", stiffness: 90, damping: 18 }}
+        />
+      </svg>
+      {/* A spent coin flips — the one bit of theatre, and it only fires on a
+          real balance change rather than looping in the corner forever. */}
+      <motion.span
+        key={spin}
+        animate={reduce || !spin ? undefined : { rotateY: [0, 360], scale: [1, 1.14, 1] }}
+        transition={{ duration: 0.62, ease: [0.22, 1, 0.36, 1] }}
+        className="relative grid place-items-center"
+        // fontSize drives the embossed "P" (sized in em), so it has to track the
+        // coin rather than inherit whatever the surrounding text happens to be.
+        style={{ width: coin, height: coin, fontSize: coin, transformStyle: "preserve-3d" }}
+      >
+        <Coin className="h-full w-full" />
+      </motion.span>
+    </span>
+  );
+}
+
+/**
+ * The header wallet: a gold-rimmed capsule carrying the coin dial and the
+ * balance. It used to be a miniature leather billfold — stitching, a card lip,
+ * the lot — which was a lovely object and the wrong one: a dark skeuomorphic
+ * block in a cream editorial app bar, sitting beside a flat avatar and flat
+ * icons. Same information, same footprint, in the app's own material.
  */
 export function WalletPill() {
   const { balance, allowance } = useWallet();
   const [open, setOpen] = useState(false);
+  const reduce = useReducedMotion();
 
   // Flash the delta whenever the balance moves, so spending a coin is felt in the
   // header even though the tap happened at the bottom of the screen.
@@ -50,79 +138,79 @@ export function WalletPill() {
   }, [balance]);
 
   const low = balance < LOW_BALANCE;
-  const left = allowance > 0 ? Math.max(0, Math.min(100, (balance / allowance) * 100)) : 0;
+  const pct = allowance > 0 ? Math.max(0, Math.min(100, (balance / allowance) * 100)) : 0;
 
   return (
-    <>
+    // The capsule clips its own shine, so the floating ±n has to live outside it
+    // — as a child it was silently cropped away by `overflow-hidden` and never
+    // actually appeared.
+    <span className="relative shrink-0">
       <motion.button
         type="button"
-        whileTap={{ scale: 0.96 }}
+        whileTap={{ scale: 0.95 }}
+        whileHover={{ y: -1 }}
         onClick={() => setOpen(true)}
         aria-label={`Wallet — ${coinLabel(balance)} of ${allowance} left this week, refills ${resetCountdown()}. Open wallet`}
-        className="group relative h-[30px] shrink-0 overflow-hidden rounded-[10px] pl-1 pr-2 shadow-[0_2px_7px_-3px_rgba(60,32,14,0.55)]"
+        className={`group relative flex h-9 shrink-0 items-center gap-1.5 overflow-hidden rounded-full pl-1 pr-2.5 ring-1 ring-inset transition-colors ${
+          low
+            ? "bg-gradient-to-br from-rose-50 to-surface ring-rose-400/40"
+            : "bg-gradient-to-br from-amber-50 to-surface ring-amber-500/30"
+        } shadow-[0_2px_10px_-4px_rgba(180,120,10,0.4)]`}
       >
-        {/* Leather body, stitched edge, and a card lip over the top edge. */}
-        <span
-          aria-hidden
-          className={`absolute inset-0 rounded-[10px] ${
-            low
-              ? "bg-[linear-gradient(160deg,#5A2A22,#33150F)]"
-              : "bg-[linear-gradient(160deg,#413024,#211610)]"
-          }`}
-        />
-        <span
-          aria-hidden
-          className="absolute inset-x-[7px] top-0 h-[3px] rounded-b-[2px] bg-[linear-gradient(90deg,#F6DFA4,#EFC96F_60%,#D9A83F)]"
-        />
-        <span
-          aria-hidden
-          className="absolute inset-[2.5px] rounded-[8px] border border-dashed border-amber-200/20"
-        />
-        {/* Hairline allowance meter. */}
-        <span
-          aria-hidden
-          className="absolute inset-x-[6px] bottom-[3px] h-[2px] rounded-full bg-black/40"
-        >
-          <motion.span
-            className={`block h-full rounded-full ${
-              low ? "bg-[#F59E0B]" : "bg-[linear-gradient(90deg,#FDE9A9,#F0B429)]"
-            }`}
-            initial={{ width: 0 }}
-            animate={{ width: `${Math.max(4, left)}%` }}
-            transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
+        {/* A slow shine crossing the capsule — the wallet is the one gold thing
+            on the screen, so it's allowed to catch the light. */}
+        {!reduce && (
+          <span
+            aria-hidden
+            className="animate-sheen pointer-events-none absolute inset-y-0 w-1/3 bg-gradient-to-r from-transparent via-white/70 to-transparent"
           />
-        </span>
+        )}
 
-        <span className="relative flex h-full items-center gap-1.5">
-          <Coin className="h-[17px] w-[17px]" />
-          <span className="flex items-baseline gap-[2px] pb-[2px] text-[12.5px] font-extrabold leading-none tabular-nums text-amber-50">
+        <CoinDial
+          pct={pct}
+          low={low}
+          size={26}
+          coin={16}
+          gradientId="wallet-dial-pill"
+          spin={flash?.id ?? 0}
+        />
+
+        <span className="relative flex items-baseline gap-[2px] leading-none">
+          <span
+            className={`font-display text-body font-extrabold tabular-nums ${
+              low ? "text-rose-700" : "text-foreground"
+            }`}
+          >
             <AnimatedNumber value={balance} duration={0.5} />
-            <span className="text-[8.5px] font-bold text-amber-200/50">/{allowance}</span>
+          </span>
+          <span className={`text-nano font-bold ${low ? "text-rose-500/70" : "text-amber-700/50"}`}>
+            /{allowance}
           </span>
         </span>
-
-        {/* Floating ±n on every balance change. */}
-        <AnimatePresence>
-          {flash && (
-            <motion.span
-              key={flash.id}
-              initial={{ opacity: 0, y: 2, scale: 0.9 }}
-              animate={{ opacity: [0, 1, 1, 0], y: -18, scale: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 1.1, ease: "easeOut" }}
-              onAnimationComplete={() => setFlash(null)}
-              className={`pointer-events-none absolute -top-1 right-1 text-[11px] font-extrabold tabular-nums ${
-                flash.n < 0 ? "text-primary" : "text-emerald-600"
-              }`}
-            >
-              {flash.n > 0 ? `+${flash.n}` : flash.n}
-            </motion.span>
-          )}
-        </AnimatePresence>
       </motion.button>
 
+      {/* Floating ±n on every balance change — a coin leaving the wallet should
+          be visible from wherever it was spent. */}
+      <AnimatePresence>
+        {flash && (
+          <motion.span
+            key={flash.id}
+            initial={{ opacity: 0, y: 4, scale: 0.85 }}
+            animate={{ opacity: [0, 1, 1, 0], y: -22, scale: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 1.15, ease: "easeOut" }}
+            onAnimationComplete={() => setFlash(null)}
+            className={`pointer-events-none absolute -top-1 right-1.5 rounded-full bg-surface/90 px-1.5 text-mini font-extrabold tabular-nums shadow-sm ${
+              flash.n < 0 ? "text-primary" : "text-emerald-600"
+            }`}
+          >
+            {flash.n > 0 ? `+${flash.n}` : flash.n}
+          </motion.span>
+        )}
+      </AnimatePresence>
+
       <AnimatePresence>{open && <WalletSheet onClose={() => setOpen(false)} />}</AnimatePresence>
-    </>
+    </span>
   );
 }
 
@@ -134,102 +222,71 @@ function WalletSheet({ onClose }: { onClose: () => void }) {
   const low = balance < LOW_BALANCE;
   const pct = allowance > 0 ? Math.round((balance / allowance) * 100) : 0;
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.stopPropagation();
-        onClose();
-      }
-    };
-    document.addEventListener("keydown", onKey, true);
-    return () => document.removeEventListener("keydown", onKey, true);
-  }, [onClose]);
-
   return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      className="fixed inset-0 z-[80] flex items-end justify-center bg-black/50 backdrop-blur-[2px] sm:items-center"
-      onClick={onClose}
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="wallet-title"
-    >
-      <motion.div
-        initial={{ y: 44, opacity: 0, scale: 0.98 }}
-        animate={{ y: 0, opacity: 1, scale: 1 }}
-        exit={{ y: 44, opacity: 0 }}
-        transition={{ type: "spring", stiffness: 320, damping: 30 }}
-        onClick={(e) => e.stopPropagation()}
-        className="safe-bottom max-h-[88dvh] w-full max-w-md overflow-y-auto rounded-t-3xl bg-surface p-4 shadow-elevate sm:rounded-3xl sm:p-5"
-      >
-        {/* The card inside the wallet: leather, stitching, embossed balance. It
-            carries its own title and close button — a separate sheet header on top
-            of a card that already says "wallet" was 44px of pure duplication. */}
-        <div className="relative overflow-hidden rounded-[20px] bg-[linear-gradient(155deg,#4A3527,#241811_62%,#160D08)] p-3.5 shadow-[0_16px_36px_-18px_rgba(45,25,10,0.75)]">
+    <AppSheet onClose={onClose} labelledBy="wallet-title">
+      <>
+        {/* The wallet, open. Same gold-on-cream material as the header capsule,
+            scaled up — the dial becomes the hero and carries the week's balance
+            in its middle, so the card needs no separate meter. It keeps its own
+            close button: a sheet header on top of a card that already says
+            "wallet" was 44px of pure duplication. */}
+        <div className="relative overflow-hidden rounded-[22px] bg-gradient-to-br from-amber-50 via-surface to-surface p-4 ring-1 ring-inset ring-amber-500/25">
           <div
             aria-hidden
-            className="absolute inset-[5px] rounded-[15px] border border-dashed border-amber-200/20"
+            className="pointer-events-none absolute -right-12 -top-16 h-44 w-44 rounded-full bg-amber-300/25 blur-3xl"
           />
-          <div
-            aria-hidden
-            className="absolute -right-10 -top-14 h-40 w-40 rounded-full bg-amber-300/10 blur-2xl"
-          />
-          <div className="relative">
-            <div className="flex items-center justify-between gap-2">
-              <p
-                id="wallet-title"
-                className="text-[9.5px] font-bold uppercase tracking-[0.18em] text-amber-200/65"
-              >
-                Wallet · this week
-              </p>
-              <div className="flex shrink-0 items-center gap-1.5">
-                <span className="inline-flex items-center gap-1 rounded-full bg-amber-100/10 px-2 py-[3px] text-[9.5px] font-bold text-amber-100/80 ring-1 ring-inset ring-amber-200/20">
-                  <RotateCcw className="h-2.5 w-2.5" /> Refills {resetCountdown()}
-                </span>
+          <div className="relative flex items-center gap-4">
+            <CoinDial pct={pct} low={low} size={70} coin={46} gradientId="wallet-dial-card" />
+
+            <div className="min-w-0 flex-1">
+              <div className="flex items-start justify-between gap-2">
+                <p
+                  id="wallet-title"
+                  className="text-micro font-bold uppercase tracking-[0.18em] text-amber-700/70"
+                >
+                  Wallet · this week
+                </p>
                 <button
                   type="button"
                   onClick={onClose}
                   aria-label="Close wallet"
-                  className="grid h-7 w-7 place-items-center rounded-full bg-black/25 text-amber-100/70 ring-1 ring-inset ring-amber-200/15 transition hover:text-amber-50"
+                  className="-mr-1 -mt-1 grid h-7 w-7 shrink-0 place-items-center rounded-full text-amber-800/50 transition hover:bg-amber-500/10 hover:text-amber-900"
                 >
                   <X className="h-3.5 w-3.5" />
                 </button>
               </div>
-            </div>
 
-            <p className="mt-2 flex items-end gap-2">
-              <Coin className="mb-[3px] h-7 w-7" />
-              <span className="font-display text-[38px] font-bold leading-none tabular-nums text-amber-50">
-                {balance.toLocaleString()}
-              </span>
-              <span className="mb-[3px] text-[13px] font-bold text-amber-200/55">
-                / {allowance.toLocaleString()} coins
-              </span>
-            </p>
+              <p className="mt-1 flex items-baseline gap-1.5">
+                <span
+                  className={`font-display text-[34px] font-extrabold leading-none tabular-nums ${
+                    low ? "text-rose-700" : "text-foreground"
+                  }`}
+                >
+                  {balance.toLocaleString()}
+                </span>
+                <span className="text-body font-bold text-amber-700/55">
+                  / {allowance.toLocaleString()}
+                </span>
+              </p>
 
-            {/* How much of the allowance is left. */}
-            <div className="mt-3 h-[6px] overflow-hidden rounded-full bg-black/35 ring-1 ring-inset ring-amber-200/10">
-              <motion.div
-                className={`h-full rounded-full ${
-                  low
-                    ? "bg-[linear-gradient(90deg,#F59E0B,#DC2626)]"
-                    : "bg-[linear-gradient(90deg,#FDE9A9,#F0B429)]"
-                }`}
-                initial={{ width: 0 }}
-                animate={{ width: `${Math.max(2, pct)}%` }}
-                transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] }}
-              />
+              <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                <span className="inline-flex items-center gap-1 rounded-full bg-surface px-2 py-[3px] text-micro font-bold text-amber-800/80 ring-1 ring-inset ring-amber-500/25">
+                  <RotateCcw className="h-2.5 w-2.5" /> Refills {resetCountdown()}
+                </span>
+                <span className="inline-flex items-center gap-1 rounded-full bg-surface px-2 py-[3px] text-micro font-bold tabular-nums text-muted-foreground ring-1 ring-inset ring-border">
+                  {spentThisWeek.toLocaleString()} spent
+                </span>
+              </div>
             </div>
-            <p className="mt-1.5 text-[10px] font-semibold tabular-nums text-amber-200/65">
-              {spentThisWeek.toLocaleString()} spent · 1 coin per pin boost · undo refunds
-            </p>
           </div>
+
+          <p className="relative mt-3 text-micro font-semibold text-muted-foreground">
+            1 coin per pin boost · undo refunds it
+          </p>
         </div>
 
         {low && (
-          <p className="mt-2.5 rounded-2xl bg-amber-500/10 px-3 py-2 text-[11.5px] font-semibold leading-snug text-amber-800 ring-1 ring-inset ring-amber-500/20">
+          <p className="mt-2.5 rounded-2xl bg-rose-500/10 px-3 py-2 text-mini font-semibold leading-snug text-rose-800 ring-1 ring-inset ring-rose-500/20">
             Only {coinLabel(balance)} left — your next {allowance} arrive {resetCountdown()}.
           </p>
         )}
@@ -238,14 +295,14 @@ function WalletSheet({ onClose }: { onClose: () => void }) {
             lives on this device only, so it must never be mistaken for the
             account-level one. */}
         {!provisioned && (
-          <p className="mt-2.5 rounded-2xl bg-surface-2 px-3 py-2 text-[10.5px] leading-snug text-muted-foreground ring-1 ring-inset ring-border/70">
+          <p className="mt-2.5 rounded-2xl bg-surface-2 px-3 py-2 text-micro leading-snug text-muted-foreground ring-1 ring-inset ring-border/70">
             <span className="font-bold text-foreground">On this device only</span> — apply{" "}
-            <code className="text-[10px]">20260729130000_coin_wallet.sql</code> to sync it to your
+            <code className="text-micro">20260729130000_coin_wallet.sql</code> to sync it to your
             account.
           </p>
         )}
 
-        <p className="mt-3.5 text-[10px] font-bold uppercase tracking-[0.14em] text-muted-foreground">
+        <p className="mt-3.5 text-micro font-bold uppercase tracking-[0.14em] text-muted-foreground">
           Receipts
         </p>
 
@@ -256,7 +313,7 @@ function WalletSheet({ onClose }: { onClose: () => void }) {
             ))}
           </div>
         ) : (ledger.data?.length ?? 0) === 0 ? (
-          <p className="py-6 text-center text-[12px] text-muted-foreground">
+          <p className="py-6 text-center text-xs text-muted-foreground">
             Nothing spent yet. Your first boost will show up here.
           </p>
         ) : (
@@ -264,7 +321,7 @@ function WalletSheet({ onClose }: { onClose: () => void }) {
             {ledger.data!.map((t) => (
               <li key={t.id} className="flex items-center gap-2.5 py-2">
                 <span
-                  className={`grid h-6 w-6 shrink-0 place-items-center rounded-full text-[11px] font-extrabold leading-none ${
+                  className={`grid h-6 w-6 shrink-0 place-items-center rounded-full text-mini font-extrabold leading-none ${
                     t.delta < 0
                       ? "bg-primary/10 text-primary"
                       : "bg-emerald-500/10 text-emerald-700"
@@ -272,28 +329,28 @@ function WalletSheet({ onClose }: { onClose: () => void }) {
                 >
                   {t.delta < 0 ? "−" : "+"}
                 </span>
-                <p className="min-w-0 flex-1 truncate text-[12.5px] font-semibold">
+                <p className="min-w-0 flex-1 truncate text-xs font-semibold">
                   {coinReasonLabel(t.reason)}
                   <span className="ml-1.5 font-medium text-muted-foreground">
                     {relativeTime(t.created_at)}
                   </span>
                 </p>
                 <span
-                  className={`shrink-0 text-[12.5px] font-extrabold tabular-nums ${
+                  className={`shrink-0 text-xs font-extrabold tabular-nums ${
                     t.delta < 0 ? "text-primary" : "text-emerald-700"
                   }`}
                 >
                   {t.delta > 0 ? `+${t.delta}` : t.delta}
                 </span>
-                <span className="w-9 shrink-0 text-right text-[10px] tabular-nums text-muted-foreground">
+                <span className="w-9 shrink-0 text-right text-micro tabular-nums text-muted-foreground">
                   {t.balance_after.toLocaleString()}
                 </span>
               </li>
             ))}
           </ul>
         )}
-      </motion.div>
-    </motion.div>
+      </>
+    </AppSheet>
   );
 }
 

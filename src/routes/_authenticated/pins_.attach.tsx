@@ -124,11 +124,15 @@ function AttachPage() {
   const { data: products = [] } = useQuery({
     queryKey: ["all-products"],
     queryFn: async () => {
+      const { data: userRes } = await supabase.auth.getUser();
+      const userId = userRes.user?.id;
+      if (!userId) return [];
       const { data } = await supabase
         .from("storefront_products")
         .select(
           "id,title,affiliate_url,image_url,price_cents,currency,commission_pct,storefront_id,collection_id",
-        );
+        )
+        .eq("user_id", userId);
       return (data ?? []) as Product[];
     },
   });
@@ -459,7 +463,7 @@ function TabButton({
   return (
     <button
       onClick={onClick}
-      className={`relative -mb-px px-1 pb-3 pt-1 text-[15px] font-semibold transition ${
+      className={`relative -mb-px px-1 pb-3 pt-1 text-lead font-semibold transition ${
         active ? "text-foreground" : "text-muted-foreground hover:text-foreground"
       }`}
     >

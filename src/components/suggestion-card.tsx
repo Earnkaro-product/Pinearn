@@ -152,10 +152,10 @@ export function SuggestionCard({
       </div>
 
       <div className="flex flex-1 flex-col gap-2 p-3">
-        <span className="truncate text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
+        <span className="truncate text-micro font-bold uppercase tracking-wide text-muted-foreground">
           {source}
         </span>
-        <h3 className="line-clamp-2 min-h-[2.4em] text-[12.5px] font-semibold leading-snug text-foreground">
+        <h3 className="line-clamp-2 min-h-[2.4em] text-xs font-semibold leading-snug text-foreground">
           {title}
         </h3>
 
@@ -166,16 +166,16 @@ export function SuggestionCard({
         ) : (
           price && (
             <div className="flex flex-wrap items-baseline gap-1.5">
-              <span className="text-[15px] font-extrabold tracking-tight text-foreground">
+              <span className="text-lead font-extrabold tracking-tight text-foreground">
                 {price.value}
               </span>
               {hasDiscount && (
-                <span className="text-[11px] font-medium text-muted-foreground line-through">
+                <span className="text-mini font-medium text-muted-foreground line-through">
                   {formatMoney(mrp!, price.currency)}
                 </span>
               )}
               {discountPct != null && discountPct > 0 && (
-                <span className="text-[11px] font-bold text-amber-600">({discountPct}% OFF)</span>
+                <span className="text-mini font-bold text-amber-600">({discountPct}% OFF)</span>
               )}
             </div>
           )
@@ -185,7 +185,7 @@ export function SuggestionCard({
           <span className="inline-flex h-6 w-24 animate-pulse rounded-full bg-surface-2" />
         ) : (
           earning != null && (
-            <span className="inline-flex w-fit items-center gap-1 rounded-full bg-emerald-500 px-2.5 py-1 text-[11px] font-bold text-white shadow-sm shadow-emerald-500/40">
+            <span className="inline-flex w-fit items-center gap-1 rounded-full bg-emerald-500 px-2.5 py-1 text-mini font-bold text-white shadow-sm shadow-emerald-500/40">
               Earn upto ₹{earning} per sale
             </span>
           )
@@ -213,6 +213,27 @@ export function SuggestionCard({
     >
       {body}
     </button>
+  );
+}
+
+/**
+ * The card's silhouette, shown while a pill's products are still being
+ * searched. It exists so a tab the user has just tapped answers instantly with
+ * the right SHAPE — the grid it is about to fill — instead of a spinner or, far
+ * worse, an empty panel that reads as "no products found".
+ */
+export function SuggestionCardSkeleton() {
+  return (
+    <div className="flex h-full flex-col overflow-hidden rounded-2xl border border-border bg-surface shadow-sm">
+      <div className="aspect-square w-full animate-pulse bg-surface-2" />
+      <div className="flex flex-1 flex-col gap-2 p-3">
+        <span className="h-[10px] w-12 animate-pulse rounded bg-surface-2" />
+        <span className="h-[12px] w-full animate-pulse rounded bg-surface-2" />
+        <span className="h-[12px] w-2/3 animate-pulse rounded bg-surface-2" />
+        <span className="mt-1 h-[15px] w-16 animate-pulse rounded bg-surface-2" />
+        <span className="inline-flex h-6 w-24 animate-pulse rounded-full bg-surface-2" />
+      </div>
+    </div>
   );
 }
 

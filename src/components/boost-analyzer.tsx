@@ -2,13 +2,12 @@ import { useEffect, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
   CalendarClock,
-  Check,
   LayoutGrid,
   Loader2,
-  Rocket,
   ScanSearch,
   Type,
   UserCheck,
+  type LucideIcon,
 } from "lucide-react";
 
 // The theatrical "analysing your Pinterest" sequence shown before the Boost
@@ -16,9 +15,17 @@ import {
 // instant, but landing straight on a number reads like a static audit. This
 // walks through what the engine actually checks, with live counts, so the
 // score that follows feels earned.
+//
+// Shape: ONE focal scanner, not a checklist. The previous version stacked five
+// bordered rows, each with its own icon, spinner, tick and sub-label, plus a
+// progress bar underneath — five things animating at once, and the eye had
+// nowhere to rest. Everything now resolves to a single centre: the current
+// check's icon sits inside a rotating sweep, its name reads underneath, and
+// progress lives in the ring itself rather than a separate bar. Same five
+// checks, same live counts, one thing to look at.
 
 type Step = {
-  icon: typeof Type;
+  icon: LucideIcon;
   label: string;
   // Resolves the live sub-label ("142 pins scanned") once data is in hand.
   detail: (counts: AnalyzerCounts) => string;
@@ -34,17 +41,17 @@ const STEPS: Step[] = [
   },
   {
     icon: Type,
-    label: "Checking pin titles & descriptions",
+    label: "Checking titles & descriptions",
     detail: (c) => `${c.pins} pins checked against SEO rules`,
   },
   {
     icon: LayoutGrid,
     label: "Auditing board structure",
-    detail: (c) => `${c.boards} board names & descriptions reviewed`,
+    detail: (c) => `${c.boards} boards reviewed`,
   },
   {
     icon: UserCheck,
-    label: "Reviewing profile completeness",
+    label: "Reviewing your profile",
     detail: () => "Bio, avatar, website & socials",
   },
   {
@@ -113,8 +120,6 @@ export function BoostAnalyzer({
     }
   }, [reduce, ready, onDone]);
 
-  const c = counts;
-
   if (reduce) {
     return (
       <div role="status" aria-live="polite" className="mx-auto max-w-md py-16 text-center">
@@ -124,121 +129,148 @@ export function BoostAnalyzer({
     );
   }
 
+  // The check being narrated: the active one, or the last while we wait on data.
+  const at = Math.min(completed, STEPS.length - 1);
+  const step = STEPS[at];
+  const Icon = step.icon;
+  const progress = Math.min(1, completed / STEPS.length);
+
+  // Ring geometry. The stroke doubles as the progress read-out, so there is no
+  // separate bar competing with it.
+  const R = 62;
+  const CIRC = 2 * Math.PI * R;
+
   return (
     <motion.div
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0, scale: 0.98, transition: { duration: 0.25 } }}
-      className="mx-auto max-w-md"
+      className="relative mx-auto max-w-md overflow-hidden px-4 py-10"
     >
-      {/* Radar — pulsing rings around the rocket */}
-      <div className="relative mx-auto grid h-40 w-40 place-items-center">
-        {[0, 1, 2].map((i) => (
-          <motion.span
-            key={i}
-            className="absolute inset-0 rounded-full border-2 border-primary/40"
-            initial={{ scale: 0.4, opacity: 0.8 }}
-            animate={{ scale: 1.15, opacity: 0 }}
-            transition={{ duration: 2, repeat: Infinity, delay: i * 0.66, ease: "easeOut" }}
+      {/* Ambient aurora — the same drifting brand glow the scan overlay uses,
+          so the two waits in this app feel like one product. */}
+      <div className="pointer-events-none absolute inset-0 -z-10">
+        <div className="animate-blob absolute left-2 top-6 h-48 w-48 rounded-full bg-primary/15 blur-3xl" />
+        <div className="animate-blob-delay-2 absolute -right-6 top-24 h-40 w-40 rounded-full bg-rose-400/15 blur-3xl" />
+        <div className="animate-blob-delay-4 absolute bottom-0 left-1/3 h-40 w-40 rounded-full bg-amber-300/15 blur-3xl" />
+      </div>
+
+      <div className="relative mx-auto grid h-44 w-44 place-items-center">
+        {/* Rotating conic sweep — the radar. Masked to a ring so it reads as a
+            beam travelling the rim rather than a spinning disc. */}
+        <div
+          className="animate-sweep absolute inset-0 rounded-full opacity-70"
+          style={{
+            background:
+              "conic-gradient(from 0deg, transparent 0deg, transparent 250deg, var(--color-primary) 340deg, transparent 360deg)",
+            maskImage:
+              "radial-gradient(circle, transparent 58%, #000 61%, #000 76%, transparent 79%)",
+            WebkitMaskImage:
+              "radial-gradient(circle, transparent 58%, #000 61%, #000 76%, transparent 79%)",
+          }}
+        />
+        <div
+          className="animate-sweep-slow absolute inset-3 rounded-full opacity-40"
+          style={{
+            background:
+              "conic-gradient(from 180deg, transparent 0deg, transparent 300deg, var(--color-primary) 350deg, transparent 360deg)",
+            maskImage:
+              "radial-gradient(circle, transparent 62%, #000 65%, #000 72%, transparent 75%)",
+            WebkitMaskImage:
+              "radial-gradient(circle, transparent 62%, #000 65%, #000 72%, transparent 75%)",
+          }}
+        />
+
+        {/* Progress ring — one stroke, five checks. */}
+        <svg viewBox="0 0 144 144" className="absolute inset-0 h-full w-full -rotate-90">
+          <circle cx="72" cy="72" r={R} fill="none" strokeWidth="3" className="stroke-border/60" />
+          <motion.circle
+            cx="72"
+            cy="72"
+            r={R}
+            fill="none"
+            strokeWidth="3"
+            strokeLinecap="round"
+            className="stroke-primary"
+            strokeDasharray={CIRC}
+            initial={{ strokeDashoffset: CIRC }}
+            animate={{ strokeDashoffset: CIRC * (1 - progress) }}
+            transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] }}
+          />
+        </svg>
+
+        {/* Specks drifting inside the ring — depth, no motion the eye tracks. */}
+        {[
+          { c: "left-6 top-10", d: "0s" },
+          { c: "right-7 top-16", d: "1.2s" },
+          { c: "left-12 bottom-8", d: "2.4s" },
+          { c: "right-12 bottom-12", d: "3.1s" },
+        ].map((s) => (
+          <span
+            key={s.c}
+            className={`animate-drift absolute h-1.5 w-1.5 rounded-full bg-primary/70 ${s.c}`}
+            style={{ animationDelay: s.d }}
           />
         ))}
-        <motion.div
-          animate={{ scale: [1, 1.06, 1] }}
-          transition={{ duration: 1.4, repeat: Infinity, ease: "easeInOut" }}
-          className="grid h-20 w-20 place-items-center rounded-full bg-gradient-primary text-primary-foreground shadow-glow"
-        >
-          <Rocket className="h-9 w-9" />
-        </motion.div>
-      </div>
 
-      <h2 className="mt-2 text-center font-display text-xl font-bold">Analysing your Pinterest</h2>
-      <p className="mt-1 text-center text-xs text-muted-foreground">
-        Running {STEPS.length} checks across your pins, boards & profile
-      </p>
-
-      {/* Steps — each spins, then checks off. role=status narrates for SR. */}
-      <div role="status" aria-live="polite" className="mt-6 space-y-2">
-        {STEPS.map((step, i) => {
-          const state = i < completed ? "done" : i === completed ? "active" : "pending";
-          const Icon = step.icon;
-          return (
-            <motion.div
+        {/* Centre: the check currently running. Morphs between icons rather
+            than listing all five, which is what keeps the eye still. */}
+        <div className="relative grid h-24 w-24 place-items-center rounded-full bg-gradient-primary text-primary-foreground shadow-glow">
+          <AnimatePresence mode="wait">
+            <motion.span
               key={step.label}
-              initial={{ opacity: 0, y: 10 }}
-              animate={{
-                opacity: state === "pending" ? 0.4 : 1,
-                y: 0,
-                scale: state === "active" ? 1.02 : 1,
-              }}
-              transition={{ duration: 0.3, ease: "easeOut" }}
-              className={`flex items-center gap-3 rounded-2xl border px-4 py-3 ${
-                state === "active"
-                  ? "border-primary/40 bg-primary/5 shadow-sm"
-                  : "border-border bg-surface"
-              }`}
+              initial={{ scale: 0.5, opacity: 0, rotate: -25 }}
+              animate={{ scale: 1, opacity: 1, rotate: 0 }}
+              exit={{ scale: 0.5, opacity: 0, rotate: 25 }}
+              transition={{ type: "spring", stiffness: 420, damping: 26 }}
+              className="absolute"
             >
-              <div
-                className={`grid h-9 w-9 shrink-0 place-items-center rounded-xl ${
-                  state === "done"
-                    ? "bg-emerald-500/10 text-emerald-600"
-                    : "bg-primary/10 text-primary"
-                }`}
-              >
-                <Icon className="h-4.5 w-4.5" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-semibold leading-tight">{step.label}</p>
-                <AnimatePresence mode="wait">
-                  {/* Only show the count line once real data is in — never "0 pins". */}
-                  {state === "done" && c && (
-                    <motion.p
-                      initial={{ opacity: 0, y: -3 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      className="text-[11px] text-muted-foreground"
-                    >
-                      {step.detail(c)}
-                    </motion.p>
-                  )}
-                </AnimatePresence>
-              </div>
-              <div className="shrink-0">
-                {state === "done" ? (
-                  <motion.span
-                    initial={{ scale: 0 }}
-                    animate={{ scale: 1 }}
-                    transition={{ type: "spring", stiffness: 500, damping: 22 }}
-                    className="grid h-6 w-6 place-items-center rounded-full bg-emerald-500 text-white"
-                  >
-                    <Check className="h-3.5 w-3.5" strokeWidth={3} />
-                  </motion.span>
-                ) : state === "active" ? (
-                  <Loader2 className="h-5 w-5 animate-spin text-primary" />
-                ) : (
-                  <span className="block h-6 w-6 rounded-full border-2 border-dashed border-border" />
-                )}
-              </div>
-            </motion.div>
-          );
-        })}
+              <Icon className="h-10 w-10" />
+            </motion.span>
+          </AnimatePresence>
+        </div>
       </div>
 
-      {/* Overall progress bar */}
-      <div className="mt-5 h-1.5 overflow-hidden rounded-full bg-surface-2">
-        <motion.div
-          className="h-full rounded-full bg-gradient-primary"
-          initial={{ width: "4%" }}
-          animate={{ width: `${Math.min(100, (completed / STEPS.length) * 100)}%` }}
-          transition={{ duration: 0.5, ease: "easeOut" }}
-        />
+      {/* The narration. One line that changes, not five that accumulate. */}
+      <div role="status" aria-live="polite" className="mt-7 text-center">
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={step.label}
+            initial={{ opacity: 0, y: 8, filter: "blur(4px)" }}
+            animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
+            exit={{ opacity: 0, y: -8, filter: "blur(4px)" }}
+            transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+          >
+            <h2 className="font-display text-xl font-bold leading-tight">{step.label}</h2>
+            {/* The count only appears once real data is in — never "0 pins". */}
+            <p className="mt-1 min-h-[1.25rem] text-xs text-muted-foreground">
+              {counts ? step.detail(counts) : " "}
+            </p>
+          </motion.div>
+        </AnimatePresence>
       </div>
-      <div className="mt-2 flex items-center justify-center gap-3">
-        <p className="text-[11px] font-medium text-muted-foreground">
+
+      {/* Which of the five, as segments. Replaces the old five-row checklist
+          and the separate progress bar with one glanceable strip. */}
+      <div className="mt-6 flex items-center justify-center gap-1.5">
+        {STEPS.map((s, i) => (
+          <motion.span
+            key={s.label}
+            className={`h-1 rounded-full ${i < completed ? "bg-primary" : "bg-border"}`}
+            animate={{ width: i === at ? 28 : 14, opacity: i <= completed ? 1 : 0.5 }}
+            transition={{ duration: 0.3, ease: "easeOut" }}
+          />
+        ))}
+      </div>
+
+      <div className="mt-4 flex items-center justify-center gap-3">
+        <p className="text-mini font-medium text-muted-foreground">
           {allStepsDone && !ready ? "Crunching your score…" : "This only takes a few seconds"}
         </p>
         <button
           type="button"
           onClick={onDone}
-          className="text-[11px] font-bold text-primary hover:underline"
+          className="text-mini font-bold text-primary hover:underline"
         >
           Skip
         </button>

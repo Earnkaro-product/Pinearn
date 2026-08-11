@@ -152,11 +152,9 @@ function FloaterCard({ job }: { job: MonetizationJob }) {
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
             {!done && !failed && <Sparkles className="h-3.5 w-3.5 shrink-0 text-primary" />}
-            <p className="truncate text-[13px] font-bold leading-tight text-foreground">{title}</p>
+            <p className="truncate text-body font-bold leading-tight text-foreground">{title}</p>
           </div>
-          <p className="mt-0.5 truncate text-[11px] font-medium text-muted-foreground">
-            {subtitle}
-          </p>
+          <p className="mt-0.5 truncate text-mini font-medium text-muted-foreground">{subtitle}</p>
         </div>
 
         {done || failed ? (
