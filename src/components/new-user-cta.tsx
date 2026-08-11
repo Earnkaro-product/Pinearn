@@ -167,7 +167,7 @@ function CtaCard({
       </div>
 
       <div className="px-6 pb-6 pt-6 text-center sm:px-8 sm:pb-8">
-        <span className="text-[11px] font-semibold uppercase tracking-widest text-primary">
+        <span className="text-mini font-semibold uppercase tracking-widest text-primary">
           {eyebrow}
         </span>
         <h2 className="mt-1.5 font-display text-2xl font-bold leading-tight text-foreground">

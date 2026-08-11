@@ -20,7 +20,6 @@ import {
   LaunchScreen,
   PickerHeader,
   QueueToolbar,
-  RailLabel,
   ReviewProgressHeader,
   SelectDot,
   SelectionBar,
@@ -340,7 +339,7 @@ function FixBoardsPage() {
             />
 
             <div className="flex min-h-0 flex-1 flex-col">
-              <div className="relative z-20 shrink-0 rounded-t-3xl bg-surface-2 px-6 pb-2 pt-6">
+              <div className="relative z-20 shrink-0 rounded-t-3xl bg-surface-2 px-4 pb-1.5 pt-4">
                 <BoardFilmstrip
                   cards={flow.cards}
                   currentIndex={flow.index}
@@ -351,15 +350,24 @@ function FixBoardsPage() {
                 />
               </div>
 
-              <div className="no-scrollbar relative z-10 min-h-0 flex-1 overflow-y-auto rounded-3xl border-2 border-primary bg-surface p-4 shadow-sm">
-                {current && (
-                  <BoardRewriteCard
-                    card={current}
-                    ai={currentAi}
-                    onEdit={() => setEditing(true)}
-                    onRegenerate={() => ai.regenerate(current.id)}
-                  />
-                )}
+              {/* Scrolls with its bar hidden, so the fade over the last few
+                  pixels is the only signal that there's more below the fold —
+                  same as the pin deck. */}
+              <div className="relative z-10 min-h-0 flex-1">
+                <div className="no-scrollbar h-full overflow-y-auto rounded-3xl border-2 border-primary bg-surface p-4 shadow-sm">
+                  {current && (
+                    <BoardRewriteCard
+                      card={current}
+                      ai={currentAi}
+                      onEdit={() => setEditing(true)}
+                      onRegenerate={() => ai.regenerate(current.id)}
+                    />
+                  )}
+                </div>
+                <span
+                  aria-hidden
+                  className="pointer-events-none absolute inset-x-[3px] bottom-[3px] h-7 rounded-b-[1.4rem] bg-gradient-to-t from-surface via-surface/85 to-transparent"
+                />
               </div>
             </div>
 
@@ -379,7 +387,7 @@ function FixBoardsPage() {
                   onClick={() => current && flow.decide(current, "approved")}
                   disabled={!current || currentPending || !currentReady || paused}
                   aria-label="Apply fix"
-                  className="inline-flex flex-1 items-center justify-center gap-2 rounded-2xl bg-gradient-primary px-4 py-3.5 text-[15px] font-extrabold text-primary-foreground shadow-glow transition disabled:opacity-60"
+                  className="inline-flex flex-1 items-center justify-center gap-2 rounded-2xl bg-gradient-primary px-4 py-3.5 text-lead font-extrabold text-primary-foreground shadow-glow transition disabled:opacity-60"
                 >
                   {currentPending || currentGenerating ? (
                     <Loader2 className="h-5 w-5 animate-spin" />
@@ -390,23 +398,28 @@ function FixBoardsPage() {
                 </motion.button>
               </div>
 
-              <motion.button
-                whileTap={{ scale: 0.98 }}
-                onClick={() => setConfirming(true)}
-                disabled={flow.bulkApplying || preparingBulk || remaining.length === 0}
-                className="inline-flex w-full items-center justify-center gap-1.5 rounded-2xl border-2 border-primary bg-surface px-3 py-3 text-[13px] font-bold text-primary transition disabled:opacity-40"
-              >
-                {preparingBulk ? (
-                  <>
-                    <Loader2 className="h-4 w-4 animate-spin" /> Writing rewrites… {bulkReady}/
-                    {remaining.length}
-                  </>
-                ) : (
-                  <>
-                    <CheckCheck className="h-4 w-4" /> Approve all remaining ({remaining.length})
-                  </>
-                )}
-              </motion.button>
+              {/* "Approve all remaining (1)" is the Apply button with a confirm
+                  sheet in front of the same single write — the bulk path only
+                  earns its row once there's more than one left. */}
+              {remaining.length > 1 && (
+                <motion.button
+                  whileTap={{ scale: 0.98 }}
+                  onClick={() => setConfirming(true)}
+                  disabled={flow.bulkApplying || preparingBulk || remaining.length === 0}
+                  className="inline-flex w-full items-center justify-center gap-1.5 rounded-2xl border-2 border-primary bg-surface px-3 py-3 text-body font-bold text-primary transition disabled:opacity-40"
+                >
+                  {preparingBulk ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" /> Writing rewrites… {bulkReady}/
+                      {remaining.length}
+                    </>
+                  ) : (
+                    <>
+                      <CheckCheck className="h-4 w-4" /> Approve all remaining ({remaining.length})
+                    </>
+                  )}
+                </motion.button>
+              )}
             </div>
           </>
         )}
@@ -670,7 +683,12 @@ function BoardBoostPicker({
         />
 
         {suggested.length > 0 && (
-          <SuggestedBoardsRail cards={suggested} selected={selected} onToggle={toggleOne} />
+          <SuggestedBoardsRail
+            cards={suggested}
+            selected={selected}
+            onToggle={toggleOne}
+            onQueueAll={setMany}
+          />
         )}
 
         <QueueToolbar
@@ -700,7 +718,7 @@ function BoardBoostPicker({
         />
 
         {shown.length === 0 ? (
-          <p className="rounded-2xl border border-dashed border-border py-10 text-center text-[12px] text-muted-foreground">
+          <p className="rounded-2xl border border-dashed border-border py-10 text-center text-xs text-muted-foreground">
             No boards match that.
           </p>
         ) : (
@@ -729,7 +747,7 @@ function BoardBoostPicker({
               <button
                 type="button"
                 onClick={() => setLimit((l) => l + BOARD_GRID_PAGE_SIZE)}
-                className="inline-flex min-h-10 flex-1 items-center justify-center gap-1.5 rounded-2xl border border-dashed border-border bg-surface/70 text-[12px] font-bold text-primary transition hover:bg-primary/[0.04]"
+                className="inline-flex min-h-10 flex-1 items-center justify-center gap-1.5 rounded-2xl border border-dashed border-border bg-surface/70 text-xs font-bold text-primary transition hover:bg-primary/[0.04]"
               >
                 Show more
                 <span className="font-semibold tabular-nums text-muted-foreground">
@@ -741,7 +759,7 @@ function BoardBoostPicker({
               <button
                 type="button"
                 onClick={() => setLimit(BOARD_GRID_PAGE_SIZE)}
-                className="inline-flex min-h-10 shrink-0 items-center justify-center rounded-2xl border border-border bg-surface px-3.5 text-[12px] font-bold text-muted-foreground transition hover:text-foreground"
+                className="inline-flex min-h-10 shrink-0 items-center justify-center rounded-2xl border border-border bg-surface px-3.5 text-xs font-bold text-muted-foreground transition hover:text-foreground"
               >
                 Collapse
               </button>
@@ -763,22 +781,80 @@ function BoardBoostPicker({
   );
 }
 
-/** The messiest boards, as a quiet rail of covers. Rank #1 wears the trophy,
- * and each cover carries the numbers it was ranked by — fixes and reach.
- * Tapping queues, the same gesture as everywhere else on the page. */
+/** The messiest boards, in the same bordered "Start here" panel the pin picker
+ * leads with. Two screens of one product cannot present their shortcut two
+ * different ways — one bold and bordered, one a grey caption — without the
+ * quieter one reading as an afterthought. Rank #1 wears the trophy, each cover
+ * carries the numbers it was ranked by, and one tap queues the lot. */
 function SuggestedBoardsRail({
   cards,
   selected,
   onToggle,
+  onQueueAll,
 }: {
   cards: BoardFixCard[];
   selected: Set<string>;
   onToggle: (id: string) => void;
+  onQueueAll: (ids: string[], on: boolean) => void;
 }) {
+  const ids = cards.map((c) => c.id);
+  const allQueued = ids.length > 0 && ids.every((id) => selected.has(id));
+  const totalFixes = cards.reduce((n, c) => n + c.issues.length, 0);
+
   return (
-    <div>
-      <RailLabel text="Suggested boards" metric="most fixes · most reach" />
-      <div className="no-scrollbar -mx-1 flex snap-x gap-2 overflow-x-auto px-1">
+    <motion.section
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
+      aria-label="Suggested boards"
+      className="relative overflow-hidden rounded-3xl border-2 border-primary/45 bg-gradient-to-b from-primary/[0.07] via-surface to-surface p-3.5 shadow-glow"
+    >
+      {/* Breathing border — slow and low-contrast on purpose; a hard blink next
+          to a grid of boards would read as an error state. */}
+      <motion.span
+        aria-hidden
+        className="pointer-events-none absolute inset-0 rounded-3xl border-2 border-primary"
+        animate={{ opacity: [0.35, 0.05, 0.35] }}
+        transition={{ duration: 2.8, repeat: Infinity, ease: "easeInOut" }}
+      />
+
+      <div className="relative mb-3 flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="flex items-center gap-1.5 text-micro font-bold uppercase tracking-[0.14em] text-primary">
+            <span className="relative grid h-1.5 w-1.5 place-items-center">
+              <span className="absolute h-full w-full animate-ping rounded-full bg-primary/70" />
+              <span className="h-full w-full rounded-full bg-primary" />
+            </span>
+            Start here
+          </p>
+          <h3 className="mt-1 font-display text-[17px] font-bold leading-tight tracking-tight">
+            Your {cards.length} messiest {cards.length === 1 ? "board" : "boards"}
+          </h3>
+          <p className="mt-0.5 text-mini font-medium text-muted-foreground">
+            {totalFixes} fixes · ranked by reach
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => onQueueAll(ids, !allQueued)}
+          className={`relative shrink-0 overflow-hidden rounded-full px-3.5 py-2 text-mini font-bold transition active:scale-[0.97] ${
+            allQueued
+              ? "bg-surface-2 text-muted-foreground ring-1 ring-border"
+              : "bg-gradient-primary text-primary-foreground shadow-glow"
+          }`}
+        >
+          {!allQueued && (
+            <span
+              aria-hidden
+              className="animate-sheen pointer-events-none absolute inset-y-0 w-1/3 bg-gradient-to-r from-transparent via-white/30 to-transparent"
+            />
+          )}
+          {allQueued ? "Clear" : `Queue all ${cards.length}`}
+        </button>
+      </div>
+
+      {/* Same card width as the pin rail, so the two rails scroll alike. */}
+      <div className="no-scrollbar -mx-1 flex snap-x gap-2.5 overflow-x-auto px-1 pb-1">
         {cards.map((card, i) => {
           const on = selected.has(card.id);
           return (
@@ -796,10 +872,10 @@ function SuggestedBoardsRail({
                 duration: 0.28,
                 ease: [0.22, 1, 0.36, 1],
               }}
-              className="w-32 shrink-0 snap-start text-left"
+              className="w-[calc((100vw-5rem)/2.4)] min-w-[124px] max-w-[162px] shrink-0 snap-start text-left"
             >
               <div
-                className={`relative h-[72px] overflow-hidden rounded-xl transition ${
+                className={`relative h-[86px] overflow-hidden rounded-xl transition ${
                   on ? "ring-2 ring-primary" : "ring-1 ring-border/60"
                 }`}
               >
@@ -809,7 +885,7 @@ function SuggestedBoardsRail({
                     <Trophy className="h-2.5 w-2.5" />
                   </span>
                 ) : (
-                  <span className="absolute left-1 top-1 inline-flex items-center gap-0.5 rounded-full bg-black/45 px-1.5 py-0.5 text-[8.5px] font-bold text-white backdrop-blur-sm">
+                  <span className="absolute left-1 top-1 inline-flex items-center gap-0.5 rounded-full bg-black/45 px-1.5 py-0.5 text-nano font-bold text-white backdrop-blur-sm">
                     <Sparkles className="h-2 w-2 text-amber-300" /> {card.issues.length}
                   </span>
                 )}
@@ -817,8 +893,8 @@ function SuggestedBoardsRail({
                   <SelectDot on={on} small />
                 </span>
               </div>
-              <p className="mt-1 line-clamp-1 px-0.5 text-[10.5px] font-bold">{card.title}</p>
-              <p className="px-0.5 text-[9px] font-medium text-muted-foreground">
+              <p className="mt-1 line-clamp-1 px-0.5 text-mini font-bold">{card.title}</p>
+              <p className="px-0.5 text-micro font-medium text-muted-foreground">
                 {card.pinCount} {card.pinCount === 1 ? "pin" : "pins"}
                 {card.impressions > 0 && <> · {metricLabel(card.impressions)} views</>}
               </p>
@@ -826,7 +902,7 @@ function SuggestedBoardsRail({
           );
         })}
       </div>
-    </div>
+    </motion.section>
   );
 }
 
@@ -902,15 +978,15 @@ function BoardPickCard({
               <Check className="h-3.5 w-3.5" strokeWidth={3.5} />
             </span>
           ) : fixes > 0 ? (
-            <span className="absolute left-1.5 top-1.5 inline-flex items-center gap-1 rounded-full bg-black/45 px-2 py-0.5 text-[10px] font-bold text-white backdrop-blur-sm">
+            <span className="absolute left-1.5 top-1.5 inline-flex items-center gap-1 rounded-full bg-black/45 px-2 py-0.5 text-micro font-bold text-white backdrop-blur-sm">
               <Sparkles className="h-3 w-3 text-amber-300" /> {fixes}{" "}
               {fixes === 1 ? "fix" : "fixes"}
             </span>
           ) : null}
 
           <div className="absolute inset-x-2 bottom-1.5">
-            <p className="line-clamp-1 text-[12px] font-bold text-white">{card.title}</p>
-            <p className="flex items-center gap-2 text-[10px] font-bold text-white/85">
+            <p className="line-clamp-1 text-xs font-bold text-white">{card.title}</p>
+            <p className="flex items-center gap-2 text-micro font-bold text-white/85">
               <span className="inline-flex items-center gap-1">
                 <LayoutGrid className="h-2.5 w-2.5 opacity-80" />
                 <span className="tabular-nums">{card.pinCount}</span>
@@ -940,10 +1016,10 @@ function BoardPickCard({
           <span className="font-display text-[26px] font-bold leading-none tabular-nums text-primary">
             {points > 0 ? `+${pointsLabel(points)}` : "+0"}
           </span>
-          <span className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
+          <span className="text-micro font-bold uppercase tracking-wide text-muted-foreground">
             health pts
           </span>
-          <span className="text-[11px] font-semibold leading-snug text-muted-foreground">
+          <span className="text-mini font-semibold leading-snug text-muted-foreground">
             {points > 0 ? (
               <>
                 Structure {structureNow}% →{" "}
@@ -956,7 +1032,7 @@ function BoardPickCard({
             )}
           </span>
           {fixes > 0 && (
-            <span className="line-clamp-2 px-1 text-[10px] font-medium leading-snug text-foreground/70">
+            <span className="line-clamp-2 px-1 text-micro font-medium leading-snug text-foreground/70">
               {card.issues.join(" · ")}
             </span>
           )}
@@ -996,6 +1072,11 @@ function BoardRewriteCard({
   const nowDesc = card.original.description?.toString().trim();
   const generating = !ai || ai.status === "loading";
   const theme = ai?.status === "ready" ? ai.result.theme : null;
+  // A ready result with an empty field is still being filled in — keep the
+  // shimmer rather than flashing a blank bold line, same rule as the pin deck.
+  const nameLoading = generating || (ai.status === "ready" && !nameField.value.trim());
+  const descLoading =
+    generating || (ai.status === "ready" && !!descField && !descField.value.trim());
 
   return (
     <motion.div
@@ -1012,7 +1093,7 @@ function BoardRewriteCard({
         </div>
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-bold text-foreground">{card.title}</p>
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-mini text-muted-foreground">
             {card.pinCount} {card.pinCount === 1 ? "pin" : "pins"}
             {theme && <span> · mostly {theme}</span>}
           </p>
@@ -1022,49 +1103,26 @@ function BoardRewriteCard({
         </div>
       </div>
 
+      {/* AI rewrite header + Edit. */}
       <div className="flex items-center justify-between">
-        <p className="inline-flex items-center gap-1.5 text-[13px] font-extrabold text-foreground">
+        <p className="inline-flex items-center gap-1.5 text-body font-extrabold text-foreground">
           <Sparkles className="h-3.5 w-3.5 text-primary" /> AI rewrite
         </p>
-        <div className="flex items-center gap-1.5">
-          <button
-            type="button"
-            onClick={onRegenerate}
-            disabled={generating}
-            aria-label="Generate a different rewrite"
-            className="inline-flex min-h-8 shrink-0 items-center gap-1 rounded-full bg-surface px-3 text-[11px] font-bold text-muted-foreground ring-1 ring-border transition hover:text-primary disabled:opacity-40"
-          >
-            <RefreshCw className={`h-3 w-3 ${generating ? "animate-spin" : ""}`} /> Redo
-          </button>
-          <button
-            type="button"
-            onClick={onEdit}
-            disabled={generating}
-            className="inline-flex min-h-8 shrink-0 items-center gap-1 rounded-full bg-surface px-3 text-[11px] font-bold text-primary ring-1 ring-primary/25 transition hover:bg-primary/10 disabled:opacity-40"
-          >
-            <Pencil className="h-3 w-3" /> Edit
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={onEdit}
+          disabled={generating}
+          className="inline-flex min-h-8 shrink-0 items-center gap-1 rounded-full bg-surface px-3 text-mini font-bold text-primary ring-1 ring-primary/25 transition hover:bg-primary/10 disabled:opacity-40"
+        >
+          <Pencil className="h-3 w-3" /> Edit
+        </button>
       </div>
-
-      {generating ? (
-        <GeneratingNotice />
-      ) : ai.status === "error" ? (
-        <div className="rounded-2xl border border-amber-500/30 bg-amber-500/5 p-3">
-          <p className="text-[11px] font-semibold text-amber-800">Couldn&apos;t write this one</p>
-          <p className="mt-0.5 text-[11px] leading-snug text-amber-700/80">
-            Tap Redo to try again, or Skip to move on. Nothing was changed on your board.
-          </p>
-        </div>
-      ) : (
-        <KeywordProof result={ai.result} />
-      )}
 
       <FieldDiff
         heading="Board name"
         now={nowName}
         field={nameField}
-        loading={generating}
+        loading={nameLoading}
         lines={1}
       />
       {descField && (
@@ -1072,9 +1130,34 @@ function BoardRewriteCard({
           heading="Description"
           now={nowDesc}
           field={descField}
-          loading={generating}
+          loading={descLoading}
           lines={3}
         />
+      )}
+
+      {/* The keyword receipt sits under the copy it explains — the rewrite is
+          what's being judged, so it leads; the trends behind it follow. While
+          the pipeline runs, the same slot carries the progress ticker. */}
+      {generating ? (
+        <GeneratingNotice />
+      ) : ai.status === "error" ? (
+        <div className="rounded-2xl border border-amber-500/30 bg-amber-500/5 p-3">
+          <p className="text-mini font-semibold text-amber-800">Couldn&apos;t write this one</p>
+          <p className="mt-0.5 text-mini leading-snug text-amber-700/80">
+            Try again, or Skip to move on. Nothing was changed on your board.
+          </p>
+          {/* The only retry path now that the always-on Redo chip is gone — it
+              belongs with the failure, not on top of every healthy rewrite. */}
+          <button
+            type="button"
+            onClick={onRegenerate}
+            className="mt-2 inline-flex min-h-8 items-center gap-1 rounded-full bg-surface px-3 text-mini font-bold text-amber-800 ring-1 ring-amber-500/30 transition hover:bg-amber-500/10"
+          >
+            <RefreshCw className="h-3 w-3" /> Try again
+          </button>
+        </div>
+      ) : (
+        <KeywordProof result={ai.result} />
       )}
     </motion.div>
   );
@@ -1217,7 +1300,7 @@ function BoardFilmstrip({
         className="group grid h-14 w-14 shrink-0 place-items-center rounded-2xl bg-surface-2 text-muted-foreground ring-1 ring-border transition hover:text-primary hover:ring-2 hover:ring-primary/50"
       >
         <LayoutGrid className="h-5 w-5" />
-        <span className="text-[8px] font-bold uppercase tracking-wide">All</span>
+        <span className="text-nano font-bold uppercase tracking-wide">All</span>
       </button>
     </div>
   );
@@ -1311,8 +1394,8 @@ function BoardGridSheet({
                   <BoardCover covers={cand.covers} flat />
                 </div>
                 <div className="bg-surface px-2.5 py-2">
-                  <p className="truncate text-[12px] font-bold">{cand.title}</p>
-                  <p className="text-[10px] text-muted-foreground">
+                  <p className="truncate text-xs font-bold">{cand.title}</p>
+                  <p className="text-micro text-muted-foreground">
                     {cand.pinCount} {cand.pinCount === 1 ? "pin" : "pins"}
                   </p>
                 </div>
@@ -1330,7 +1413,7 @@ function BoardGridSheet({
                     <X className="h-3.5 w-3.5" strokeWidth={3} />
                   </span>
                 ) : active ? (
-                  <span className="absolute left-1.5 top-1.5 rounded-full bg-primary px-2 py-0.5 text-[10px] font-bold text-primary-foreground shadow">
+                  <span className="absolute left-1.5 top-1.5 rounded-full bg-primary px-2 py-0.5 text-micro font-bold text-primary-foreground shadow">
                     Editing
                   </span>
                 ) : null}

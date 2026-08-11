@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, ChevronLeft, Image as ImageIcon, Loader2, Plus, Store } from "lucide-react";
 import { toast } from "sonner";
 
+import { useOverlayChrome } from "@/components/app-sheet";
 import { supabase } from "@/integrations/supabase/client";
 import { brandForUrl, brandLogoUrl, estimateCommissionPct, hostBrand } from "@/lib/brands";
 import { getFriendlyMessage } from "@/lib/friendly-error";
@@ -126,6 +127,9 @@ function CollectionsScreen({
 }) {
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
+  // A full-screen takeover is still a modal: Escape backs out and the page it
+  // covers doesn't scroll underneath.
+  useOverlayChrome({ onClose: onBack });
 
   const { data: storefrontId } = useQuery({
     queryKey: ["my-storefront-id"],
@@ -179,7 +183,12 @@ function CollectionsScreen({
   });
 
   return (
-    <div className="fixed inset-0 z-[60] flex flex-col bg-background">
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="collections-title"
+      className="fixed inset-0 z-[80] flex flex-col bg-background"
+    >
       <div className="flex items-center gap-2 border-b border-border/60 px-4 py-3.5">
         <button
           type="button"
@@ -189,7 +198,9 @@ function CollectionsScreen({
         >
           <ChevronLeft className="h-5 w-5" />
         </button>
-        <h2 className="flex-1 font-display text-xl font-bold">Collections</h2>
+        <h2 id="collections-title" className="flex-1 font-display text-xl font-bold">
+          Collections
+        </h2>
         <button
           type="button"
           onClick={() => setCreating((v) => !v)}
@@ -202,7 +213,7 @@ function CollectionsScreen({
       <div className="flex-1 overflow-y-auto px-4 py-4">
         {creating && (
           <div className="mb-4 rounded-2xl border border-border bg-surface p-3.5 shadow-sm">
-            <label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            <label className="text-mini font-semibold uppercase tracking-wide text-muted-foreground">
               Collection name
             </label>
             <input
@@ -299,6 +310,8 @@ function CollectionProductsScreen({
 }) {
   const selectedCount = bucket.items.filter((p) => pickedIds.has(p.id)).length;
   const allSelected = bucket.items.length > 0 && selectedCount === bucket.items.length;
+  // Escape steps back one level, matching the header's back arrow.
+  useOverlayChrome({ onClose: onBack });
 
   const toggleAll = () => {
     if (allSelected) {
@@ -313,7 +326,12 @@ function CollectionProductsScreen({
   };
 
   return (
-    <div className="fixed inset-0 z-[60] flex flex-col bg-background">
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="collection-products-title"
+      className="fixed inset-0 z-[80] flex flex-col bg-background"
+    >
       <div className="flex items-center gap-2 border-b border-border/60 px-4 py-3.5">
         <button
           type="button"
@@ -323,7 +341,12 @@ function CollectionProductsScreen({
         >
           <ChevronLeft className="h-5 w-5" />
         </button>
-        <h2 className="flex-1 truncate font-display text-lg font-bold">{bucket.name}</h2>
+        <h2
+          id="collection-products-title"
+          className="flex-1 truncate font-display text-lg font-bold"
+        >
+          {bucket.name}
+        </h2>
       </div>
 
       <div className="flex-1 overflow-y-auto px-4 py-4 pb-24">
@@ -431,14 +454,14 @@ function PickableProductCard({
             className="absolute bottom-2 left-2 h-5 max-w-[60%] rounded bg-white/90 object-contain px-1 py-0.5 shadow"
           />
         ) : (
-          <span className="absolute bottom-2 left-2 max-w-[70%] truncate rounded-full bg-black/60 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-white backdrop-blur">
+          <span className="absolute bottom-2 left-2 max-w-[70%] truncate rounded-full bg-black/60 px-2 py-0.5 text-nano font-bold uppercase tracking-wide text-white backdrop-blur">
             {source}
           </span>
         )}
       </div>
 
       <div className="flex flex-1 flex-col gap-1.5 p-2.5">
-        <h3 className="line-clamp-1 text-[12.5px] font-semibold leading-snug text-foreground">
+        <h3 className="line-clamp-1 text-xs font-semibold leading-snug text-foreground">
           {product.title}
         </h3>
 
@@ -446,19 +469,19 @@ function PickableProductCard({
           <div className="min-w-0">
             {price != null && (
               <div className="flex flex-wrap items-baseline gap-1">
-                <span className="text-[13px] font-extrabold tracking-tight">{money(price)}</span>
+                <span className="text-body font-extrabold tracking-tight">{money(price)}</span>
                 {hasDiscount && (
-                  <span className="text-[10px] font-medium text-muted-foreground line-through">
+                  <span className="text-micro font-medium text-muted-foreground line-through">
                     {money(mrp!)}
                   </span>
                 )}
                 {discountPct != null && discountPct > 0 && (
-                  <span className="text-[10px] font-bold text-amber-600">{discountPct}% OFF</span>
+                  <span className="text-micro font-bold text-amber-600">{discountPct}% OFF</span>
                 )}
               </div>
             )}
             {earning != null && (
-              <p className="text-[11px] font-bold text-emerald-600">Earn / sale ₹{earning}</p>
+              <p className="text-mini font-bold text-emerald-600">Earn / sale ₹{earning}</p>
             )}
           </div>
 

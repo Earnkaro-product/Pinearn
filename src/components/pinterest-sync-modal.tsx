@@ -9,6 +9,7 @@ import {
   Layers,
   Image as ImageIcon,
 } from "lucide-react";
+import { AppSheet } from "@/components/app-sheet";
 
 export type SyncStatus = "idle" | "running" | "success" | "error";
 
@@ -71,14 +72,15 @@ export function PinterestSyncModal({
         : ((activeStep + 0.4) / STEPS.length) * 100;
 
   return (
-    <div
-      className="fixed inset-0 z-50 grid place-items-end bg-background/70 backdrop-blur sm:place-items-center"
-      onClick={canClose ? onClose : undefined}
+    // Mid-sync the sheet can't be dismissed — the import is still writing rows,
+    // so Escape and the backdrop stay inert until it lands.
+    <AppSheet
+      onClose={onClose}
+      dismissible={canClose}
+      labelledBy="pinterest-sync-title"
+      grabber={false}
     >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-md rounded-t-3xl border border-border bg-surface p-6 shadow-elevate sm:rounded-3xl"
-      >
+      <>
         {/* Header */}
         <div className="flex items-start justify-between gap-4">
           <div className="flex items-start gap-3">
@@ -100,7 +102,7 @@ export function PinterestSyncModal({
               )}
             </div>
             <div className="min-w-0">
-              <h3 className="font-display text-base font-semibold">
+              <h3 id="pinterest-sync-title" className="font-display text-base font-semibold">
                 {status === "error"
                   ? "Sync interrupted"
                   : status === "success"
@@ -140,7 +142,7 @@ export function PinterestSyncModal({
             style={{ width: `${progressPct}%` }}
           />
         </div>
-        <div className="mt-1.5 flex items-center justify-between text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+        <div className="mt-1.5 flex items-center justify-between text-micro font-medium uppercase tracking-wide text-muted-foreground">
           <span>
             {status === "success"
               ? "Complete"
@@ -172,7 +174,7 @@ export function PinterestSyncModal({
             <p className="text-xs font-medium text-destructive">
               {error ?? "Something went wrong while syncing."}
             </p>
-            <p className="mt-1 text-[11px] text-destructive/80">
+            <p className="mt-1 text-mini text-destructive/80">
               Any boards already imported were saved — retrying will only fetch what's missing.
             </p>
           </div>
@@ -184,7 +186,7 @@ export function PinterestSyncModal({
               return (
                 <li key={s.key} className="flex items-start gap-3">
                   <div
-                    className={`mt-0.5 grid h-6 w-6 shrink-0 place-items-center rounded-full text-[10px] font-semibold ${
+                    className={`mt-0.5 grid h-6 w-6 shrink-0 place-items-center rounded-full text-micro font-semibold ${
                       state === "done"
                         ? "bg-accent/15 text-accent"
                         : state === "active"
@@ -208,7 +210,7 @@ export function PinterestSyncModal({
                     >
                       {s.label}
                     </div>
-                    <div className="text-[11px] text-muted-foreground">{s.hint}</div>
+                    <div className="text-mini text-muted-foreground">{s.hint}</div>
                   </div>
                 </li>
               );
@@ -248,8 +250,8 @@ export function PinterestSyncModal({
             </div>
           )}
         </div>
-      </div>
-    </div>
+      </>
+    </AppSheet>
   );
 }
 
@@ -266,11 +268,11 @@ function ResultStat({
 }) {
   return (
     <div className="rounded-2xl border border-border bg-surface-2/60 p-3">
-      <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+      <div className="flex items-center gap-1.5 text-mini text-muted-foreground">
         {icon} {label}
       </div>
       <div className="mt-1 font-display text-2xl font-semibold">{value}</div>
-      {empty && <div className="mt-0.5 text-[10px] text-muted-foreground">{empty}</div>}
+      {empty && <div className="mt-0.5 text-micro text-muted-foreground">{empty}</div>}
     </div>
   );
 }

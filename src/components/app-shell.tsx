@@ -434,7 +434,7 @@ function BottomTab({
         strokeWidth={active ? 2.4 : 1.8}
       />
       <span
-        className={`text-[10px] font-medium transition ${
+        className={`text-micro font-medium transition ${
           active ? "text-primary" : "text-muted-foreground"
         }`}
       >
@@ -548,7 +548,7 @@ function ProfileSwitcher({
 
       {open && (
         <div className="absolute inset-x-0 top-[calc(100%+8px)] z-50 overflow-hidden rounded-2xl border border-border bg-surface p-2 shadow-elevate">
-          <div className="px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+          <div className="px-2 pb-1 pt-2 text-micro font-semibold uppercase tracking-widest text-muted-foreground">
             Switch Pinterest
           </div>
           {all.map((a) => {
@@ -568,7 +568,7 @@ function ProfileSwitcher({
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm font-medium">@{a.handle}</div>
-                  {a.label && <div className="text-[11px] text-muted-foreground">{a.label}</div>}
+                  {a.label && <div className="text-mini text-muted-foreground">{a.label}</div>}
                 </div>
                 {isActive && <Check className="h-4 w-4 text-primary" />}
               </button>
@@ -581,7 +581,7 @@ function ProfileSwitcher({
             <Plus className="h-4 w-4" /> Add Pinterest account
           </button>
           {!connected && (
-            <div className="mt-2 rounded-xl bg-primary/5 p-3 text-[11px] text-primary">
+            <div className="mt-2 rounded-xl bg-primary/5 p-3 text-mini text-primary">
               <Sparkles className="mr-1 inline h-3 w-3" /> Connect to sync pins & boards
             </div>
           )}

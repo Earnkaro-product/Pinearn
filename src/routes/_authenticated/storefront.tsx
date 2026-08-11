@@ -587,7 +587,7 @@ function StorefrontPage() {
           ) : (
             <span>{storefront.name[0]?.toUpperCase()}</span>
           )}
-          <span className="absolute inset-0 grid place-items-center bg-black/40 text-[10px] font-medium uppercase tracking-wide opacity-0 transition group-hover:opacity-100">
+          <span className="absolute inset-0 grid place-items-center bg-black/40 text-micro font-medium uppercase tracking-wide opacity-0 transition group-hover:opacity-100">
             {updateStore.isPending ? "Saving…" : "Change"}
           </span>
           <input
@@ -718,7 +718,7 @@ function StorefrontPage() {
                     <button
                       key={it.label}
                       onClick={it.onClick}
-                      className="flex flex-col items-center gap-1 rounded-lg p-2 text-[10px] font-medium text-foreground hover:bg-surface-2"
+                      className="flex flex-col items-center gap-1 rounded-lg p-2 text-micro font-medium text-foreground hover:bg-surface-2"
                     >
                       <span className="flex h-10 w-10 items-center justify-center rounded-full bg-surface-2">
                         {it.icon}
@@ -1304,7 +1304,7 @@ function CollectionCard({
           <div className="absolute inset-0 bg-gradient-to-t from-black/70 to-transparent" />
           <div className="absolute inset-x-3 bottom-2 text-white">
             <p className="truncate text-sm font-semibold">{name}</p>
-            <p className="text-[10px] opacity-80">
+            <p className="text-micro opacity-80">
               {count} {countLabel}
               {count === 1 ? "" : "s"}
             </p>
@@ -1377,7 +1377,7 @@ function BoardCard({
           <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/70 to-transparent" />
           <div className="absolute inset-x-3 bottom-2 text-white">
             <p className="truncate text-sm font-semibold">{name}</p>
-            <p className="text-[10px] opacity-80">
+            <p className="text-micro opacity-80">
               {count} collection{count === 1 ? "" : "s"}
             </p>
           </div>
@@ -1589,7 +1589,7 @@ function NewBoardDialog({
           </button>
         </div>
         {collections.length > 0 && selected.size === 0 && (
-          <p className="mt-2 text-right text-[11px] text-muted-foreground">
+          <p className="mt-2 text-right text-mini text-muted-foreground">
             Pick at least one collection — boards are built from your existing collections.
           </p>
         )}
@@ -1723,7 +1723,7 @@ function EditStoreDialog({
             ) : (
               <span>{name[0]?.toUpperCase()}</span>
             )}
-            <span className="absolute inset-0 grid place-items-center bg-black/40 text-[10px] font-medium uppercase tracking-wide opacity-0 transition group-hover:opacity-100">
+            <span className="absolute inset-0 grid place-items-center bg-black/40 text-micro font-medium uppercase tracking-wide opacity-0 transition group-hover:opacity-100">
               Change
             </span>
             <input type="file" accept="image/*" onChange={handleAvatar} className="hidden" />
@@ -1824,7 +1824,7 @@ function CollectionPinsDialog({
         <div className="flex items-center justify-between border-b border-border/60 px-4 py-3">
           <div>
             <h3 className="text-sm font-semibold">{collection.name}</h3>
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-mini text-muted-foreground">
               {totalItems} item{totalItems === 1 ? "" : "s"}
             </p>
           </div>
@@ -1904,7 +1904,7 @@ function BoardDialog({
         <div className="flex items-center justify-between border-b border-border/60 px-4 py-3">
           <div>
             <h3 className="text-sm font-semibold">{board.name}</h3>
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-mini text-muted-foreground">
               {collections.length} collection{collections.length === 1 ? "" : "s"}
             </p>
           </div>
@@ -1956,7 +1956,7 @@ function BoardDialog({
                       <div className="absolute inset-0 bg-gradient-to-t from-black/70 to-transparent" />
                       <div className="absolute inset-x-3 bottom-2 text-white">
                         <p className="truncate text-sm font-semibold">{c.name}</p>
-                        <p className="text-[10px] opacity-80">
+                        <p className="text-micro opacity-80">
                           {cPins.length} product{cPins.length === 1 ? "" : "s"}
                         </p>
                       </div>

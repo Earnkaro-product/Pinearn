@@ -206,6 +206,48 @@ export type Database = {
         };
         Relationships: [];
       };
+      lens_searches: {
+        Row: {
+          crop_region: string;
+          image_url: string;
+          matches: Json;
+          searched_at: string;
+        };
+        Insert: {
+          crop_region?: string;
+          image_url: string;
+          matches?: Json;
+          searched_at?: string;
+        };
+        Update: {
+          crop_region?: string;
+          image_url?: string;
+          matches?: Json;
+          searched_at?: string;
+        };
+        Relationships: [];
+      };
+      look_verdicts: {
+        Row: {
+          image_url: string;
+          judged_at: string;
+          target: string;
+          verdict: string;
+        };
+        Insert: {
+          image_url: string;
+          judged_at?: string;
+          target: string;
+          verdict: string;
+        };
+        Update: {
+          image_url?: string;
+          judged_at?: string;
+          target?: string;
+          verdict?: string;
+        };
+        Relationships: [];
+      };
       pinterest_trend_cache: {
         Row: {
           as_of: string | null;

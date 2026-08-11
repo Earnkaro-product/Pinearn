@@ -319,7 +319,7 @@ function AuthPage() {
                         setLocalPhone(e.target.value.replace(/\D/g, "").slice(0, 10))
                       }
                       placeholder="Enter phone number"
-                      className="min-w-0 flex-1 bg-transparent py-2.5 text-[15px] outline-none placeholder:text-muted-foreground"
+                      className="min-w-0 flex-1 bg-transparent py-2.5 text-lead outline-none placeholder:text-muted-foreground"
                     />
                   </div>
                 </div>

@@ -37,7 +37,7 @@ export function RotatingHint({
     <div className={`flex items-start gap-2 ${chrome} ${className}`}>
       <Lightbulb className="mt-px h-3.5 w-3.5 shrink-0 text-amber-500" />
       {/* key={i} remounts the <p> so the fade-in animation replays each swap */}
-      <p key={i} className="animate-hint-in text-[11px] leading-snug text-muted-foreground">
+      <p key={i} className="animate-hint-in text-mini leading-snug text-muted-foreground">
         {hint}
       </p>
     </div>
@@ -65,7 +65,7 @@ export function EducationalLoader({
         <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-primary/10 text-primary">
           <Sparkles className="h-4 w-4 animate-pulse" />
         </span>
-        <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+        <p className="text-mini font-semibold uppercase tracking-wide text-muted-foreground">
           {label}
         </p>
       </div>

@@ -160,7 +160,7 @@ function SwitchProfilePage() {
                     {a.id !== "primary" && (
                       <button
                         onClick={() => remove(a.id)}
-                        className="rounded-lg px-2 py-1 text-[11px] font-medium text-destructive hover:bg-destructive/10"
+                        className="rounded-lg px-2 py-1 text-mini font-medium text-destructive hover:bg-destructive/10"
                       >
                         Remove
                       </button>

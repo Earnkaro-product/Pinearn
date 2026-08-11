@@ -10,76 +10,94 @@
 // Three things changed shape, and they're the reason this module exists:
 //
 //   1. The model returns BOXES, not pixels. It cannot hand back a cropped
-//      image, so cropping happens at the URL layer (see cropUrl) rather than
-//      in-process — this app deploys to Cloudflare Workers, where there is no
-//      sharp/canvas to crop with anyway.
-//   2. Cropping in pixels needs the image's real dimensions, and the model's
-//      boxes are normalised 0–1. probeImageSize reads them out of the file
-//      header (first 64 KB) instead of downloading and decoding the whole
-//      image the way the old path did.
-//   3. Both the model AND the cropper read the image through the same public
-//      image proxy. Retailer and Pinterest CDNs routinely 403 a server-side
-//      fetch — the raw ajio and i.pinimg.com URLs both fail against the
-//      OpenAI proxy directly and both succeed through the image proxy.
+//      image, and nothing ever needs one: SearchAPI's `crop` parameter takes
+//      the region alongside the image URL (normalised 0–1 corners — the same
+//      coordinate space the model already answers in) and Google crops the
+//      image itself, at full original resolution. See lensCropParam.
+//   2. Because the crop is expressed in normalised coordinates end to end,
+//      the image's pixel dimensions are never needed. The old path had to
+//      probe them out of the file header to build a pixel crop URL, and
+//      "found objects but couldn't measure the frame" was a dead end that
+//      produced no crops at all; that failure mode no longer exists.
+//   3. The MODEL reads the image through a public image proxy. Retailer and
+//      Pinterest CDNs routinely 403 a server-side fetch — the raw ajio and
+//      i.pinimg.com URLs both fail against the OpenAI proxy directly and both
+//      succeed through the image proxy. Lens is unaffected: Google's crawler
+//      fetches the original URL and is not refused the way our servers are.
 //
 // Everything here is best-effort: every failure path returns an empty result
 // so the caller falls back to whole-image Lens.
 
 import { logNet } from "@/lib/net-logger";
+import { PRODUCT_CATEGORIES, toCategory, type ProductCategory } from "@/lib/product-category";
 import { extractJsonObject, generateText, ImageUnfetchable } from "@/lib/openai-proxy.server";
 import { getServiceSupabase } from "@/integrations/supabase/service-client";
 import type { Json } from "@/integrations/supabase/types";
 
-/** Public image proxy used both to make CDN images fetchable by the model and
- * to render crops. Overridable so a self-hosted imgproxy can be swapped in
- * without touching this file. */
+/** Public image proxy used to make CDN images fetchable by the model (its
+ * server-side fetch is 403'd by most CDNs). Overridable so a self-hosted
+ * imgproxy can be swapped in without touching this file. */
 const IMAGE_PROXY = process.env.VISION_IMAGE_PROXY_URL || "https://images.weserv.nl/";
 
 /** Boxes smaller than this fraction of the image are noise — a crop that small
  * carries too few pixels for Lens to match on. Mirrors the old detector's
  * `min_box_area`. */
 const MIN_BOX_AREA = 0.001;
-/** A box this close to the whole frame IS the whole frame. Such a crop is
- * served as the original image URL so it shares Lens's cache entry. */
+/** A box this close to the whole frame IS the whole frame. Such a box gets no
+ * crop parameter at all, so its search shares the whole-image Lens cache entry
+ * instead of running a second, near-identical search. */
 const FULL_FRAME_AREA = 0.9;
 /** Two boxes overlapping this much are the same object counted twice. Set high
  * on purpose: a genuinely nested product (t-shirt under an open shirt) scores
  * ~0.2 and must survive. */
 const DUPLICATE_IOU = 0.6;
 
-/** Four is a deliberate cut from six. Every extra object is another Lens call
- * on a paid API and another slot in the shared concurrency limiter, and past
- * the fourth "most prominent" item a pin is into earrings-in-the-background
- * territory. Fewer, better-grounded objects beat a long tail. */
-const MAX_OBJECTS = 4;
+/** Six, back up from four, because coverage is now the thing being optimised:
+ * an outfit pin genuinely carries six shoppable items (top, bottom, shoes, bag,
+ * belt, sunglasses) and a cap of four decided which two the shopper never got
+ * to see. The old comment called items five and six
+ * "earrings-in-the-background territory" — with the accessory/jewellery
+ * vocabulary widened, those ARE the products, not noise.
+ *
+ * The cost is real and worth stating: each extra object is another Lens call on
+ * a paid API, another slot in the shared concurrency limiter, and a share of
+ * the per-pin verification budget (VERIFY_BUDGET_PER_PIN in
+ * pinterest.functions.ts) that is now split six ways instead of four. Lower
+ * this first if spend or scan latency becomes the complaint. */
+const MAX_OBJECTS = 6;
+
+/** Width the pin is resized to before the model sees it.
+ *
+ * Detection is the first thing that happens and nothing — not even the product
+ * pills — can be shown until it returns, so its latency is the floor on the
+ * whole experience. A pin arrives from Pinterest at 1200px or more, and
+ * handing the model all of it costs seconds of download for detail no box
+ * needs: measured across real pins, 768px cut detection from 7.9s to 5.3s and
+ * from 5.6s to 3.0s while returning THE SAME objects, same labels, same
+ * categories.
+ *
+ * 768 rather than smaller because that is where the tradeoff turns: at 512 the
+ * same pins came back a third faster again but a wristwatch stopped being
+ * detected at all, and an object that is never detected can never be matched.
+ * Boxes are normalised 0-1, so this changes what the model can SEE, never the
+ * coordinate space it answers in. */
+const DETECT_IMAGE_WIDTH = 768;
 
 /** The categories the model must classify each object into. Downstream this is
  * the ONLY thing that decides whether a Lens match is allowed to appear under
- * an object's tab (see `matchesCategory` in pinterest.functions.ts), so it is a
+ * an object's tab (see `categoriesAgree` in product-category.ts), so it is a
  * closed enum the model picks from rather than free text we'd have to
- * re-interpret with keyword guessing. */
-export const PRODUCT_CATEGORIES = [
-  "top",
-  "outerwear",
-  "dress",
-  "bottom",
-  "footwear",
-  "bag",
-  "watch",
-  "jewellery",
-  "eyewear",
-  "headwear",
-  "beauty",
-  "electronics",
-  "furniture",
-  "decor",
-  "other",
-] as const;
-export type ProductCategory = (typeof PRODUCT_CATEGORIES)[number];
+ * re-interpret with keyword guessing.
+ *
+ * The list itself lives in product-category.ts, next to the title regexes that
+ * have to name the SAME categories — a detector enum that drifts from the title
+ * vocabulary doesn't error, it just silently stops gating. Re-exported here
+ * because this module is where the rest of the app has always imported it. */
+export { PRODUCT_CATEGORIES, toCategory, type ProductCategory } from "@/lib/product-category";
 
 // Compact by design. Every token in this prompt is paid on every pin, and the
-// reply is parsed by machine — short keys ("o", "l", "c", "b") cost a fraction
-// of {"objects":[{"label":...,"bounding_box":...}]} across a whole board.
+// reply is parsed by machine — short keys ("o", "l", "c", "d", "b") cost a
+// fraction of {"objects":[{"label":...,"bounding_box":...}]} across a board.
 //
 // Two details are measured, not stylistic:
 //
@@ -99,19 +117,34 @@ export type ProductCategory = (typeof PRODUCT_CATEGORIES)[number];
 const DETECT_PROMPT = [
   "Find every distinct purchasable product in this image.",
   "Reply with ONLY this JSON, nothing else:",
-  '{"o":[{"l":"short product name","c":"category","b":[left,top,right,bottom]}]}',
+  '{"o":[{"l":"short product name","c":"category","d":"look","b":[left,top,right,bottom]}]}',
   "b = INTEGERS on a 0-1000 grid over the image: left/right 0 at the left edge, 1000 at the right edge; top/bottom 0 at the top edge, 1000 at the bottom edge.",
   "top = the product's topmost visible pixel, bottom = its lowest. Trace the outline; never infer it from the pose.",
   `c = exactly one of: ${PRODUCT_CATEGORIES.join(", ")}`,
-  "One entry per item a shopper could buy. Ignore people, faces, skin, hair, background, walls, floors, text.",
+  "d = this exact item's look in at most 8 words: main colour(s), pattern/print, material or finish. Describe what is VISIBLE, never a guess.",
+  // Explicitly naming the small stuff is what gets it reported: asked only for
+  // "every distinct purchasable product", the model returns the two or three
+  // garments and stops, leaving the belt, the earrings and the mug on the table
+  // — the exact items the widened title vocabulary now knows how to match.
+  "One entry per item a shopper could buy, INCLUDING small and secondary ones: accessories (belt, scarf, socks, gloves), jewellery, eyewear, watches, headwear, bags, and any homeware, kitchenware, stationery, toys or pet items in frame.",
+  "Ignore people, faces, skin, hair, background, walls, floors, text.",
   `Max ${MAX_OBJECTS}, most prominent first. Nothing to buy -> {"o":[]}`,
 ].join("\n");
 
 export type Box = { x: number; y: number; w: number; h: number };
-export type DetectedObject = { label: string; category: ProductCategory; box: Box };
-export type ImageSize = { width: number; height: number };
+export type DetectedObject = {
+  label: string;
+  category: ProductCategory;
+  /** The object's LOOK — "white leather low-top, gum sole" — straight from the
+   * detection pass, which is the only stage that ever sees the pin itself. It
+   * is the target that `verifyProductLook` holds candidate thumbnails against,
+   * and (lowercased) part of the Lens `q` steer. Empty on rows detected before
+   * the prompt asked for it; everything downstream treats that as "label only". */
+  signature: string;
+  box: Box;
+};
 /** One image's detection result — what gets cached, in memory and in the DB. */
-export type Detection = { objects: DetectedObject[]; size: ImageSize | null };
+export type Detection = { objects: DetectedObject[] };
 
 /* ---------------- Image proxy ---------------- */
 
@@ -125,160 +158,55 @@ function proxied(imageUrl: string, params?: Record<string, string | number>): st
   return url.toString();
 }
 
-/** A URL that renders just `box` of `imageUrl`. Coordinates must be pixels, so
- * the caller has to have resolved the image's size first. Boxes covering
- * essentially the whole frame return the original URL — the crop would be a
- * copy of the full image, and reusing the URL means Lens serves it from cache
- * instead of running a second identical search. */
-export function cropUrl(imageUrl: string, box: Box, size: ImageSize): string {
-  if (box.w * box.h >= FULL_FRAME_AREA) return imageUrl;
-
-  const px = (v: number, max: number) => Math.max(0, Math.min(max, Math.round(v * max)));
-  const cx = px(box.x, size.width);
-  const cy = px(box.y, size.height);
-  const cw = Math.max(1, Math.min(size.width - cx, Math.round(box.w * size.width)));
-  const ch = Math.max(1, Math.min(size.height - cy, Math.round(box.h * size.height)));
-
-  // output=jpg keeps the crop small for whatever fetches it next; the proxy
-  // applies cx/cy/cw/ch before any other transform.
-  return proxied(imageUrl, { cx, cy, cw, ch, output: "jpg" });
-}
-
-/* ---------------- Image dimensions ---------------- */
-
-/** Reads up to `limit` bytes of the response and abandons the rest, so a large
- * image costs one connection and a few packets rather than a full download. */
-async function readHead(url: string, limit: number, signal: AbortSignal): Promise<Uint8Array> {
-  const res = await fetch(url, {
-    headers: {
-      // Bare server fetches get 403'd by most CDNs; a browser UA does not.
-      "User-Agent":
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36",
-      Accept: "image/avif,image/webp,image/*,*/*;q=0.8",
-      Range: `bytes=0-${limit - 1}`,
-    },
-    signal,
-  });
-  if (!res.ok && res.status !== 206) throw new Error(`image HTTP ${res.status}`);
-  if (!res.body) return new Uint8Array(await res.arrayBuffer());
-
-  const reader = res.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  try {
-    while (total < limit) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      chunks.push(value);
-      total += value.length;
-    }
-  } finally {
-    // Servers that ignore Range would otherwise keep streaming the whole file.
-    await reader.cancel().catch(() => {});
-  }
-
-  const out = new Uint8Array(total);
-  let at = 0;
-  for (const c of chunks) {
-    out.set(c, at);
-    at += c.length;
-  }
-  return out;
-}
-
-/** Pull width/height out of a JPEG/PNG/WebP/GIF header. Returns null for a
- * format (or a truncated header) it can't read. */
-export function parseImageSize(b: Uint8Array): ImageSize | null {
-  const u16 = (i: number) => (b[i] << 8) | b[i + 1];
-  const u32 = (i: number) => ((b[i] << 24) | (b[i + 1] << 16) | (b[i + 2] << 8) | b[i + 3]) >>> 0;
-  const le16 = (i: number) => b[i] | (b[i + 1] << 8);
-  const le32 = (i: number) => (b[i] | (b[i + 1] << 8) | (b[i + 2] << 16) | (b[i + 3] << 24)) >>> 0;
-
-  // PNG: IHDR is always the first chunk, at a fixed offset.
-  if (b.length > 24 && u32(0) === 0x89504e47) return { width: u32(16), height: u32(20) };
-
-  // GIF: logical screen descriptor, little-endian.
-  if (b.length > 10 && b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46)
-    return { width: le16(6), height: le16(8) };
-
-  // WebP: RIFF container with three possible payload encodings.
-  if (b.length > 30 && u32(0) === 0x52494646 && u32(8) === 0x57454250) {
-    const fourcc = u32(12);
-    if (fourcc === 0x56503858)
-      // VP8X: 24-bit canvas size, minus one.
-      return {
-        width: 1 + (b[24] | (b[25] << 8) | (b[26] << 16)),
-        height: 1 + (b[27] | (b[28] << 8) | (b[29] << 16)),
-      };
-    if (fourcc === 0x56503820)
-      // VP8 (lossy): dimensions follow the 3-byte start code.
-      return { width: le16(26) & 0x3fff, height: le16(28) & 0x3fff };
-    if (fourcc === 0x5650384c) {
-      // VP8L (lossless): 14 bits each, bit-packed after the signature byte.
-      const bits = le32(21);
-      return { width: (bits & 0x3fff) + 1, height: ((bits >> 14) & 0x3fff) + 1 };
-    }
-  }
-
-  // JPEG: walk the segment chain to the frame header. SOF0–SOF15 carry the
-  // dimensions, except SOF4/SOF8/SOF12 which are Huffman/arithmetic tables.
-  if (b.length > 4 && b[0] === 0xff && b[1] === 0xd8) {
-    let i = 2;
-    while (i + 9 < b.length) {
-      if (b[i] !== 0xff) {
-        i++;
-        continue;
-      }
-      const marker = b[i + 1];
-      if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
-        i += 2;
-        continue;
-      }
-      if (marker === 0xda || marker === 0xd9) break; // scan data — no header left
-      const length = u16(i + 2);
-      if (length < 2) break;
-      const isSof =
-        marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc;
-      if (isSof) return { height: u16(i + 5), width: u16(i + 7) };
-      i += 2 + length;
-    }
-  }
-
-  return null;
-}
-
-/** How long one header read gets. Reading 64 KB off a CDN is a sub-second job;
- * anything still outstanding at 4s is a host that isn't going to answer. The
- * old 8s-each-in-turn arrangement could spend 16s discovering that, and every
- * one of those seconds delayed the crops. */
-const PROBE_TIMEOUT_MS = 4_000;
-
-/** Image dimensions, read from the header.
+/** `box` as SearchAPI's `crop` parameter (`left;top;right;bottom`, each 0–1),
+ * or null for a box that should search the whole image instead.
  *
- * The origin and the image proxy are raced rather than tried in turn. They fail
- * independently — plenty of retailer CDNs 403 a direct server fetch and answer
- * happily through the proxy, and the proxy occasionally stalls on an image the
- * origin serves instantly — so whichever answers first is the one we wanted.
- * Null when neither does, which degrades the caller to the whole-image path. */
-export async function probeImageSize(imageUrl: string): Promise<ImageSize | null> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
-
-  const attempt = async (url: string): Promise<ImageSize> => {
-    const size = parseImageSize(await readHead(url, 65_536, controller.signal));
-    if (!size || size.width <= 0 || size.height <= 0) throw new Error("unreadable header");
-    return size;
+ * This is the whole cropping story: no third-party image proxy renders a crop,
+ * no pixel dimensions are ever resolved — Google fetches the ORIGINAL image and
+ * applies the region itself, at full resolution, inside the one Lens call that
+ * was being made anyway. Null in two cases, both deliberate:
+ *
+ *   - a near-full-frame box (the crop would be a copy of the whole image, and
+ *     no parameter means the search shares the whole-image cache entry), and
+ *   - a degenerate box that rounding collapsed below the API's `left < right`,
+ *     `top < bottom` contract — better the whole frame than a 400.
+ *
+ * Three decimals: precise to 0.1% of the image (finer than any detector box),
+ * while keeping the string stable for use inside cache keys. */
+/** `box` grown by `factor` about its own centre, clamped to the frame.
+ *
+ * The rescue for a small object. Measured on a real outfit pin: the tight
+ * crop of a pair of glasses returned 5 results and ZERO from a supported
+ * retailer, while the same box at 2× returned 60 results, 22 of them
+ * eyewear at supported retailers. A crop that small gives Lens too few
+ * pixels and no context to place them, and it answers about the texture it
+ * can see rather than the product. Widening costs precision — the category
+ * and look gates downstream are what take that back. */
+export function widenBox(box: Box, factor: number): Box {
+  const cx = box.x + box.w / 2;
+  const cy = box.y + box.h / 2;
+  const w = Math.min(1, box.w * factor);
+  const h = Math.min(1, box.h * factor);
+  return {
+    x: Math.max(0, Math.min(1 - w, cx - w / 2)),
+    y: Math.max(0, Math.min(1 - h, cy - h / 2)),
+    w,
+    h,
   };
+}
 
-  try {
-    return await Promise.any([attempt(imageUrl), attempt(proxied(imageUrl))]);
-  } catch {
-    return null;
-  } finally {
-    // Whoever lost the race is still streaming — hang up on them.
-    controller.abort();
-    clearTimeout(timer);
-  }
+export function lensCropParam(box: Box): string | null {
+  if (box.w * box.h >= FULL_FRAME_AREA) return null;
+
+  const clamp = (v: number) => Math.max(0, Math.min(1, v));
+  const r = (v: number) => Math.round(clamp(v) * 1000) / 1000;
+  const left = r(box.x);
+  const top = r(box.y);
+  const right = r(box.x + box.w);
+  const bottom = r(box.y + box.h);
+  if (left >= right || top >= bottom) return null;
+
+  return `${left};${top};${right};${bottom}`;
 }
 
 /* ---------------- Detection ---------------- */
@@ -346,14 +274,7 @@ function toBox(raw: unknown): Box | null {
   return box.w * box.h >= MIN_BOX_AREA ? box : null;
 }
 
-const CATEGORY_SET = new Set<string>(PRODUCT_CATEGORIES);
-
-function toCategory(raw: unknown): ProductCategory {
-  const s = typeof raw === "string" ? raw.trim().toLowerCase() : "";
-  return CATEGORY_SET.has(s) ? (s as ProductCategory) : "other";
-}
-
-type DetectReply = { o?: Array<{ l?: unknown; c?: unknown; b?: unknown }> };
+type DetectReply = { o?: Array<{ l?: unknown; c?: unknown; d?: unknown; b?: unknown }> };
 
 /**
  * Detect the purchasable products in an image.
@@ -372,7 +293,7 @@ export async function detectObjects(imageUrl: string): Promise<DetectedObject[]>
     text = (
       await generateText({
         prompt: DETECT_PROMPT,
-        imageUrl: proxied(imageUrl, { output: "jpg" }),
+        imageUrl: proxied(imageUrl, { output: "jpg", w: DETECT_IMAGE_WIDTH }),
         label: "detect",
       })
     ).text;
@@ -410,6 +331,7 @@ export async function detectObjects(imageUrl: string): Promise<DetectedObject[]>
     kept.push({
       label: typeof entry?.l === "string" ? entry.l : "",
       category: toCategory(entry?.c),
+      signature: typeof entry?.d === "string" ? entry.d.trim().slice(0, 120) : "",
       box,
     });
   }
@@ -426,10 +348,135 @@ export async function detectObjects(imageUrl: string): Promise<DetectedObject[]>
   return kept;
 }
 
+/* ---------------- Look verification ---------------- */
+
+// The last line of defence for "the product on the card must LOOK like the
+// product in the pin". Everything before it — the crop, the Lens `q` steer,
+// the category gate — narrows by KIND; only this stage ever compares
+// appearance, because only a vision call can. One call per candidate: the
+// proxy takes a single image_url, so the candidate's own thumbnail is the
+// image and the pin-side object travels as text (the `d` signature captured
+// during detection, the one pass that actually saw the pin).
+//
+// It is a filter, not an oracle. The model can be wrong in both directions,
+// so the verdict is graded rather than binary — measured on real pins, a
+// binary "same or not" rejected a near-identical shirt in a neighbouring
+// colourway AND accepted a plain shirt whose title happened to rhyme with the
+// target. The grades put both right: "close" keeps the first, the explicit
+// pattern rule rejects the second.
+//
+//   "same"      the same product, or the same design in the same colourway
+//   "close"     the same kind of item, visibly similar colour and pattern —
+//               shown, but ranked after "same" and never presented as exact
+//   "different" visibly not this product — dropped
+//   null        no usable verdict (image unfetchable, proxy down, bad reply)
+//               — callers treat it as "keep": a broken verifier must degrade
+//               to the unverified behaviour, never to empty tabs.
+
+export type LookVerdict = "same" | "close" | "different";
+
+function verifyPrompt(label: string, signature: string, matchTitle: string): string {
+  const target = signature ? `${label} — ${signature}` : label;
+  return [
+    "This image is a retailer's product photo. Compare the product in it to this target:",
+    `Target: ${target}.`,
+    matchTitle
+      ? `Retailer's title for this listing: "${matchTitle.slice(0, 160)}" (context only — judge from the image).`
+      : "",
+    "Decide in this order:",
+    "1. KIND: is it the same kind of item? If not -> different.",
+    "2. PATTERN: look at the image. Is the pattern the same type (solid/plain vs striped vs checked vs floral vs graphic)? A plain item never matches a patterned target -> different.",
+    "3. COLOUR: same colourway -> same. Similar colour family, same pattern -> close. Clearly different colours -> different.",
+    "Ignore angle, lighting, background, and whether the item is worn or laid flat.",
+    'Reply with ONLY this JSON: {"match":"same"} or {"match":"close"} or {"match":"different"}',
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+/** Hosts that refuse the image proxy and must be handed to the model raw.
+ *
+ * Amazon's CDN 404s every weserv request while serving the identical URL
+ * directly; every other retailer measured (Myntra, Flipkart/flixcart, Ajio)
+ * is the other way round or works either way. Routing per host matters for
+ * LATENCY, not just success: the alternative — try proxied, catch, retry raw
+ * — pays two sequential model calls for every Amazon card on the page. */
+const PROXY_HOSTILE_HOSTS = /(^|\.)media-amazon\.com$|(^|\.)ssl-images-amazon\.com$/i;
+
+/** Amazon encodes the rendition it should serve in the filename
+ * (`..._AC_UY1100_.jpg`). Since the proxy can't resize these, ask Amazon for a
+ * small one directly: the full-size shot measured 15.5s through the model
+ * against 1.5s for the 400px rendition of the same photo, with an identical
+ * reading of what it shows. Ten times the wait for detail no verdict uses. */
+const AMAZON_RENDITION = /\._[A-Z0-9_,]+_\.(jpe?g|png)$/i;
+
+function visionImageUrl(imageUrl: string): string {
+  try {
+    if (PROXY_HOSTILE_HOSTS.test(new URL(imageUrl).hostname)) {
+      return imageUrl.replace(AMAZON_RENDITION, "._AC_UY400_.$1");
+    }
+  } catch {
+    return imageUrl;
+  }
+  // Everywhere else the proxy is both more reliable AND faster than the raw
+  // URL — w=640 means the model downloads a fraction of a 1400px product
+  // shot, measured at ~2s against ~4-6s raw. A verdict needs no more detail.
+  return proxied(imageUrl, { output: "jpg", w: 640 });
+}
+
+/** How closely `imageUrl` (a candidate product photo) matches the detected
+ * object. `matchTitle` is the listing's own title, passed as context.
+ *
+ * The image is never downloaded here — only its URL is handed to the vision
+ * endpoint, which fetches it itself (see visionImageUrl for which form).
+ * A host that refuses that form once is retried in the other form rather
+ * than giving up, since an unverified card is a lookalike shown.
+ *
+ * Never throws; null means "no usable verdict". */
+export async function verifyProductLook(
+  label: string,
+  signature: string,
+  imageUrl: string,
+  matchTitle = "",
+): Promise<LookVerdict | null> {
+  const startedAt = Date.now();
+  const prompt = verifyPrompt(label, signature, matchTitle);
+  const primary = visionImageUrl(imageUrl);
+  try {
+    let result;
+    try {
+      result = await generateText({ prompt, imageUrl: primary, label: "verify-look" });
+    } catch (e) {
+      if (!(e instanceof ImageUnfetchable)) throw e;
+      const fallback =
+        primary === imageUrl ? proxied(imageUrl, { output: "jpg", w: 640 }) : imageUrl;
+      result = await generateText({ prompt, imageUrl: fallback, label: "verify-look-alt" });
+    }
+    if (!result.sawImage) return null;
+    const reply = extractJsonObject(result.text) as { match?: unknown };
+    const verdict =
+      reply?.match === "same" || reply?.match === "close" || reply?.match === "different"
+        ? (reply.match as LookVerdict)
+        : null;
+    logNet("VERIFY", {
+      outcome: verdict ?? "unparseable",
+      durationMs: Date.now() - startedAt,
+    });
+    return verdict;
+  } catch (e) {
+    logNet("VERIFY", {
+      outcome: e instanceof ImageUnfetchable ? "image_unfetchable" : "error",
+      durationMs: Date.now() - startedAt,
+      reason: e instanceof Error ? e.message.slice(0, 120) : String(e),
+    });
+    return null;
+  }
+}
+
 /* ---------------- Shared, durable detection cache ---------------- */
 
 // Detection is the same answer for the same image no matter who asks, and it
-// costs a model call plus a header read to compute. The in-process Map that
+// costs a model call to compute. The in-process Map that
 // used to hold it is per-ISOLATE: this app runs on Cloudflare Workers, where an
 // isolate lasts minutes and a deploy or a cold region drops the lot. The
 // practical effect was that a pin re-detected itself over and over, and the
@@ -447,22 +494,38 @@ export async function detectObjects(imageUrl: string): Promise<DetectedObject[]>
  * pins without a manual purge. */
 const DETECTION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
+/** Rows written before this are ignored and the pin re-detects once.
+ *
+ * They parse cleanly into the current shape — same normalised boxes, same
+ * categories — so nothing would reject them, but they were produced by the
+ * pre-signature prompt: no `d` field, which leaves the look gate grounding on
+ * the bare label ("Top") instead of the object's actual appearance for up to
+ * a month. Cheaper and more honest than a migration: bump this whenever the
+ * detect prompt changes in a way that invalidates or impoverishes its output.
+ *
+ * Bumped again for the wider vocabulary: cached rows were produced when the
+ * model could only pick from fifteen categories and was capped at four objects,
+ * so a belt came back as "other" (or not at all) on every pin already scanned.
+ * They would keep serving that thinner answer for the rest of the TTL. */
+const DETECTION_EPOCH_MS = Date.parse("2026-08-10T11:00:00Z");
+
 type DetectionRow = {
   image_url: string;
-  width: number | null;
-  height: number | null;
   objects: Json;
   detected_at: string;
 };
 
 /** Rehydrate a stored row, rejecting anything that doesn't still parse into the
  * current shape — a row written by an older prompt whose boxes were normalised
- * differently must not silently produce wrong crops. */
+ * differently must not silently produce wrong crops. The width/height columns
+ * older rows carry are simply not read: boxes are normalised 0–1 and the crop
+ * is expressed to Lens in the same coordinates, so pixel dimensions no longer
+ * participate at all. */
 function rowToDetection(row: DetectionRow): Detection | null {
   if (!Array.isArray(row.objects)) return null;
   const objects: DetectedObject[] = [];
   for (const raw of row.objects) {
-    const o = raw as { l?: unknown; c?: unknown; b?: unknown };
+    const o = raw as { l?: unknown; c?: unknown; d?: unknown; b?: unknown };
     const b = o?.b;
     if (!Array.isArray(b) || b.length < 4) return null;
     const [x, y, w, h] = b.map(Number);
@@ -470,28 +533,29 @@ function rowToDetection(row: DetectionRow): Detection | null {
     objects.push({
       label: typeof o.l === "string" ? o.l : "",
       category: toCategory(o.c),
+      // Rows detected before the prompt asked for a look signature have no
+      // `d`; empty means the verifier grounds on the label alone.
+      signature: typeof o.d === "string" ? o.d : "",
       box: { x, y, w, h },
     });
   }
-  const size =
-    row.width && row.height && row.width > 0 && row.height > 0
-      ? { width: row.width, height: row.height }
-      : null;
-  return { objects, size };
+  return { objects };
 }
 
 async function loadDetection(imageUrl: string): Promise<Detection | null> {
   try {
     const { data, error } = await getServiceSupabase()
       .from("image_detections")
-      .select("image_url, width, height, objects, detected_at")
+      .select("image_url, objects, detected_at")
       .eq("image_url", imageUrl)
       .maybeSingle();
     if (error || !data) {
       if (error) logNet("DETECT", { outcome: "cache_read_failed", reason: error.message });
       return null;
     }
-    if (Date.now() - new Date(data.detected_at).getTime() > DETECTION_TTL_MS) return null;
+    const detectedAt = new Date(data.detected_at).getTime();
+    if (Date.now() - detectedAt > DETECTION_TTL_MS) return null;
+    if (detectedAt < DETECTION_EPOCH_MS) return null;
     return rowToDetection(data as DetectionRow);
   } catch {
     return null;
@@ -505,11 +569,10 @@ async function saveDetection(imageUrl: string, detection: Detection): Promise<vo
       .upsert(
         {
           image_url: imageUrl,
-          width: detection.size?.width ?? null,
-          height: detection.size?.height ?? null,
           objects: detection.objects.map((o) => ({
             l: o.label,
             c: o.category,
+            d: o.signature,
             b: [o.box.x, o.box.y, o.box.w, o.box.h],
           })) as unknown as Json,
           detected_at: new Date().toISOString(),
@@ -523,12 +586,10 @@ async function saveDetection(imageUrl: string, detection: Detection): Promise<vo
 }
 
 /**
- * Everything the crop builder needs for one image: the objects and the pixel
- * dimensions their normalised boxes have to be resolved against.
- *
- * The model call and the header read are independent and run together — the
- * model dominates (~6s) and the header read (a few hundred ms) disappears
- * inside it. A hit on the shared cache skips both.
+ * The detected objects for one image — one model call, or a hit on the shared
+ * cache. Their normalised boxes are handed to Lens as-is (see lensCropParam),
+ * so this is the entire detection story: no dimension probe runs beside it and
+ * no result is ever unusable for lack of one.
  *
  * Throws only if detection itself failed, so the caller can distinguish "this
  * pin has nothing to buy" from "the detector is down" and cache them apart.
@@ -540,10 +601,7 @@ export async function detectImage(imageUrl: string): Promise<Detection> {
     return cached;
   }
 
-  const [objects, size] = await Promise.all([detectObjects(imageUrl), probeImageSize(imageUrl)]);
-  const detection = { objects, size };
-  // Only worth storing once it's usable: a run that found objects but no
-  // dimensions can't be cropped, and re-running it later may resolve the size.
-  if (objects.length === 0 || size) void saveDetection(imageUrl, detection);
+  const detection = { objects: await detectObjects(imageUrl) };
+  void saveDetection(imageUrl, detection);
   return detection;
 }

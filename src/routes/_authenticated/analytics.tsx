@@ -800,7 +800,7 @@ function OrdersPanel({
       </div>
 
       <div className="rounded-2xl border border-border bg-surface p-4">
-        <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+        <div className="text-mini font-semibold uppercase tracking-wide text-muted-foreground">
           Status
         </div>
         <div className="mt-2 flex gap-2">
@@ -810,7 +810,7 @@ function OrdersPanel({
             </FilterChip>
           ))}
         </div>
-        <div className="mt-4 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+        <div className="mt-4 text-mini font-semibold uppercase tracking-wide text-muted-foreground">
           Date range
         </div>
         <div className="mt-2 flex flex-wrap gap-2">
@@ -922,7 +922,7 @@ function OrderCard({
         </div>
         <div className="shrink-0 text-right">
           <div className="font-display text-base font-bold">₹{fmtINR(order.earnings)}</div>
-          <div className="text-[10px] text-muted-foreground">earned</div>
+          <div className="text-micro text-muted-foreground">earned</div>
         </div>
       </button>
 
@@ -941,11 +941,11 @@ function OrderCard({
 
       <div className="mt-2 flex gap-2">
         <div className="flex-1 rounded-xl bg-surface-2/60 px-3 py-2">
-          <div className="text-[10px] uppercase tracking-wide text-muted-foreground">MRP</div>
+          <div className="text-micro uppercase tracking-wide text-muted-foreground">MRP</div>
           <div className="text-sm font-semibold">₹{fmtINR(order.value)}</div>
         </div>
         <div className="flex-1 rounded-xl bg-surface-2/60 px-3 py-2 text-right">
-          <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Type</div>
+          <div className="text-micro uppercase tracking-wide text-muted-foreground">Type</div>
           <div className="text-sm font-semibold">Cashback</div>
         </div>
       </div>
@@ -1046,7 +1046,7 @@ function PinsPanel({
       </div>
 
       <div className="flex items-center gap-2 overflow-x-auto pb-1">
-        <div className="shrink-0 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+        <div className="shrink-0 text-mini font-semibold uppercase tracking-wide text-muted-foreground">
           Sort by
         </div>
         {PIN_SORTS.map((s) => (
@@ -1068,7 +1068,7 @@ function PinsPanel({
               <div className="flex items-start gap-3">
                 <FadeImage src={pin.image} className="h-14 w-14 shrink-0 rounded-xl object-cover" />
                 <div className="min-w-0 flex-1">
-                  <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  <div className="text-micro font-semibold uppercase tracking-wide text-muted-foreground">
                     {brandLabel}
                   </div>
                   <div className="truncate text-sm font-semibold">{pin.title}</div>
@@ -1080,19 +1080,19 @@ function PinsPanel({
 
               <div className="mt-3 flex gap-2">
                 <div className="flex-1 rounded-xl bg-surface-2/60 px-3 py-2">
-                  <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                  <div className="text-micro uppercase tracking-wide text-muted-foreground">
                     Impressions
                   </div>
                   <div className="text-sm font-semibold">{fmt(pin.impressions)}</div>
                 </div>
                 <div className="flex-1 rounded-xl bg-surface-2/60 px-3 py-2">
-                  <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                  <div className="text-micro uppercase tracking-wide text-muted-foreground">
                     Pin Clicks
                   </div>
                   <div className="text-sm font-semibold">{fmt(pin.clicks)}</div>
                 </div>
                 <div className="flex-1 rounded-xl bg-surface-2/60 px-3 py-2 text-right">
-                  <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                  <div className="text-micro uppercase tracking-wide text-muted-foreground">
                     Orders
                   </div>
                   <div className="text-sm font-semibold">{agg.orders}</div>
@@ -1100,13 +1100,13 @@ function PinsPanel({
               </div>
               <div className="mt-2 flex gap-2">
                 <div className="flex-1 rounded-xl bg-surface-2/60 px-3 py-2">
-                  <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                  <div className="text-micro uppercase tracking-wide text-muted-foreground">
                     Sales
                   </div>
                   <div className="text-sm font-semibold">₹{fmtINR(agg.sales)}</div>
                 </div>
                 <div className="flex-1 rounded-xl bg-surface-2/60 px-3 py-2 text-right">
-                  <div className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+                  <div className="inline-flex items-center gap-1 text-micro uppercase tracking-wide text-muted-foreground">
                     Earnings <Info className="h-3 w-3" />
                   </div>
                   <div className="text-sm font-semibold text-emerald-600">
@@ -1163,19 +1163,19 @@ function PinBreakdownDialog({
                 <div className="truncate font-semibold">{pin.title}</div>
                 <div className="mt-3 grid grid-cols-2 gap-2">
                   <div className="rounded-xl bg-surface-2/60 px-3 py-2">
-                    <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                    <div className="text-micro uppercase tracking-wide text-muted-foreground">
                       Orders
                     </div>
                     <div className="text-sm font-bold">{agg.orders}</div>
                   </div>
                   <div className="rounded-xl bg-surface-2/60 px-3 py-2">
-                    <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                    <div className="text-micro uppercase tracking-wide text-muted-foreground">
                       Sales
                     </div>
                     <div className="text-sm font-bold">₹{fmtINR(agg.sales)}</div>
                   </div>
                   <div className="col-span-2 rounded-xl bg-surface-2/60 px-3 py-2">
-                    <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                    <div className="text-micro uppercase tracking-wide text-muted-foreground">
                       Earnings
                     </div>
                     <div className="text-sm font-bold text-emerald-600">
@@ -1211,7 +1211,7 @@ function PinBreakdownDialog({
                         className="h-12 w-12 shrink-0 rounded-xl object-cover"
                       />
                       <div className="min-w-0">
-                        <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                        <div className="text-micro font-semibold uppercase tracking-wide text-muted-foreground">
                           {product.brand}
                         </div>
                         <div className="truncate text-sm font-semibold">{product.title}</div>
@@ -1219,13 +1219,13 @@ function PinBreakdownDialog({
                     </div>
                     <div className="mt-2 flex gap-2">
                       <div className="flex-1 rounded-xl bg-surface-2/60 px-3 py-2">
-                        <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                        <div className="text-micro uppercase tracking-wide text-muted-foreground">
                           Clicks
                         </div>
                         <div className="text-sm font-semibold">{fmt(product.clicks)}</div>
                       </div>
                       <div className="flex-1 rounded-xl bg-surface-2/60 px-3 py-2 text-right">
-                        <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                        <div className="text-micro uppercase tracking-wide text-muted-foreground">
                           Orders
                         </div>
                         <div className="text-sm font-semibold">{pAgg.orders}</div>
@@ -1233,13 +1233,13 @@ function PinBreakdownDialog({
                     </div>
                     <div className="mt-2 flex gap-2">
                       <div className="flex-1 rounded-xl bg-surface-2/60 px-3 py-2">
-                        <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                        <div className="text-micro uppercase tracking-wide text-muted-foreground">
                           Sales
                         </div>
                         <div className="text-sm font-semibold">₹{fmtINR(pAgg.sales)}</div>
                       </div>
                       <div className="flex-1 rounded-xl bg-surface-2/60 px-3 py-2 text-right">
-                        <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                        <div className="text-micro uppercase tracking-wide text-muted-foreground">
                           Earnings
                         </div>
                         <div className="text-sm font-semibold text-emerald-600">
@@ -1328,7 +1328,7 @@ function OrderBreakdownDialog({
                 className="h-12 w-12 shrink-0 rounded-xl object-cover"
               />
               <div className="min-w-0">
-                <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                <div className="text-micro font-semibold uppercase tracking-wide text-muted-foreground">
                   {product.brand}
                 </div>
                 <div className="truncate text-sm font-semibold">{product.title}</div>
@@ -1374,7 +1374,7 @@ function OrderBreakdownDialog({
             </p>
           ) : (
             <div className="mt-3">
-              <div className="grid grid-cols-3 px-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+              <div className="grid grid-cols-3 px-2 text-micro font-semibold uppercase tracking-wide text-muted-foreground">
                 <span>Date</span>
                 <span className="text-center">Value</span>
                 <span className="text-right">Earnings</span>
@@ -1406,7 +1406,7 @@ function OrderBreakdownDialog({
                       </button>
                       {isOpen && (
                         <div className="border-t border-border/60 bg-surface-2/30 px-3 py-2">
-                          <div className="grid grid-cols-[1.5rem_1fr_auto_auto_auto] gap-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                          <div className="grid grid-cols-[1.5rem_1fr_auto_auto_auto] gap-2 text-micro font-semibold uppercase tracking-wide text-muted-foreground">
                             <span>#</span>
                             <span>Order ID</span>
                             <span>Order Value</span>
@@ -1593,7 +1593,7 @@ function BrandsPanel() {
       ) : (
         <>
           <div className="flex items-center gap-2 overflow-x-auto pb-1">
-            <div className="shrink-0 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            <div className="shrink-0 text-mini font-semibold uppercase tracking-wide text-muted-foreground">
               Sort by
             </div>
             {BRAND_SORTS.map((s) => (
@@ -1619,13 +1619,13 @@ function BrandsPanel() {
                 </div>
                 <div className="mt-3 flex gap-2">
                   <div className="flex-1 rounded-xl bg-surface-2/60 px-3 py-2">
-                    <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                    <div className="text-micro uppercase tracking-wide text-muted-foreground">
                       Orders
                     </div>
                     <div className="text-sm font-semibold">{r.orders}</div>
                   </div>
                   <div className="flex-1 rounded-xl bg-surface-2/60 px-3 py-2 text-right">
-                    <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                    <div className="text-micro uppercase tracking-wide text-muted-foreground">
                       Average Order Value
                     </div>
                     <div className="text-sm font-semibold">₹{r.avgOrderValue.toLocaleString()}</div>
@@ -1633,13 +1633,13 @@ function BrandsPanel() {
                 </div>
                 <div className="mt-2 flex gap-2">
                   <div className="flex-1 rounded-xl bg-surface-2/60 px-3 py-2">
-                    <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                    <div className="text-micro uppercase tracking-wide text-muted-foreground">
                       Products monetised
                     </div>
                     <div className="text-sm font-semibold">{r.productsAttached}</div>
                   </div>
                   <div className="flex-1 rounded-xl bg-surface-2/60 px-3 py-2 text-right">
-                    <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                    <div className="text-micro uppercase tracking-wide text-muted-foreground">
                       Conv. rate
                     </div>
                     <div className="text-sm font-semibold">{r.convRate.toFixed(1)}%</div>

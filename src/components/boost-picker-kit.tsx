@@ -43,10 +43,10 @@ export function SelectDot({ on, small }: { on: boolean; small?: boolean }) {
 export function RailLabel({ text, metric }: { text: string; metric: string }) {
   return (
     <div className="mb-2 flex items-baseline justify-between gap-2">
-      <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-muted-foreground">
+      <p className="text-micro font-bold uppercase tracking-[0.14em] text-muted-foreground">
         {text}
       </p>
-      <p className="text-[9.5px] font-semibold text-muted-foreground/70">{metric}</p>
+      <p className="text-micro font-semibold text-muted-foreground/70">{metric}</p>
     </div>
   );
 }
@@ -56,8 +56,8 @@ export function ScoreRing({ score }: { score: number }) {
   const r = 20;
   const c = 2 * Math.PI * r;
   return (
-    <div className="relative grid h-12 w-12 shrink-0 place-items-center">
-      <svg viewBox="0 0 48 48" className="h-12 w-12 -rotate-90">
+    <div className="relative grid h-14 w-14 shrink-0 place-items-center">
+      <svg viewBox="0 0 48 48" className="h-14 w-14 -rotate-90">
         <circle cx="24" cy="24" r={r} fill="none" strokeWidth="4.5" className="stroke-border/70" />
         <motion.circle
           cx="24"
@@ -73,7 +73,7 @@ export function ScoreRing({ score }: { score: number }) {
           className="stroke-primary"
         />
       </svg>
-      <span className="absolute text-[11px] font-bold tabular-nums">{score}%</span>
+      <span className="absolute text-xs font-bold tabular-nums">{score}%</span>
     </div>
   );
 }
@@ -94,29 +94,29 @@ export function PickerHeader({
   onGuide: () => void;
 }) {
   return (
-    <header className="flex items-center gap-3 rounded-3xl border border-border bg-surface p-3.5 shadow-sm">
+    <header className="flex items-center gap-3.5 rounded-3xl border border-border bg-surface p-4 shadow-sm">
       <ScoreRing score={score} />
       <div className="min-w-0 flex-1">
-        <p className="text-[9.5px] font-bold uppercase tracking-[0.14em] text-muted-foreground">
+        <p className="text-micro font-bold uppercase tracking-[0.14em] text-muted-foreground">
           {eyebrow}
         </p>
-        <h2 className="font-display text-[19px] font-bold leading-tight tracking-tight">
+        <h2 className="mt-0.5 font-display text-[22px] font-bold leading-tight tracking-tight">
           {heading}
         </h2>
       </div>
       <div className="shrink-0 text-right">
-        <p className="font-display text-[17px] font-bold leading-none text-primary">
+        <p className="font-display text-[19px] font-bold leading-none text-primary">
           +{pointsLabel(points)}
         </p>
-        <p className="mt-0.5 text-[9.5px] font-semibold text-muted-foreground">pts available</p>
+        <p className="mt-1 text-micro font-semibold text-muted-foreground">pts available</p>
       </div>
       <button
         type="button"
         onClick={onGuide}
         aria-label="How boosting works"
-        className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-surface-2 text-muted-foreground ring-1 ring-border transition hover:text-primary"
+        className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-surface-2 text-muted-foreground ring-1 ring-border transition hover:text-primary"
       >
-        <Info className="h-4 w-4" />
+        <Info className="h-4.5 w-4.5" />
       </button>
     </header>
   );
@@ -165,7 +165,7 @@ export function QueueToolbar<K extends string>({
           value={query}
           onChange={(e) => onQuery(e.target.value)}
           placeholder={placeholder}
-          className="w-full bg-transparent text-[13px] font-medium outline-none placeholder:text-foreground/45"
+          className="w-full bg-transparent text-body font-medium outline-none placeholder:text-foreground/45"
         />
         {query && (
           <button
@@ -184,7 +184,7 @@ export function QueueToolbar<K extends string>({
           type="button"
           onClick={() => setOpen((v) => !v)}
           aria-expanded={open}
-          className={`flex h-[42px] items-center gap-1.5 whitespace-nowrap rounded-full px-4 text-[13px] font-bold transition ${
+          className={`flex h-[42px] items-center gap-1.5 whitespace-nowrap rounded-full px-4 text-body font-bold transition ${
             sort !== neutralSort
               ? "bg-foreground text-background"
               : "bg-surface-2 text-foreground hover:bg-surface-2/70"
@@ -213,7 +213,7 @@ export function QueueToolbar<K extends string>({
                     onSort(o.key);
                     setOpen(false);
                   }}
-                  className={`flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-left text-[13px] font-semibold transition hover:bg-surface-2 ${
+                  className={`flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-left text-body font-semibold transition hover:bg-surface-2 ${
                     o.key === sort ? "text-primary" : "text-foreground"
                   }`}
                 >
@@ -262,7 +262,7 @@ export function FilterChipRow<K extends string>({
               aria-pressed={on}
               disabled={n === 0}
               onClick={() => onFilter(f.key)}
-              className={`inline-flex min-h-8 shrink-0 items-center gap-1.5 rounded-full px-3 text-[11px] font-bold transition disabled:opacity-35 ${
+              className={`inline-flex min-h-8 shrink-0 items-center gap-1.5 rounded-full px-3 text-mini font-bold transition disabled:opacity-35 ${
                 on
                   ? "bg-foreground text-background shadow-sm"
                   : "bg-surface text-muted-foreground ring-1 ring-border hover:text-foreground"
@@ -278,7 +278,7 @@ export function FilterChipRow<K extends string>({
         type="button"
         onClick={onToggleAll}
         disabled={toggleDisabled}
-        className={`inline-flex min-h-8 shrink-0 items-center gap-1 rounded-full px-3 text-[11px] font-bold transition disabled:opacity-40 ${
+        className={`inline-flex min-h-8 shrink-0 items-center gap-1 rounded-full px-3 text-mini font-bold transition disabled:opacity-40 ${
           allSelected
             ? "bg-foreground text-background"
             : "bg-surface text-primary ring-1 ring-primary/25 hover:bg-primary/10"
@@ -344,7 +344,7 @@ export function SelectionBar({
           whileTap={has ? { scale: 0.98 } : undefined}
           onClick={onStart}
           disabled={!has}
-          className={`inline-flex flex-1 items-center justify-center gap-2 rounded-2xl px-4 py-3.5 text-[15px] font-extrabold transition ${
+          className={`inline-flex flex-1 items-center justify-center gap-2 rounded-2xl px-4 py-3.5 text-lead font-extrabold transition ${
             has
               ? "bg-gradient-primary text-primary-foreground shadow-glow"
               : "bg-surface-2 text-muted-foreground ring-1 ring-inset ring-border"
@@ -365,12 +365,12 @@ export function SelectionBar({
               </motion.span>{" "}
               {selectedCount === 1 ? unit : unitPlural}
               {selectedPoints > 0 && (
-                <span className="rounded-full bg-white/20 px-2 py-0.5 text-[11px] font-bold">
+                <span className="rounded-full bg-white/20 px-2 py-0.5 text-mini font-bold">
                   +{pointsLabel(selectedPoints)} pts
                 </span>
               )}
               {coins !== undefined && (
-                <span className="inline-flex items-center gap-1 rounded-full bg-white/20 px-2 py-0.5 text-[11px] font-bold tabular-nums">
+                <span className="inline-flex items-center gap-1 rounded-full bg-white/20 px-2 py-0.5 text-mini font-bold tabular-nums">
                   <Coins className="h-3 w-3" /> {coins}
                 </span>
               )}
@@ -434,7 +434,7 @@ export function LaunchScreen({
           transition={{ delay: 0.22, duration: 0.32 }}
           className="mt-5"
         >
-          <p className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-3 py-1 text-[11px] font-extrabold uppercase tracking-wide text-primary">
+          <p className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-3 py-1 text-mini font-extrabold uppercase tracking-wide text-primary">
             <Sparkles className="h-3 w-3" /> {badge}
           </p>
           <h2 className="mt-2 font-display text-2xl font-bold">{title}</h2>
@@ -471,55 +471,71 @@ export function ReviewProgressHeader({
   onGuide: () => void;
 }) {
   const pct = (n: number) => (total > 0 ? (n / total) * 100 : 0);
+  // A one-item run has nothing to track: the bar can only be empty or full, and
+  // "0 applied · 0 skipped · 1 left" is three numbers restating "1/1". Both rows
+  // collapse so the rewrite gets the height instead.
+  const showTrack = total > 1;
   return (
-    <div className="shrink-0 pb-3">
+    <div className={`shrink-0 ${showTrack ? "pb-3" : "pb-2"}`}>
       <div className="flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2.5">
           <LiveScorePill label={label} score={score} />
-          <p className="min-w-0 text-[11px] font-semibold leading-tight text-muted-foreground">
-            <span className="tabular-nums text-foreground">
-              {Math.min(index + 1, total)}/{total}
-            </span>{" "}
-            in queue
-            <span className="block text-[10px] font-medium text-muted-foreground/80">{hint}</span>
+          <p className="min-w-0 text-mini font-semibold leading-tight text-muted-foreground">
+            {total > 1 ? (
+              <>
+                <span className="tabular-nums text-foreground">
+                  {Math.min(index + 1, total)}/{total}
+                </span>{" "}
+                in queue
+                <span className="block text-micro font-medium text-muted-foreground/80">
+                  {hint}
+                </span>
+              </>
+            ) : (
+              <span className="text-foreground">Just this one</span>
+            )}
           </p>
         </div>
         <button
           type="button"
           onClick={onGuide}
-          className="inline-flex min-h-8 shrink-0 items-center gap-1 rounded-full bg-surface px-2.5 text-[11px] font-bold text-primary ring-1 ring-primary/20 transition hover:bg-primary/10"
+          className="inline-flex min-h-8 shrink-0 items-center gap-1 rounded-full bg-surface px-2.5 text-mini font-bold text-primary ring-1 ring-primary/20 transition hover:bg-primary/10"
         >
           <Info className="h-3 w-3" /> How it works
         </button>
       </div>
 
-      {/* Segmented track: applied (green) → skipped (grey) → remaining. */}
-      <div className="mt-2.5 flex h-1.5 overflow-hidden rounded-full bg-surface-2 ring-1 ring-inset ring-border/60">
-        <motion.div
-          className="h-full bg-emerald-500"
-          animate={{ width: `${pct(approvedCount)}%` }}
-          transition={{ type: "spring", stiffness: 220, damping: 30 }}
-        />
-        <motion.div
-          className="h-full bg-muted-foreground/35"
-          animate={{ width: `${pct(skippedCount)}%` }}
-          transition={{ type: "spring", stiffness: 220, damping: 30 }}
-        />
-      </div>
+      {showTrack && (
+        <>
+          {/* Segmented track: applied (green) → skipped (grey) → remaining. */}
+          <div className="mt-2.5 flex h-1.5 overflow-hidden rounded-full bg-surface-2 ring-1 ring-inset ring-border/60">
+            <motion.div
+              className="h-full bg-emerald-500"
+              animate={{ width: `${pct(approvedCount)}%` }}
+              transition={{ type: "spring", stiffness: 220, damping: 30 }}
+            />
+            <motion.div
+              className="h-full bg-muted-foreground/35"
+              animate={{ width: `${pct(skippedCount)}%` }}
+              transition={{ type: "spring", stiffness: 220, damping: 30 }}
+            />
+          </div>
 
-      <div className="mt-1.5 flex items-center justify-between text-[10px] font-semibold tabular-nums">
-        <span className="inline-flex items-center gap-1 text-emerald-600">
-          <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-          {approvedCount} applied
-        </span>
-        <span className="inline-flex items-center gap-1 text-muted-foreground">
-          <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/40" />
-          {skippedCount} skipped
-        </span>
-        <span className="text-muted-foreground/70">
-          {Math.max(total - approvedCount - skippedCount, 0)} left
-        </span>
-      </div>
+          <div className="mt-1.5 flex items-center justify-between text-micro font-semibold tabular-nums">
+            <span className="inline-flex items-center gap-1 text-emerald-600">
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+              {approvedCount} applied
+            </span>
+            <span className="inline-flex items-center gap-1 text-muted-foreground">
+              <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/40" />
+              {skippedCount} skipped
+            </span>
+            <span className="text-muted-foreground/70">
+              {Math.max(total - approvedCount - skippedCount, 0)} left
+            </span>
+          </div>
+        </>
+      )}
     </div>
   );
 }

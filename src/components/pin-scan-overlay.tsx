@@ -5,6 +5,10 @@ import { Search, Sparkles, Check, Link2, ArrowRight, PackageSearch } from "lucid
 // What's happening, rotated while the reverse-image search runs — a mix of
 // "what we're doing right now" and the value behind it, so the wait teaches
 // instead of stalling. On-brand voice, kept short enough to read at a glance.
+//
+// Two sets, because after detection lands we know something we didn't before:
+// WHAT is in the pin. Saying "matching your shoes" beats a generic spinner
+// line, and it is true — that is the stage actually running.
 const SCAN_MESSAGES = [
   "Reading your pin for shoppable products…",
   "Matching only retailers that pay you commission…",
@@ -12,6 +16,15 @@ const SCAN_MESSAGES = [
   "Ranking the closest visual matches…",
 ];
 
+const MATCHING_MESSAGES = [
+  "Finding the closest visual matches…",
+  "Comparing colour, pattern and shape…",
+  "Checking live prices & stock…",
+  "Keeping only retailers that pay you…",
+];
+
+/** The phases, in order. `useScanPhase` (hooks/use-scan-phase.ts) owns the
+ * timing that moves between them. */
 export type ScanPhase = "scanning" | "found" | "empty";
 
 /**
@@ -29,24 +42,36 @@ export type ScanPhase = "scanning" | "found" | "empty";
 export function PinScanOverlay({
   imageUrl,
   phase,
-  matchCount = 0,
+  found = [],
   onContinue,
   onSkip,
 }: {
   imageUrl: string | null;
   phase: ScanPhase;
-  matchCount?: number;
+  /** The products detection named, in order — rendered as chips the moment
+   * they are known, which is several seconds before their matches arrive.
+   * This is the difference between a wait that looks stuck and one that
+   * visibly got somewhere: the user reads back the items from their own pin
+   * while the searches for them are still running. */
+  found?: string[];
   // Advance to the attach screen — from the empty-state "Continue" button.
   onContinue: () => void;
   // Bail out of the scan early, straight to manual entry.
   onSkip: () => void;
 }) {
+  const matching = found.length > 0;
+  const lines = matching ? MATCHING_MESSAGES : SCAN_MESSAGES;
+
   const [msg, setMsg] = useState(0);
   useEffect(() => {
     if (phase !== "scanning") return;
-    const t = setInterval(() => setMsg((m) => (m + 1) % SCAN_MESSAGES.length), 2200);
+    const t = setInterval(() => setMsg((m) => (m + 1) % lines.length), 2200);
     return () => clearInterval(t);
-  }, [phase]);
+  }, [phase, lines.length]);
+
+  // Restart the rotation when the copy switches sets, so the first line of the
+  // new set is the one that gets read rather than whatever index carried over.
+  useEffect(() => setMsg(0), [matching]);
 
   return (
     <motion.div
@@ -159,15 +184,40 @@ export function PinScanOverlay({
                 exit={{ opacity: 0, y: -8 }}
               >
                 <h2 className="font-display text-2xl font-bold tracking-tight text-foreground">
-                  Finding your products
+                  {matching
+                    ? `Matching ${found.length} ${found.length === 1 ? "product" : "products"}`
+                    : "Finding your products"}
                 </h2>
+                {/* What detection actually found, as soon as it knows. Each
+                    chip is one tab that is about to appear. */}
+                {matching && (
+                  <div className="mt-3 flex flex-wrap items-center justify-center gap-1.5">
+                    {found.map((label, i) => (
+                      <motion.span
+                        key={`${label}-${i}`}
+                        initial={{ opacity: 0, scale: 0.8, y: 4 }}
+                        animate={{ opacity: 1, scale: 1, y: 0 }}
+                        transition={{
+                          delay: i * 0.08,
+                          type: "spring",
+                          stiffness: 420,
+                          damping: 24,
+                        }}
+                        className="inline-flex items-center gap-1 rounded-full border border-primary/20 bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary"
+                      >
+                        <Check className="h-3 w-3" strokeWidth={3} />
+                        {label}
+                      </motion.span>
+                    ))}
+                  </div>
+                )}
                 {/* Rotating status line */}
                 <div className="mt-2 flex min-h-[2.5em] items-start justify-center">
                   <p
                     key={msg}
                     className="animate-hint-in max-w-xs text-sm leading-snug text-muted-foreground"
                   >
-                    {SCAN_MESSAGES[msg]}
+                    {lines[msg]}
                   </p>
                 </div>
                 {/* Indeterminate progress sweep */}
@@ -185,7 +235,7 @@ export function PinScanOverlay({
                 exit={{ opacity: 0, y: -8 }}
               >
                 <h2 className="font-display text-2xl font-bold tracking-tight text-foreground">
-                  {matchCount} match{matchCount === 1 ? "" : "es"} found
+                  Matches found
                 </h2>
                 <p className="mt-2 inline-flex items-center gap-1.5 text-sm font-medium text-emerald-600">
                   <Sparkles className="h-4 w-4" /> Opening your matches…

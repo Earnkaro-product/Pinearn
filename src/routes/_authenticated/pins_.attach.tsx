@@ -463,7 +463,7 @@ function TabButton({
   return (
     <button
       onClick={onClick}
-      className={`relative -mb-px px-1 pb-3 pt-1 text-[15px] font-semibold transition ${
+      className={`relative -mb-px px-1 pb-3 pt-1 text-lead font-semibold transition ${
         active ? "text-foreground" : "text-muted-foreground hover:text-foreground"
       }`}
     >

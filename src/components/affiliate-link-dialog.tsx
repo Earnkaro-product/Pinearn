@@ -15,6 +15,7 @@ import { useNavigate } from "@tanstack/react-router";
 
 import { toast } from "sonner";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { AppSheet } from "@/components/app-sheet";
 import { supabase } from "@/integrations/supabase/client";
 
 export const OPEN_AFFILIATE_DIALOG_EVENT = "pinearn:open-affiliate-dialog";
@@ -47,15 +48,6 @@ export function AffiliateLinkDialog() {
     window.addEventListener(OPEN_AFFILIATE_DIALOG_EVENT, onOpen);
     return () => window.removeEventListener(OPEN_AFFILIATE_DIALOG_EVENT, onOpen);
   }, []);
-
-  useEffect(() => {
-    if (!open) return;
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") setOpen(false);
-    }
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [open]);
 
   const create = useMutation({
     mutationFn: async () => {
@@ -135,14 +127,13 @@ export function AffiliateLinkDialog() {
   if (!open) return null;
 
   return (
-    <div
-      className="fixed inset-0 z-[100] flex items-end justify-center bg-black/50 px-4 pb-6 pt-24 backdrop-blur-sm sm:items-center sm:pb-4"
-      onClick={() => setOpen(false)}
+    <AppSheet
+      onClose={() => setOpen(false)}
+      label="Add an affiliate product"
+      layout="panel"
+      grabber={false}
     >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-md overflow-hidden rounded-3xl border border-border bg-surface shadow-elevate"
-      >
+      <>
         <div className="flex items-center justify-between px-6 pt-5">
           <div className="flex items-center gap-2 text-primary">
             {pickingCollection ? (
@@ -169,7 +160,9 @@ export function AffiliateLinkDialog() {
           </button>
         </div>
 
-        <div className="px-6 pb-6 pt-3">
+        {/* This sheet keeps its own padding, so it also owes the home indicator
+            its clearance — the shell only adds that for the simple layout. */}
+        <div className="px-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-3">
           {createdProduct && pickingCollection ? (
             <CollectionPicker
               product={createdProduct}
@@ -236,8 +229,8 @@ export function AffiliateLinkDialog() {
             </>
           )}
         </div>
-      </div>
-    </div>
+      </>
+    </AppSheet>
   );
 }
 
@@ -463,9 +456,7 @@ export function ShareSheet({ link, onCopy, onAddToStorefront, onCreateAnother }:
               className="flex w-16 shrink-0 flex-col items-center gap-1.5 text-center"
             >
               {a.node}
-              <span className="text-[11px] font-medium leading-tight text-foreground">
-                {a.label}
-              </span>
+              <span className="text-mini font-medium leading-tight text-foreground">{a.label}</span>
             </button>
           ))}
         </div>

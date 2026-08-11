@@ -50,8 +50,8 @@ export function PinterestSyncBanner({ compact = false }: { compact?: boolean }) 
           <AlertTriangle className="h-4 w-4" />
         </span>
         <div className="min-w-0 flex-1">
-          <p className="text-[13px] font-bold text-amber-900">Pinterest needs reconnecting</p>
-          <p className="mt-0.5 text-[12px] leading-snug text-amber-800/85">
+          <p className="text-body font-bold text-amber-900">Pinterest needs reconnecting</p>
+          <p className="mt-0.5 text-xs leading-snug text-amber-800/85">
             Its access expired or was revoked, so nothing new can be imported. Your pins, boards and
             earnings in Pinearn are untouched.
           </p>
@@ -60,7 +60,7 @@ export function PinterestSyncBanner({ compact = false }: { compact?: boolean }) 
           type="button"
           onClick={reconnect}
           disabled={reconnecting}
-          className="inline-flex min-h-9 shrink-0 items-center gap-1.5 rounded-full bg-gradient-primary px-3.5 text-[12px] font-bold text-primary-foreground shadow-glow disabled:opacity-60"
+          className="inline-flex min-h-9 shrink-0 items-center gap-1.5 rounded-full bg-gradient-primary px-3.5 text-xs font-bold text-primary-foreground shadow-glow disabled:opacity-60"
         >
           {reconnecting ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : null}
           Reconnect
@@ -75,7 +75,7 @@ export function PinterestSyncBanner({ compact = false }: { compact?: boolean }) 
         type="button"
         onClick={syncNow}
         disabled={isSyncing}
-        className="inline-flex min-h-8 items-center gap-1.5 rounded-full bg-surface px-3 text-[11px] font-semibold text-muted-foreground ring-1 ring-border transition hover:text-foreground disabled:opacity-60"
+        className="inline-flex min-h-8 items-center gap-1.5 rounded-full bg-surface px-3 text-mini font-semibold text-muted-foreground ring-1 ring-border transition hover:text-foreground disabled:opacity-60"
       >
         <RefreshCw className={`h-3 w-3 ${isSyncing ? "animate-spin" : ""}`} />
         {isSyncing ? "Syncing…" : lastSyncedLabel(state)}
@@ -86,19 +86,19 @@ export function PinterestSyncBanner({ compact = false }: { compact?: boolean }) 
   return (
     <div className="flex items-center justify-between gap-3 rounded-2xl border border-border bg-surface px-3.5 py-2.5">
       <div className="min-w-0">
-        <p className="truncate text-[12px] font-semibold">
+        <p className="truncate text-xs font-semibold">
           {state.username ? `@${state.username}` : "Pinterest"} ·{" "}
           <span className="font-medium text-muted-foreground">
             {state.counts.pins.toLocaleString()} pins, {state.counts.boards.toLocaleString()} boards
           </span>
         </p>
-        <p className="text-[11px] text-muted-foreground">{lastSyncedLabel(state)}</p>
+        <p className="text-mini text-muted-foreground">{lastSyncedLabel(state)}</p>
       </div>
       <button
         type="button"
         onClick={syncNow}
         disabled={isSyncing}
-        className="inline-flex min-h-9 shrink-0 items-center gap-1.5 rounded-full bg-surface-2 px-3.5 text-[12px] font-bold text-primary ring-1 ring-border transition hover:bg-primary/10 disabled:opacity-60"
+        className="inline-flex min-h-9 shrink-0 items-center gap-1.5 rounded-full bg-surface-2 px-3.5 text-xs font-bold text-primary ring-1 ring-border transition hover:bg-primary/10 disabled:opacity-60"
       >
         <RefreshCw className={`h-3.5 w-3.5 ${isSyncing ? "animate-spin" : ""}`} />
         {isSyncing ? "Syncing…" : "Sync now"}

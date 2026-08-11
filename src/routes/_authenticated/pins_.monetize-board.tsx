@@ -163,12 +163,7 @@ function MonetizeBoardPage() {
   // the object-detection components attached to each match — same as the pin
   // attach screen.
   const [activeTag, setActiveTag] = useState<string | null>(null);
-  // Static category pills shown above the matches — not wired to real
-  // filtering yet, just the fixed set of chips product asked for. Same as
-  // the pin attach screen.
-  const [activeCategoryPill, setActiveCategoryPill] = useState<(typeof CATEGORY_PILLS)[number]>(
-    CATEGORY_PILLS[0],
-  );
+  // Active product-tag only; static category pills removed.
   // Populated progressively — one entry per match the instant its own CK
   // lookup settles (ProgressiveSuggestionCard's onSettled), independent of
   // every other match. `null` means CK confirmed it's unavailable/no-match;
@@ -304,13 +299,12 @@ function MonetizeBoardPage() {
       // deliberate way to re-run it once.
       retry: false,
       refetchOnWindowFocus: false,
-      // An image nobody has scanned before answers from the whole image first,
-      // with detection (~6s) and the per-crop searches already running behind
-      // it. Poll so the per-component tag pills appear on their own the moment
-      // those land — normally on the first poll — mirroring the pin attach
-      // screen. Cheap: the crop searches are prefetched, so the poll is served
-      // from cache rather than starting a second round of them. Stop as soon as
-      // tags arrive, or after ~80s if detection produced none.
+      // The board flow asks for the complete set in one value (it prefetches a
+      // window of pins ahead of the user, so a pin is normally already warm by
+      // the time it is shown) and that response is tagged from the start —
+      // detection is no longer something results arrive without. This poll is
+      // now only a safety net for the case where detection found nothing
+      // taggable; it stops on the first tagged response, or after ~80s.
       refetchInterval: (query: {
         state: { data?: { matches?: RawVisualMatch[] } };
         queryKey: unknown[];
@@ -358,8 +352,8 @@ function MonetizeBoardPage() {
   const currentMatches: RawVisualMatch[] = currentMatchQuery?.data?.matches ?? [];
 
   // Product-tag pills (from object detection). Unique tags in first-seen order,
-  // each with its match count. Pills only show when detection produced ≥2
-  // distinct components; otherwise the grid is just one list.
+  // each with its match count. Pills show whenever detection produced at least
+  // one named component.
   const tagByLink = useMemo(
     () => new Map(currentMatches.map((m) => [m.link, m.tag] as const)),
     [currentMatches],
@@ -864,7 +858,7 @@ function MonetizeBoardPage() {
       ) : (
         <div className="mx-auto flex h-[calc(100dvh-6.5rem)] max-w-md flex-col px-1">
           {/* Tiny pin-count summary, directly above the navigator. */}
-          <div className="flex shrink-0 items-center justify-center gap-2 pb-2 text-[11px] font-medium text-muted-foreground">
+          <div className="flex shrink-0 items-center justify-center gap-2 pb-2 text-mini font-medium text-muted-foreground">
             <span className="tabular-nums">
               Reviewed {reviewedCount}/{total}
             </span>
@@ -876,7 +870,7 @@ function MonetizeBoardPage() {
 
           {/* Current pin's Pinterest traffic — impressions + clicks. */}
           {current && (
-            <div className="flex shrink-0 items-center justify-center gap-3 pb-2 text-[11px] font-semibold text-muted-foreground">
+            <div className="flex shrink-0 items-center justify-center gap-3 pb-2 text-mini font-semibold text-muted-foreground">
               <span className="inline-flex items-center gap-1">
                 <Eye className="h-3.5 w-3.5" /> {fmtCompact(current.impressions)} impressions
               </span>
@@ -941,7 +935,7 @@ function MonetizeBoardPage() {
                     className="space-y-3"
                   >
                     <div className="flex items-center justify-between px-0.5">
-                      <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      <p className="flex items-center gap-1.5 text-mini font-semibold uppercase tracking-wide text-muted-foreground">
                         <Sparkles className="h-3.5 w-3.5 text-primary" />
                         {currentMatches.length === 0
                           ? "Add a product"
@@ -950,7 +944,7 @@ function MonetizeBoardPage() {
                             : `${currentMatches.length} suggested matches`}
                       </p>
                       {currentMatches.length > 0 && (
-                        <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">
+                        <span className="rounded-full bg-primary/10 px-2 py-0.5 text-micro font-semibold text-primary">
                           {currentMatches.filter((m) => !deselectedRecLinks.has(m.link)).length}{" "}
                           selected
                         </span>
@@ -963,27 +957,12 @@ function MonetizeBoardPage() {
                       </p>
                     )}
 
-                    {/* Static category pills. Same as the pin attach screen. */}
-                    <div className="no-scrollbar -mx-1 flex items-center gap-2 overflow-x-auto px-1">
-                      {CATEGORY_PILLS.map((label) => (
-                        <button
-                          key={label}
-                          type="button"
-                          onClick={() => setActiveCategoryPill(label)}
-                          className={`inline-flex shrink-0 items-center rounded-full px-3.5 py-1.5 text-xs font-bold transition ${
-                            activeCategoryPill === label
-                              ? "bg-gradient-primary text-primary-foreground shadow-glow"
-                              : "bg-surface-2 text-muted-foreground hover:text-foreground"
-                          }`}
-                        >
-                          {label}
-                        </button>
-                      ))}
-                    </div>
+                    {/* Category pills removed here too — use live filters. */}
 
-                    {/* Product-tag pills — one per detected component. Only shown
-                        when detection found ≥2. Same as the pin attach screen. */}
-                    {tags.length >= 2 && (
+                    {/* Product-tag pills — one per detected component. Shown
+                        whenever detection named at least one; a single category
+                        still gets "All" + its own pill. Same as pin attach. */}
+                    {tags.length >= 1 && (
                       <div className="no-scrollbar -mx-1 flex items-center gap-2 overflow-x-auto px-1">
                         <TagTab
                           label="All"
@@ -1070,7 +1049,7 @@ function MonetizeBoardPage() {
                 onClick={handleApprove}
                 aria-label="Approve this pin"
                 disabled={currentMatchesLoading || (!!current && pendingIds.has(current.pinId))}
-                className="inline-flex flex-1 items-center justify-center gap-2 rounded-2xl bg-gradient-primary px-4 py-3.5 text-[15px] font-extrabold text-primary-foreground shadow-glow transition disabled:opacity-60"
+                className="inline-flex flex-1 items-center justify-center gap-2 rounded-2xl bg-gradient-primary px-4 py-3.5 text-lead font-extrabold text-primary-foreground shadow-glow transition disabled:opacity-60"
               >
                 {current && pendingIds.has(current.pinId) ? (
                   <Loader2 className="h-5 w-5 animate-spin" />
@@ -1085,7 +1064,7 @@ function MonetizeBoardPage() {
               whileTap={{ scale: 0.98 }}
               onClick={handleApproveAllClick}
               disabled={remaining.length === 0}
-              className="inline-flex w-full items-center justify-center rounded-2xl border-2 border-primary bg-surface px-3 py-3 text-[13px] font-bold text-primary transition disabled:opacity-40"
+              className="inline-flex w-full items-center justify-center rounded-2xl border-2 border-primary bg-surface px-3 py-3 text-body font-bold text-primary transition disabled:opacity-40"
             >
               Approve all remaining
             </motion.button>
@@ -1162,7 +1141,7 @@ function MonetizeBoardPage() {
                   )}
 
                   {/* divider */}
-                  <div className="my-4 flex items-center gap-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+                  <div className="my-4 flex items-center gap-3 text-mini font-semibold uppercase tracking-wide text-muted-foreground/70">
                     <span className="h-px flex-1 bg-border" /> or{" "}
                     <span className="h-px flex-1 bg-border" />
                   </div>
@@ -1197,7 +1176,7 @@ function MonetizeBoardPage() {
                               <ImageIcon className="h-4 w-4" />
                             </div>
                             <div className="min-w-0 flex-1">
-                              <p className="truncate text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
+                              <p className="truncate text-micro font-bold uppercase tracking-wide text-muted-foreground">
                                 {hostBrand(p.url)}
                               </p>
                               <p className="truncate text-sm font-semibold leading-tight">
@@ -1233,7 +1212,7 @@ function MonetizeBoardPage() {
                                 )}
                               </div>
                               <div className="min-w-0 flex-1">
-                                <p className="truncate text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
+                                <p className="truncate text-micro font-bold uppercase tracking-wide text-muted-foreground">
                                   {hostBrand(p.affiliate_url)}
                                 </p>
                                 <p className="truncate text-sm font-semibold leading-tight">
@@ -1299,7 +1278,7 @@ function TagTab({
     >
       {label}
       <span
-        className={`rounded-full px-1.5 text-[10px] font-bold ${
+        className={`rounded-full px-1.5 text-micro font-bold ${
           active ? "bg-white/25 text-primary-foreground" : "bg-foreground/10 text-foreground/70"
         }`}
       >
@@ -1322,7 +1301,7 @@ function AddProductTile({ onClick }: { onClick: () => void }) {
         <Plus className="h-6 w-6" strokeWidth={2.5} />
       </span>
       <span className="text-xs font-bold">Add product</span>
-      <span className="px-1 text-center text-[10px] font-medium text-muted-foreground">
+      <span className="px-1 text-center text-micro font-medium text-muted-foreground">
         Paste your own link
       </span>
     </motion.button>
@@ -1501,7 +1480,7 @@ function BoardNavigator({
             ))}
           </div>
         </div>
-        <span className="absolute inset-x-0 bottom-0 bg-black/55 py-0.5 text-center text-[8px] font-bold uppercase tracking-wide text-white backdrop-blur-sm">
+        <span className="absolute inset-x-0 bottom-0 bg-black/55 py-0.5 text-center text-nano font-bold uppercase tracking-wide text-white backdrop-blur-sm">
           Board
         </span>
       </motion.button>
@@ -1540,7 +1519,7 @@ function BoardOverview({
 
   return (
     <div className="mx-auto flex h-[calc(100dvh-6.5rem)] max-w-md flex-col px-1">
-      <div className="flex shrink-0 items-center justify-center gap-2 pb-3 text-[11px] font-medium text-muted-foreground">
+      <div className="flex shrink-0 items-center justify-center gap-2 pb-3 text-mini font-medium text-muted-foreground">
         <span className="font-semibold text-emerald-600">{approved} approved</span>
         <span className="text-muted-foreground/40">•</span>
         <span>{skipped} skipped</span>
@@ -1593,7 +1572,7 @@ function BoardOverview({
                       </span>
                     )}
                     {selected && (
-                      <span className="absolute left-2 top-2 rounded-full bg-primary px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-primary-foreground shadow">
+                      <span className="absolute left-2 top-2 rounded-full bg-primary px-2 py-0.5 text-nano font-bold uppercase tracking-wide text-primary-foreground shadow">
                         Current
                       </span>
                     )}
@@ -1611,7 +1590,7 @@ function BoardOverview({
           whileTap={{ scale: 0.98 }}
           onClick={onApproveReady}
           disabled={readyCount === 0}
-          className="inline-flex items-center justify-center rounded-2xl bg-gradient-primary px-3 py-3 text-[13px] font-bold text-primary-foreground shadow-glow transition disabled:opacity-40"
+          className="inline-flex items-center justify-center rounded-2xl bg-gradient-primary px-3 py-3 text-body font-bold text-primary-foreground shadow-glow transition disabled:opacity-40"
         >
           {approved > 0 ? `Approve ${approved} pin${approved === 1 ? "" : "s"}` : "Approve pins"}
         </motion.button>
@@ -1619,7 +1598,7 @@ function BoardOverview({
           whileTap={{ scale: 0.98 }}
           onClick={onApproveAll}
           disabled={remainingCount === 0}
-          className="inline-flex items-center justify-center rounded-2xl border-2 border-primary bg-surface px-3 py-3 text-[13px] font-bold text-primary transition disabled:opacity-40"
+          className="inline-flex items-center justify-center rounded-2xl border-2 border-primary bg-surface px-3 py-3 text-body font-bold text-primary transition disabled:opacity-40"
         >
           Approve all remaining
         </motion.button>
@@ -2021,11 +2000,11 @@ function BoardApproving({
         <h2 className="mt-4 font-display text-[26px] font-extrabold leading-tight tracking-tight">
           {allMatched ? "Almost there — publishing" : "Sit back, we're on it"}
         </h2>
-        <p className="mx-auto mt-2 max-w-[17rem] text-[15px] leading-snug text-muted-foreground">
+        <p className="mx-auto mt-2 max-w-[17rem] text-lead leading-snug text-muted-foreground">
           Monetising {total} pin{total === 1 ? "" : "s"} in{" "}
           {boardName ? `“${boardName}”` : "your board"}.
         </p>
-        <p className="mx-auto mt-3 max-w-[16rem] text-[13px] leading-relaxed text-muted-foreground/80">
+        <p className="mx-auto mt-3 max-w-[16rem] text-body leading-relaxed text-muted-foreground/80">
           {allMatched ? "Wrapping up" : formatEta(remainingEta)} left — no need to wait here, we'll
           notify you the moment every pin is live.
         </p>

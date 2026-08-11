@@ -84,7 +84,7 @@ export function SubScoreBar({
           transition={{ duration: 0.9, ease: [0.22, 1, 0.36, 1] }}
         />
       </div>
-      {detail && <p className="mt-1.5 text-[11px] text-muted-foreground">{detail}</p>}
+      {detail && <p className="mt-1.5 text-mini text-muted-foreground">{detail}</p>}
     </>
   );
   if (!onClick) {
@@ -150,7 +150,7 @@ export function LiveScorePill({ label, score }: { label: string; score: number }
             exit={{ opacity: 0, y: -34 }}
             transition={{ duration: 0.9, ease: "easeOut" }}
             onAnimationComplete={() => setDelta(null)}
-            className="pointer-events-none absolute -top-1 right-1 rounded-full bg-emerald-500 px-2 py-0.5 text-[11px] font-extrabold text-white shadow"
+            className="pointer-events-none absolute -top-1 right-1 rounded-full bg-emerald-500 px-2 py-0.5 text-mini font-extrabold text-white shadow"
           >
             +{delta.n}%
           </motion.span>

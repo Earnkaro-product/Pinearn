@@ -43,7 +43,7 @@ export function BrandCard({ brand }: { brand: Brand }) {
       className="group flex h-full w-full snap-start flex-col items-center justify-center gap-1.5 rounded-2xl border border-border bg-surface p-2.5 text-center transition hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-elevate"
     >
       <BrandLogo brand={brand} size={44} />
-      <div className="mt-0.5 text-[10px] font-semibold text-primary">
+      <div className="mt-0.5 text-micro font-semibold text-primary">
         {brand.commission}% Earning
       </div>
     </Link>
@@ -59,7 +59,7 @@ function ViewAllCard() {
       <div className="grid h-11 w-11 place-items-center rounded-full bg-primary/10 text-primary">
         <ArrowRight className="h-5 w-5" />
       </div>
-      <span className="text-[10px] font-semibold text-primary">View all</span>
+      <span className="text-micro font-semibold text-primary">View all</span>
     </Link>
   );
 }

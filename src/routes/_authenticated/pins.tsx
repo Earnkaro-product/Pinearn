@@ -6,7 +6,8 @@ import { supabase } from "@/integrations/supabase/client";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion, Reorder, useDragControls } from "framer-motion";
 import { useScrollMorph } from "@/hooks/use-scroll-morph";
-import { PinScanOverlay, type ScanPhase } from "@/components/pin-scan-overlay";
+import { PinScanOverlay } from "@/components/pin-scan-overlay";
+import { useScanPhase } from "@/hooks/use-scan-phase";
 import {
   Plus,
   Link2,
@@ -24,10 +25,12 @@ import {
   Grip,
 } from "lucide-react";
 import { toast } from "sonner";
-import { visualSearchPin, takeDownPin, type CkResult } from "@/lib/pinterest.functions";
+import { takeDownPin, visualSearchComponents, type CkResult } from "@/lib/pinterest.functions";
+import { useVisualSearch } from "@/hooks/use-visual-search";
 import {
   SuggestionCard,
   ProgressiveSuggestionCard,
+  SuggestionCardSkeleton,
   realProductPrice,
 } from "@/components/suggestion-card";
 import { EducationalLoader, HINTS } from "@/components/rotating-hint";
@@ -96,22 +99,40 @@ export const RATIOS = [
   "aspect-[2/3]",
 ];
 
-export const CATEGORY_PILLS = [
-  "All",
-  "Top",
-  "Shirt",
-  "Pants",
-  "Art",
-  "Books",
-  "Accessories",
-] as const;
+export const CATEGORY_PILLS = ["Top", "Shirt", "Pants", "Art", "Books", "Accessories"] as const;
 
 function PinsPage() {
   const qc = useQueryClient();
+  const runComponents = useServerFn(visualSearchComponents);
   const navigate = useNavigate();
   const search = Route.useSearch();
   const [collectionFilter, setCollectionFilter] = useState<string>("live");
   const [openPinId, setOpenPinId] = useState<string | null>(null);
+
+  /** Start the scan on INTENT rather than on open.
+   *
+   * Detection is the one stage nothing can be shown before — the overlay has
+   * no products, no chips, nothing to say until it answers — and on a pin
+   * nobody has scanned yet it is a ~5s model call that only begins when the
+   * dialog mounts. Hovering (or touching) a card starts it a beat, or several
+   * seconds, earlier; by the time the dialog opens the answer is already in
+   * the cache under the very key it is about to ask for.
+   *
+   * Costs nothing on a pin that is never opened after all: the result is
+   * cached in Postgres and answers the next scan of that pin instantly, by
+   * whoever runs it. Same key, same arguments, same staleTime as the dialog's
+   * own query in useVisualSearch — a mismatch in any of the three would make
+   * this a wasted call rather than a head start.
+   */
+  const warmScan = (pin: Pin) => {
+    if (pin.status !== "draft" || !pin.image_url) return;
+    void qc.prefetchQuery({
+      queryKey: ["visual-components", pin.id],
+      queryFn: () => runComponents({ data: { pinId: pin.id, title: "", description: "" } }),
+      staleTime: Infinity,
+      retry: false,
+    });
+  };
 
   // Sync the "Drafts" filter chip from ?filter=drafts (e.g. after clicking Save draft).
   useEffect(() => {
@@ -346,6 +367,8 @@ function PinsPage() {
                 onClick={() => {
                   if (p.status === "draft") setOpenPinId(p.id);
                 }}
+                onPointerEnter={() => warmScan(p)}
+                onPointerDown={() => warmScan(p)}
                 className={`group overflow-hidden rounded-2xl bg-surface shadow-sm ring-1 ring-border/60 transition hover:shadow-elevate ${
                   p.status === "draft" ? "cursor-pointer" : ""
                 }`}
@@ -360,7 +383,7 @@ function PinsPage() {
                     <img src={p.image_url} alt="" className="block w-full h-auto" loading="lazy" />
                   )}
                   <span
-                    className="absolute right-2 top-2 rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide backdrop-blur"
+                    className="absolute right-2 top-2 rounded-full px-2.5 py-1 text-micro font-semibold uppercase tracking-wide backdrop-blur"
                     style={{
                       background:
                         p.status === "live"
@@ -480,14 +503,14 @@ export function PinDetailDialog({
 }) {
   const qc = useQueryClient();
   const navigate = useNavigate();
-  const runVisualSearch = useServerFn(visualSearchPin);
   // Closing the dialog (the ✕, backdrop, go-live — any unmount) terminates the
-  // matching pipeline: abort this pin's in-flight visual search and every
-  // product-details lookup its cards kicked off, so nothing keeps running in
-  // the background once the user has left.
+  // matching pipeline: abort this pin's in-flight detection, every component
+  // search it fanned out, and every product-details lookup its cards kicked
+  // off, so nothing keeps running in the background once the user has left.
   useEffect(() => {
     return () => {
-      void qc.cancelQueries({ queryKey: ["visual-search", pin.id] });
+      void qc.cancelQueries({ queryKey: ["visual-components", pin.id] });
+      void qc.cancelQueries({ queryKey: ["visual-component"] });
       void qc.cancelQueries({ queryKey: ["product-details"] });
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -526,68 +549,38 @@ export function PinDetailDialog({
   // components returned with the matches.
   const [activeTag, setActiveTag] = useState<string | null>(null);
   // Static category pills shown above the results — not wired to real
-  // filtering yet, just the fixed set of chips product asked for.
-  const [activeCategoryPill, setActiveCategoryPill] = useState<(typeof CATEGORY_PILLS)[number]>(
-    CATEGORY_PILLS[0],
-  );
+  // filtering yet — category pills removed (use real filters instead).
   const [manualUrl, setManualUrl] = useState(
     pin.external_url && !pin.product_id ? pin.external_url : "",
   );
 
-  // When this dialog opened — bounds the auto-poll below.
-  const openedAtRef = useRef(Date.now());
+  // The search, streamed in two stages — see useVisualSearch. `tabs` carry
+  // their own loading state, so a pill can render (and be tapped) while its
+  // products are still being found.
   const {
-    data: aiData,
-    isFetching: aiLoading,
-    refetch: refetchAI,
-  } = useQuery({
-    queryKey: ["visual-search", pin.id],
-    queryFn: async ({ signal }) => runVisualSearch({ data: { pinId: pin.id }, signal }),
-    staleTime: Infinity,
-    retry: false,
-    refetchOnWindowFocus: false,
-    // An image nobody has scanned before answers from the whole image first,
-    // with detection (~6s) and the per-crop searches already running behind it.
-    // Poll so the tabbed, per-component view appears on its own the moment
-    // those land — normally on the first poll — instead of waiting for a manual
-    // Retry. Cheap: the crop searches are prefetched, so the poll is served
-    // from cache rather than starting a second round of them. Stop as soon as
-    // tags arrive, or after ~80s if detection produced none. An image scanned
-    // before is tagged on the very first response, so this never fires for it.
-    refetchInterval: (query) => {
-      const data = query.state.data;
-      const hasTags = !!data?.suggestions?.some((s) => s.tag);
-      if (hasTags) return false;
-      if (Date.now() - openedAtRef.current > 80_000) return false;
-      return 7_000;
-    },
-  });
-  const suggestions = aiData?.suggestions ?? [];
+    tabs,
+    matches: suggestions,
+    isDetecting,
+    isLoading: aiLoading,
+    isRefining,
+  } = useVisualSearch({ pinId: pin.id });
 
-  // Full-screen scan experience shown while the visual search runs. It resolves
-  // to `found` (brief success beat, then auto-dismiss to the matches) or
-  // `empty` (tells the user no match and points them at manual entry before
-  // they continue). `scanAck` = the overlay has been dismissed (auto or by tap).
-  const [scanAck, setScanAck] = useState(false);
-  // Revisiting a pin whose search is already cached — no scan to show, go
-  // straight to the attach screen. Runs once on mount.
-  useEffect(() => {
-    if (!aiLoading && aiData) setScanAck(true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-  const scanPhase: ScanPhase | null = scanAck
-    ? null
-    : aiLoading
-      ? "scanning"
-      : suggestions.length > 0
-        ? "found"
-        : "empty";
-  // Once matches are in, hold the success beat briefly, then reveal them.
-  useEffect(() => {
-    if (scanPhase !== "found") return;
-    const t = setTimeout(() => setScanAck(true), 1000);
-    return () => clearTimeout(t);
-  }, [scanPhase]);
+  // Full-screen scan experience. Detection names the products in well under a
+  // second, so leaving on that alone dropped the user onto empty skeletons for
+  // the many seconds the searches really take. It now shows what was found
+  // straight away and holds briefly for the first tab's products (capped in
+  // useScanPhase), so the reveal lands on a grid with something in it. Skip is
+  // available the whole time.
+  // A named component is a result in itself — it becomes a tab. The untagged
+  // whole-image fallback has no label, so there it takes an actual match to
+  // count, which is what keeps a pin with nothing to sell out of the "found"
+  // ending and in the empty state that offers a manual link.
+  const firstTabReady = tabs.some((t) => !t.loading);
+  const { phase: scanPhase, dismiss: dismissScan } = useScanPhase({
+    searching: isDetecting,
+    hasResults: tabs.some((t) => !!t.label) || suggestions.length > 0,
+    productsReady: firstTabReady,
+  });
 
   // Progressive rendering: `suggestions` paints immediately (image/title/
   // source + Lens price, no CK wait) — each card resolves its own live
@@ -706,28 +699,52 @@ export function PinDetailDialog({
     ]);
   };
 
-  // Product-tag tabs (from object detection). Unique tags in first-seen order,
-  // each with its match count. Tabs only show when detection produced ≥2
-  // distinct components; otherwise the grid is just one list.
+  // Product-tag tabs, one per detected component, in prominence order. They
+  // come from `tabs` rather than from the matches, so a pill appears the
+  // moment detection names it — with a count of "…" until its own search
+  // lands. Deriving them from the matches (as this used to) meant no pill
+  // could exist until its products did, which is exactly the wait we're
+  // removing.
   const tagByLink = useMemo(
     () => new Map(suggestions.map((s) => [s.link, s.tag] as const)),
     [suggestions],
   );
+  // A pill earns its place by having something to show. It appears while its
+  // search is running (that's the point — the user sees what was found in the
+  // pin immediately) and is withdrawn if that search settles empty, because a
+  // tab that opens onto nothing is worse than a tab that was never offered.
+  const namedTabs = useMemo(
+    () => tabs.filter((t) => !!t.label && (t.loading || t.matches.length > 0)),
+    [tabs],
+  );
+  const tags = useMemo(() => [...new Set(namedTabs.map((t) => t.label))], [namedTabs]);
   const tagCounts = useMemo(() => {
     const m = new Map<string, number>();
-    for (const s of suggestions) if (s.tag) m.set(s.tag, (m.get(s.tag) ?? 0) + 1);
+    for (const t of namedTabs) m.set(t.label, (m.get(t.label) ?? 0) + t.matches.length);
     return m;
-  }, [suggestions]);
-  const tags = useMemo(() => [...tagCounts.keys()], [tagCounts]);
+  }, [namedTabs]);
+  // A tab is still working while any component sharing its label is.
+  const tagLoading = useMemo(() => {
+    const m = new Map<string, boolean>();
+    for (const t of namedTabs) m.set(t.label, (m.get(t.label) ?? false) || t.loading);
+    return m;
+  }, [namedTabs]);
   // Keep the active tab valid as results change.
   useEffect(() => {
-    if (activeTag && !tagCounts.has(activeTag)) setActiveTag(null);
-  }, [activeTag, tagCounts]);
+    if (activeTag && !tags.includes(activeTag)) setActiveTag(null);
+  }, [activeTag, tags]);
   const visibleAiLinks = useMemo(
     () =>
       activeTag ? orderedAiLinks.filter((l) => tagByLink.get(l) === activeTag) : orderedAiLinks,
     [activeTag, orderedAiLinks, tagByLink],
   );
+  // How many card silhouettes to hold open under the grid: one per pill still
+  // searching, so the layout doesn't jump as each set of products drops in.
+  const pendingCardCount = activeTag
+    ? tagLoading.get(activeTag)
+      ? 3
+      : 0
+    : Math.min(6, namedTabs.filter((t) => t.loading).length * 3);
 
   // Remove a product from the "Add more" selected-list — deselect an AI pick or
   // uncheck a picked product, keyed by its token.
@@ -906,15 +923,15 @@ export function PinDetailDialog({
           <PinScanOverlay
             imageUrl={pin.image_url}
             phase={scanPhase}
-            matchCount={suggestions.length}
+            found={tabs.map((t) => t.label).filter(Boolean)}
             onContinue={() => {
               // No matches → land on the product page with the Add-more sheet
               // already open so they can paste a link or pick from a collection.
-              setScanAck(true);
+              dismissScan();
               setShowAddMore(true);
             }}
             onSkip={() => {
-              setScanAck(true);
+              dismissScan();
               setShowAddMore(true);
             }}
           />
@@ -939,7 +956,7 @@ export function PinDetailDialog({
               className="flex min-w-0 items-center gap-1.5"
             >
               <Sparkles className="h-3 w-3 shrink-0 text-primary" />
-              <span className="truncate text-[10px] font-semibold uppercase tracking-wide text-primary">
+              <span className="truncate text-micro font-semibold uppercase tracking-wide text-primary">
                 {aiLoading && suggestions.length === 0 ? "Scanning pin…" : "Visual match"}
               </span>
             </motion.div>
@@ -998,12 +1015,15 @@ export function PinDetailDialog({
             )}
 
             {/* Results — manual entry now lives in the "Add more" sheet, never
-              inline here. */}
-            {aiLoading && suggestions.length === 0 ? (
+              inline here. The educational loader is now only for the detection
+              stage: once the pills exist there is real structure to show, and
+              showing it beats a spinner even while the grids are still
+              filling. */}
+            {isDetecting ? (
               <div className="mt-6">
-                <EducationalLoader label="Finding matching products…" hints={HINTS.matching} />
+                <EducationalLoader label="Finding products in your pin…" hints={HINTS.matching} />
               </div>
-            ) : suggestions.length === 0 ? (
+            ) : suggestions.length === 0 && !aiLoading ? (
               <div className="mt-6 rounded-2xl border border-dashed border-border bg-surface-2/40 p-6 text-center">
                 <span className="mx-auto grid h-11 w-11 place-items-center rounded-full bg-amber-500/10 text-amber-600">
                   <Sparkles className="h-5 w-5" />
@@ -1016,45 +1036,54 @@ export function PinDetailDialog({
               </div>
             ) : (
               <>
-                {/* Earnings-led header — centred and prominent */}
+                {/* Earnings-led header — centred and prominent. While pills are
+                    still filling it names what was FOUND IN THE PIN, which is
+                    already known and doesn't churn as counts arrive. */}
                 <div className="mt-6 text-center">
                   <h5 className="font-display text-2xl font-extrabold leading-tight tracking-tight sm:text-3xl">
-                    Found {suggestions.length} product{suggestions.length === 1 ? "" : "s"}
+                    {aiLoading && namedTabs.length > 0
+                      ? `Found ${namedTabs.length} item${namedTabs.length === 1 ? "" : "s"} in your pin`
+                      : `Found ${suggestions.length} product${suggestions.length === 1 ? "" : "s"}`}
                   </h5>
                   <p className="mt-1.5 flex flex-wrap items-center justify-center gap-1.5 text-base font-medium text-muted-foreground">
-                    Earn upto
-                    <span className="inline-flex items-center rounded-full bg-emerald-500/10 px-3 py-0.5 text-base font-extrabold text-emerald-600">
-                      {topCommission}%
-                    </span>
-                    per sale
+                    {aiLoading && suggestions.length === 0 ? (
+                      "Matching them to stores…"
+                    ) : (
+                      <>
+                        Earn upto
+                        <span className="inline-flex items-center rounded-full bg-emerald-500/10 px-3 py-0.5 text-base font-extrabold text-emerald-600">
+                          {topCommission}%
+                        </span>
+                        per sale
+                      </>
+                    )}
                   </p>
+                  {/* The look gate finishes after the cards are already up (see
+                      useVisualSearch), so it can reorder a grid the shopper is
+                      reading and drop the occasional lookalike. Saying so turns
+                      that from a glitch into the app visibly still working. */}
+                  {isRefining && suggestions.length > 0 && (
+                    <p className="mt-1 text-xs font-medium text-muted-foreground/70">
+                      Checking each match against your pin…
+                    </p>
+                  )}
                 </div>
 
-                {/* Static category pills. */}
-                <div className="no-scrollbar mt-4 -mx-1 flex items-center gap-2 overflow-x-auto px-1">
-                  {CATEGORY_PILLS.map((label) => (
-                    <button
-                      key={label}
-                      type="button"
-                      onClick={() => setActiveCategoryPill(label)}
-                      className={`inline-flex shrink-0 items-center rounded-full px-3.5 py-1.5 text-xs font-bold transition ${
-                        activeCategoryPill === label
-                          ? "bg-gradient-primary text-primary-foreground shadow-glow"
-                          : "bg-surface-2 text-muted-foreground hover:text-foreground"
-                      }`}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
+                {/* Category pills removed — replaced by live filtering. */}
 
                 {/* Product-tag tabs — one per detected component. Below the pin,
-                    above the products. Only shown when detection found ≥2. */}
-                {tags.length >= 2 && (
+                    above the products. Shown whenever detection named at least
+                    one component — a single category still gets "All" + its own
+                    pill. These render as soon as detection names them; a tab
+                    whose own search is still running shows a spinner where its
+                    count will go, so the set of tabs never shifts under a
+                    tapping finger. */}
+                {tags.length >= 1 && (
                   <div className="no-scrollbar mt-4 -mx-1 flex items-center gap-2 overflow-x-auto px-1">
                     <TagTab
                       label="All"
                       count={suggestions.length}
+                      pending={aiLoading}
                       active={activeTag === null}
                       onClick={() => setActiveTag(null)}
                     />
@@ -1063,6 +1092,7 @@ export function PinDetailDialog({
                         key={t}
                         label={t}
                         count={tagCounts.get(t) ?? 0}
+                        pending={tagLoading.get(t) ?? false}
                         active={activeTag === t}
                         onClick={() => setActiveTag(t)}
                       />
@@ -1094,6 +1124,11 @@ export function PinDetailDialog({
                         </ReorderableCard>
                       );
                     })}
+                    {/* Silhouettes for the pills still searching — the grid
+                        grows into them instead of jumping. */}
+                    {Array.from({ length: pendingCardCount }).map((_, i) => (
+                      <SuggestionCardSkeleton key={`skeleton-${i}`} />
+                    ))}
                   </Reorder.Group>
                 ) : (
                   <div className="mt-3 grid grid-cols-2 gap-2.5 sm:grid-cols-3">
@@ -1110,6 +1145,9 @@ export function PinDetailDialog({
                         />
                       );
                     })}
+                    {Array.from({ length: pendingCardCount }).map((_, i) => (
+                      <SuggestionCardSkeleton key={`skeleton-${i}`} />
+                    ))}
                   </div>
                 )}
               </>
@@ -1239,7 +1277,7 @@ export function PinDetailDialog({
                 )}
 
                 {/* divider */}
-                <div className="my-4 flex items-center gap-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+                <div className="my-4 flex items-center gap-3 text-mini font-semibold uppercase tracking-wide text-muted-foreground/70">
                   <span className="h-px flex-1 bg-border" /> or{" "}
                   <span className="h-px flex-1 bg-border" />
                 </div>
@@ -1293,7 +1331,7 @@ export function PinDetailDialog({
                             )}
                           </div>
                           <div className="min-w-0 flex-1">
-                            <p className="truncate text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
+                            <p className="truncate text-micro font-bold uppercase tracking-wide text-muted-foreground">
                               {item.source}
                             </p>
                             <p className="truncate text-sm font-semibold leading-tight">
@@ -1304,7 +1342,7 @@ export function PinDetailDialog({
                                 <span className="text-xs font-bold">{item.priceLabel}</span>
                               )}
                               {item.earn != null && (
-                                <span className="text-[11px] font-bold text-emerald-600">
+                                <span className="text-mini font-bold text-emerald-600">
                                   Earn ₹{item.earn}/sale
                                 </span>
                               )}
@@ -1363,11 +1401,16 @@ export function TagTab({
   count,
   active,
   onClick,
+  // This pill exists (detection named it) but its products are still being
+  // searched. It stays tappable — tapping it shows the skeleton grid, which is
+  // a truthful "coming" rather than a misleading empty state.
+  pending,
 }: {
   label: string;
   count: number;
   active: boolean;
   onClick: () => void;
+  pending?: boolean;
 }) {
   return (
     <button
@@ -1381,11 +1424,11 @@ export function TagTab({
     >
       {label}
       <span
-        className={`rounded-full px-1.5 text-[10px] font-bold ${
+        className={`grid min-w-[1.15rem] place-items-center rounded-full px-1.5 text-micro font-bold ${
           active ? "bg-white/25 text-primary-foreground" : "bg-foreground/10 text-foreground/70"
         }`}
       >
-        {count}
+        {pending ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : count}
       </span>
     </button>
   );

@@ -359,7 +359,7 @@ function Welcome() {
         </motion.div>
         <motion.p
           variants={rise}
-          className="mt-3 text-center text-[11px] leading-relaxed text-muted-foreground"
+          className="mt-3 text-center text-mini leading-relaxed text-muted-foreground"
         >
           Free to start · Works on boards you already have
           <br />

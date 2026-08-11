@@ -7,7 +7,9 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronRight,
+  Clock,
   Compass,
+  ExternalLink,
   Hand,
   ImagePlus,
   Info,
@@ -25,6 +27,7 @@ import {
   X,
 } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
+import { AppSheet } from "@/components/app-sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AnimatedNumber, scoreTone } from "@/components/health-widgets";
 import {
@@ -176,7 +179,7 @@ function BoostPinsPage() {
               <div className="mt-6">
                 <div className="mb-3 flex items-baseline justify-between">
                   <h2 className="font-display text-lg font-semibold">Your boost plan</h2>
-                  <span className="text-[11px] text-muted-foreground">Biggest wins first</span>
+                  <span className="text-mini text-muted-foreground">Biggest wins first</span>
                 </div>
                 <div className="grid gap-2.5">
                   {ranked.map((s, i) => (
@@ -263,30 +266,40 @@ function missingItemsFor(
   }
 }
 
-// The fix flow shown as three glanceable icon steps instead of sentences.
+// The fix flow, as three words and three icons on ONE line.
+//
+// These were sentences in boxes ("AI drafts titles & descriptions"), which made
+// the how-it-works step the visually heaviest thing in a sheet whose job is to
+// get one tap. Two or three words each is enough to convey the shape of the
+// flow; the flow itself explains the rest.
 type HowStep = { icon: typeof Sparkles; label: string };
 const HOW_STEPS: Record<SubScoreKey, HowStep[]> = {
   pinSeo: [
-    { icon: Sparkles, label: "AI drafts titles & descriptions" },
-    { icon: Hand, label: "Swipe to apply" },
-    { icon: TrendingUp, label: "Grow reach & rank" },
+    { icon: Sparkles, label: "AI drafts" },
+    { icon: Hand, label: "You swipe" },
+    { icon: TrendingUp, label: "Rank climbs" },
   ],
   boardStructure: [
-    { icon: Sparkles, label: "We suggest" },
-    { icon: Hand, label: "Swipe to apply" },
+    { icon: Sparkles, label: "AI drafts" },
+    { icon: Hand, label: "You swipe" },
     { icon: Undo2, label: "Undo anytime" },
   ],
   profile: [
-    { icon: MousePointerClick, label: "See your Pinterest profile" },
-    { icon: PencilLine, label: "Fix it on Pinterest" },
-    { icon: TrendingUp, label: "Recheck — score climbs" },
+    { icon: MousePointerClick, label: "Open profile" },
+    { icon: PencilLine, label: "Fix on Pinterest" },
+    { icon: TrendingUp, label: "Score climbs" },
   ],
   freshness: [
-    { icon: Compass, label: "Find quiet boards" },
+    { icon: Compass, label: "Quiet boards" },
     { icon: ImagePlus, label: "Add a pin" },
     { icon: TrendingUp, label: "Reach grows" },
   ],
 };
+
+// Colours for the composition bar's segments, in rank order. Warm-to-cool
+// rather than four shades of one hue, so the segments stay tellable apart at
+// the 6px height the bar is drawn at.
+const ISSUE_COLORS = ["bg-amber-400", "bg-rose-400", "bg-violet-400", "bg-sky-400"];
 
 function FixBriefing({
   sub,
@@ -305,10 +318,9 @@ function FixBriefing({
   const Icon = SUB_ICONS[sub.key];
   const items = missingItemsFor(sub.key, data, profileItems);
   const shown = items.slice(0, 6);
-  const more = items.length - shown.length;
 
   // Collapse the repetitive per-item notes into a ranked tally of problem
-  // types, so the same information reads as a visual breakdown, not a list.
+  // types, so the same information reads as one visual breakdown, not a list.
   const topIssues = useMemo(() => {
     const tally = new Map<string, number>();
     for (const it of items) {
@@ -318,8 +330,12 @@ function FixBriefing({
     }
     return [...tally.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4);
   }, [items]);
-  // Bars only make sense when a problem actually repeats; otherwise (freshness,
-  // profile — every note unique) fall back to titled chips.
+  // Segments are shares of the tagged total, NOT of `sub.failing`. One pin
+  // usually carries several tags (a short title AND no description), so the
+  // counts sum past the pin count and scaling against it would overflow.
+  const issueTotal = topIssues.reduce((n, [, count]) => n + count, 0) || 1;
+  // The bar only makes sense when a problem actually repeats; otherwise
+  // (freshness, profile — every note unique) fall back to titled chips.
   const useBars = topIssues.length > 0 && topIssues[0][1] >= 2;
 
   const container: Variants = {
@@ -338,162 +354,149 @@ function FixBriefing({
   };
 
   return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      transition={{ duration: 0.2 }}
-      onClick={onClose}
-      className="fixed inset-0 z-[60] flex items-end justify-center bg-background/70 backdrop-blur-sm sm:items-center sm:p-4"
-    >
-      <motion.div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="briefing-title"
-        onClick={(e) => e.stopPropagation()}
-        initial={{ y: 48, opacity: 0.5 }}
-        animate={{ y: 0, opacity: 1 }}
-        exit={{ y: 48, opacity: 0 }}
-        transition={{ type: "spring", stiffness: 360, damping: 34 }}
-        className="max-h-[92dvh] w-full max-w-md overflow-y-auto rounded-t-3xl border border-border bg-surface p-6 shadow-elevate sm:rounded-3xl"
-        style={{ paddingBottom: "max(1.5rem, env(safe-area-inset-bottom))" }}
-      >
-        <div className="mx-auto mb-4 h-1.5 w-10 rounded-full bg-border sm:hidden" />
-
-        <motion.div variants={container} initial="hidden" animate="show">
-          {/* Header: which area, the score now, the points on the table. */}
-          <motion.div variants={item} className="flex items-start justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <div
-                className={`grid h-12 w-12 shrink-0 place-items-center rounded-2xl ${tone.bg} ${tone.text}`}
-              >
-                <Icon className="h-6 w-6" />
-              </div>
-              <div>
-                <h2 id="briefing-title" className="font-display text-lg font-bold leading-tight">
-                  {sub.label}
-                </h2>
-                <p className="mt-0.5 text-xs text-muted-foreground">
-                  <span className={`font-bold ${tone.text}`}>{sub.score}%</span> now ·{" "}
-                  <span className="font-bold text-emerald-600">+{sub.potentialGain} pts</span> to
-                  gain
-                </p>
-              </div>
+    <AppSheet onClose={onClose} labelledBy="briefing-title">
+      <motion.div variants={container} initial="hidden" animate="show">
+        {/* Header: which area, the score now, the points on the table. */}
+        <motion.div variants={item} className="flex items-start justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div
+              className={`grid h-12 w-12 shrink-0 place-items-center rounded-2xl ${tone.bg} ${tone.text}`}
+            >
+              <Icon className="h-6 w-6" />
             </div>
-            <button
-              type="button"
-              onClick={onClose}
-              aria-label="Close"
-              className="-mr-1 -mt-1 grid h-9 w-9 shrink-0 place-items-center rounded-full text-muted-foreground transition hover:bg-surface-2"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </motion.div>
-
-          {/* What's holding it back — a hero count + visual problem breakdown. */}
-          <motion.p
-            variants={item}
-            className="mt-6 text-[11px] font-bold uppercase tracking-wide text-muted-foreground"
+            <div>
+              <h2 id="briefing-title" className="font-display text-lg font-bold leading-tight">
+                {sub.label}
+              </h2>
+              {/* Where the score goes, not two separate figures to add up.
+                    "1% now · +40 pts to gain" made the reader do the sum; the
+                    destination is the motivating number, so show it. */}
+              <p className="mt-0.5 flex items-center gap-1.5 text-xs font-bold">
+                <span className={tone.text}>{sub.score}%</span>
+                <ArrowRight className="h-3 w-3 text-muted-foreground/50" />
+                <span className="text-emerald-600">
+                  {Math.min(100, sub.score + sub.potentialGain)}%
+                </span>
+                <span className="font-medium text-muted-foreground">possible</span>
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="-mr-1 -mt-1 grid h-9 w-9 shrink-0 place-items-center rounded-full text-muted-foreground transition hover:bg-surface-2"
           >
-            What's holding it back
-          </motion.p>
-          <motion.div variants={item} className="mt-2 flex items-end gap-2">
-            <span className={`font-display text-4xl font-black leading-none ${tone.text}`}>
-              {sub.failing}
-            </span>
-            <span className="pb-0.5 text-sm font-semibold text-muted-foreground">
-              {sub.unit} need attention
-            </span>
+            <X className="h-4 w-4" />
+          </button>
+        </motion.div>
+
+        {/* The one number that matters, then ONE bar showing what it's made
+              of. This replaced a stacked count-per-issue readout: with the hero
+              already saying 379, three more bars each repeating a number very
+              close to 379 added rows without adding information. The segments
+              carry the same composition, and the names sit under them. */}
+        <motion.div variants={item} className="mt-7 flex items-end gap-2">
+          <span className={`font-display text-5xl font-black leading-none ${tone.text}`}>
+            {sub.failing}
+          </span>
+          <span className="pb-1 text-sm font-semibold text-muted-foreground">
+            {sub.unit} need attention
+          </span>
+        </motion.div>
+
+        {useBars ? (
+          <motion.div variants={item} className="mt-4">
+            <div className="flex h-1.5 gap-0.5 overflow-hidden rounded-full">
+              {topIssues.map(([label, count], i) => (
+                <motion.span
+                  key={label}
+                  className={`${ISSUE_COLORS[i % ISSUE_COLORS.length]} first:rounded-l-full last:rounded-r-full`}
+                  initial={{ width: 0 }}
+                  animate={{ width: `${(count / issueTotal) * 100}%` }}
+                  transition={{ duration: 0.7, delay: 0.2 + i * 0.06, ease: [0.22, 1, 0.36, 1] }}
+                />
+              ))}
+            </div>
+            <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+              {topIssues.map(([label], i) => (
+                <span
+                  key={label}
+                  className="inline-flex items-center gap-1.5 text-mini font-semibold text-muted-foreground"
+                >
+                  <span
+                    className={`h-1.5 w-1.5 rounded-full ${ISSUE_COLORS[i % ISSUE_COLORS.length]}`}
+                  />
+                  {label}
+                </span>
+              ))}
+            </div>
           </motion.div>
-
-          {useBars ? (
-            <motion.div variants={container} className="mt-4 space-y-2.5">
-              {topIssues.map(([label, count]) => (
-                <motion.div key={label} variants={item}>
-                  <div className="mb-1 flex items-center justify-between text-[11px] font-semibold">
-                    <span className="text-foreground/80">{label}</span>
-                    <span className="text-muted-foreground">{count}</span>
-                  </div>
-                  <div className="h-1.5 overflow-hidden rounded-full bg-surface-2">
-                    <motion.div
-                      className="h-full rounded-full bg-amber-400"
-                      initial={{ width: 0 }}
-                      animate={{ width: `${Math.max(6, (count / sub.failing) * 100)}%` }}
-                      transition={{ duration: 0.6, delay: 0.25, ease: [0.22, 1, 0.36, 1] }}
-                    />
-                  </div>
-                </motion.div>
-              ))}
-            </motion.div>
-          ) : (
-            <motion.div variants={container} className="mt-3 flex flex-wrap gap-1.5">
-              {shown.map((m) => (
-                <motion.span
-                  key={m.id}
-                  variants={item}
-                  className="max-w-full truncate rounded-full bg-surface-2/70 px-3 py-1.5 text-xs font-medium"
-                >
-                  {m.title}
-                </motion.span>
-              ))}
-              {more > 0 && (
-                <motion.span
-                  variants={item}
-                  className="rounded-full px-2 py-1.5 text-xs text-muted-foreground"
-                >
-                  +{more} more
-                </motion.span>
-              )}
-            </motion.div>
-          )}
-
-          {/* How we'll fix it — three glanceable steps, connected left to right. */}
-          <motion.p
-            variants={item}
-            className="mt-6 text-[11px] font-bold uppercase tracking-wide text-muted-foreground"
-          >
-            How we'll fix it
-          </motion.p>
-          <motion.div variants={container} className="mt-2.5 flex items-stretch gap-1">
-            {HOW_STEPS[sub.key].map((step, i) => (
-              <Fragment key={i}>
-                <motion.div
-                  variants={item}
-                  className="flex flex-1 flex-col items-center gap-1.5 rounded-2xl bg-surface-2/50 px-1.5 py-3 text-center"
-                >
-                  <span className="grid h-9 w-9 place-items-center rounded-full bg-primary/10 text-primary">
-                    <step.icon className="h-4 w-4" />
-                  </span>
-                  <span className="text-[11px] font-semibold leading-tight text-foreground/85">
-                    {step.label}
-                  </span>
-                </motion.div>
-                {i < HOW_STEPS[sub.key].length - 1 && (
-                  <ChevronRight className="h-4 w-4 shrink-0 self-center text-muted-foreground/40" />
-                )}
-              </Fragment>
+        ) : (
+          <motion.div variants={item} className="mt-3.5 flex flex-wrap gap-1.5">
+            {shown.slice(0, 4).map((m) => (
+              <span
+                key={m.id}
+                className="max-w-full truncate rounded-full bg-surface-2/70 px-3 py-1.5 text-xs font-medium"
+              >
+                {m.title}
+              </span>
             ))}
+            {items.length > 4 && (
+              <span className="rounded-full px-2 py-1.5 text-xs text-muted-foreground">
+                +{items.length - 4} more
+              </span>
+            )}
           </motion.div>
+        )}
 
-          <motion.div variants={item} className="mt-6 flex flex-col gap-1.5">
-            <button
-              type="button"
-              onClick={onStart}
-              className="inline-flex min-h-[52px] w-full items-center justify-center gap-2 rounded-2xl bg-gradient-primary px-5 text-sm font-extrabold text-primary-foreground shadow-glow transition hover:opacity-95 active:scale-[0.99]"
-            >
-              <Sparkles className="h-4 w-4" /> Start fixing <ArrowRight className="h-4 w-4" />
-            </button>
-            <button
-              type="button"
-              onClick={onClose}
-              className="min-h-[44px] w-full text-xs font-semibold text-muted-foreground transition hover:text-foreground"
-            >
-              Maybe later
-            </button>
-          </motion.div>
+        {/* How it works — one line, three beats. No heading: the icons and the
+              arrows between them say "sequence" faster than a label could. */}
+        <motion.div
+          variants={item}
+          className="mt-7 flex items-center justify-between gap-1 rounded-2xl bg-surface-2/40 px-3 py-3"
+        >
+          {HOW_STEPS[sub.key].map((step, i) => (
+            <Fragment key={i}>
+              <div className="flex min-w-0 flex-col items-center gap-1.5 text-center">
+                <span className="grid h-8 w-8 place-items-center rounded-full bg-primary/10 text-primary">
+                  <step.icon className="h-4 w-4" />
+                </span>
+                <span className="truncate text-mini font-semibold text-foreground/80">
+                  {step.label}
+                </span>
+              </div>
+              {i < HOW_STEPS[sub.key].length - 1 && (
+                <ChevronRight className="h-3.5 w-3.5 shrink-0 self-start text-muted-foreground/35" />
+              )}
+            </Fragment>
+          ))}
+        </motion.div>
+
+        <motion.div variants={item} className="mt-6 flex flex-col gap-1.5">
+          <button
+            type="button"
+            onClick={onStart}
+            className="relative inline-flex min-h-[54px] w-full items-center justify-center gap-2 overflow-hidden rounded-2xl bg-gradient-primary px-5 text-sm font-extrabold text-primary-foreground shadow-glow transition hover:opacity-95 active:scale-[0.99]"
+          >
+            {/* Travelling highlight — the one moving thing in the sheet, on
+                  the one element we want tapped. */}
+            <span
+              aria-hidden
+              className="animate-sheen pointer-events-none absolute inset-y-0 w-1/3 bg-gradient-to-r from-transparent via-white/25 to-transparent"
+            />
+            <Sparkles className="h-4 w-4" /> Start fixing <ArrowRight className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            className="min-h-[44px] w-full text-xs font-semibold text-muted-foreground transition hover:text-foreground"
+          >
+            Maybe later
+          </button>
         </motion.div>
       </motion.div>
-    </motion.div>
+    </AppSheet>
   );
 }
 
@@ -506,15 +509,23 @@ function FixBriefing({
 const PINTEREST_SETTINGS = "https://www.pinterest.com/settings/profile/";
 const PINTEREST_CLAIM = "https://www.pinterest.com/settings/claim/";
 
+// The sheet is a checklist, not an article: an icon carries the field, one word
+// carries the state, and one word carries the action. Anything longer is the
+// creator reading instead of tapping — the fix itself is two taps away on
+// Pinterest, so this screen's whole job is pointing at it.
 type ProfileRow = {
   key: ProfileItemKey;
+  /** One or two words — the field, not a sentence about it. */
   label: string;
+  icon: typeof Type;
   ok: boolean;
-  /** What Pinterest currently has, shown verbatim so it's obvious what to change. */
+  /** What Pinterest has, shown only when it's real content worth reading back. */
   value: string | null;
-  hint: string;
   href: string | null;
+  /** One word while the check is failing. */
   cta: string;
+  /** One word once it passes — usually "Edit", sometimes a real next step. */
+  doneCta: string;
 };
 
 function PinterestProfileSheet({
@@ -535,161 +546,207 @@ function PinterestProfileSheet({
   const connected = !!snapshot?.connected;
   const okOf = (key: ProfileItemKey) => items.find((i) => i.key === key)?.ok ?? false;
   const tone = scoreTone(score);
+  // What this section is still worth to the headline number — the same maths the
+  // boost plan ranks areas by, so the two never disagree.
+  const gainPts = Math.round(SUB_SCORE_WEIGHTS.profile * (100 - score));
 
   const rows: ProfileRow[] = [
     {
       key: "avatar",
-      label: "Profile photo",
+      label: "Photo",
+      icon: ImagePlus,
       ok: okOf("avatar"),
-      value: snapshot?.profileImage ? "Shown above" : null,
-      hint: "A face or logo — profiles without one convert far fewer followers.",
+      // Already visible at the top of the sheet — repeating it in words adds
+      // nothing.
+      value: null,
       href: PINTEREST_SETTINGS,
-      cta: "Fix on Pinterest",
+      cta: "Add",
+      doneCta: "Edit",
     },
     {
       key: "bio",
-      label: "About / bio",
+      label: "Bio",
+      icon: PencilLine,
       ok: okOf("bio"),
       value: snapshot?.about ?? null,
-      hint: "Say who you are and what you pin — this is indexed by Pinterest search.",
       href: PINTEREST_SETTINGS,
-      cta: "Fix on Pinterest",
+      cta: "Add",
+      doneCta: "Edit",
     },
     {
       key: "website",
-      label: "Website URL",
+      label: "Website",
+      icon: Link2,
       ok: okOf("website"),
       value: snapshot?.websiteUrl ?? null,
-      hint: "The link on your profile. Claim it too, so every pin from your site is credited to you.",
+      // The check only asks whether a URL is set, so the two states need
+      // different destinations: the settings page to add one, the claim page
+      // once there's something to claim.
       href: okOf("website") ? PINTEREST_CLAIM : PINTEREST_SETTINGS,
-      cta: okOf("website") ? "Claim it on Pinterest" : "Fix on Pinterest",
+      cta: "Add",
+      doneCta: "Claim",
     },
     {
       key: "social",
-      label: "Pinterest connected",
+      label: "Account",
+      icon: UserCheck,
       ok: okOf("social"),
       value: snapshot?.username ? `@${snapshot.username}` : null,
-      hint: "Connect the account so Pinearn can read your profile and pins.",
       href: null,
-      cta: "Connect in Settings",
+      cta: "Connect",
+      doneCta: "Manage",
     },
   ];
 
+  // Open work first, done work below it — four one-line rows, so nothing needs
+  // collapsing behind a "N checks passing" control.
+  const ordered = [...rows].sort((a, b) => Number(a.ok) - Number(b.ok));
+  const doneCount = rows.filter((r) => r.ok).length;
+  const allDone = doneCount === rows.length;
+
+  // Every fix happens in another tab, so a row has to hold the "your turn" state
+  // until a recheck proves it landed. Without it, coming back from Pinterest
+  // means re-reading the whole list to remember where you were.
+  const [opened, setOpened] = useState<Set<ProfileItemKey>>(() => new Set());
+
+  // A check that has since passed drops its waiting badge on the next recheck.
+  useEffect(() => {
+    setOpened((prev) => {
+      if (prev.size === 0) return prev;
+      const stillFailing = new Set(items.filter((i) => !i.ok).map((i) => i.key));
+      const next = new Set([...prev].filter((k) => stillFailing.has(k)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [items]);
+
+  const markOpened = (key: ProfileItemKey) =>
+    setOpened((prev) => (prev.has(key) ? prev : new Set(prev).add(key)));
+
+  /** Shared button skin: loud while the check is failing, quiet once it passes. */
+  const actionClass = (ok: boolean) =>
+    `inline-flex min-h-9 shrink-0 items-center justify-center gap-1 rounded-full px-3 text-mini font-bold transition active:scale-[0.98] ${
+      ok
+        ? "bg-surface-2 text-muted-foreground ring-1 ring-border hover:text-foreground"
+        : "bg-gradient-primary text-primary-foreground shadow-glow"
+    }`;
+
   return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      transition={{ duration: 0.2 }}
-      onClick={onClose}
-      className="fixed inset-0 z-[65] flex items-end justify-center bg-background/70 backdrop-blur-sm sm:items-center sm:p-4"
-    >
-      <motion.div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="pinterest-profile-title"
-        onClick={(e) => e.stopPropagation()}
-        initial={{ y: 48, opacity: 0.5 }}
-        animate={{ y: 0, opacity: 1 }}
-        exit={{ y: 48, opacity: 0 }}
-        transition={{ type: "spring", stiffness: 360, damping: 34 }}
-        className="max-h-[92dvh] w-full max-w-md overflow-y-auto rounded-t-3xl border border-border bg-surface p-5 shadow-elevate sm:rounded-3xl"
-        style={{ paddingBottom: "max(1.25rem, env(safe-area-inset-bottom))" }}
-      >
-        <div className="mx-auto mb-4 h-1.5 w-10 rounded-full bg-border sm:hidden" />
+    <AppSheet onClose={onClose} labelledBy="pinterest-profile-title" layout="panel" grabber={false}>
+      <>
+        {/* ---- Fixed head: who this is, and how complete ---- */}
+        <div className="shrink-0 px-5 pb-3 pt-3">
+          <div className="mx-auto mb-3 h-1.5 w-10 rounded-full bg-border sm:hidden" />
 
-        {/* The profile as Pinterest has it — avatar, name, real counts. */}
-        <div className="flex items-start gap-3">
-          <div className="relative h-14 w-14 shrink-0 overflow-hidden rounded-full bg-surface-2 ring-1 ring-border">
-            {snapshot?.profileImage ? (
-              <img src={snapshot.profileImage} alt="" className="h-full w-full object-cover" />
-            ) : (
-              <div className="grid h-full w-full place-items-center text-muted-foreground">
-                <UserCheck className="h-6 w-6" />
-              </div>
-            )}
-          </div>
-          <div className="min-w-0 flex-1">
-            <h2
-              id="pinterest-profile-title"
-              className="truncate font-display text-lg font-bold leading-tight"
-            >
-              {snapshot?.businessName ??
-                (snapshot?.username ? `@${snapshot.username}` : "Your Pinterest profile")}
-            </h2>
-            <p className="mt-0.5 text-[11px] text-muted-foreground">
-              <span className={`font-bold ${tone.text}`}>{score}%</span> complete
-              {connected && (
-                <>
-                  {" · "}
-                  {snapshot!.followerCount.toLocaleString()} followers ·{" "}
-                  {snapshot!.pinCount.toLocaleString()} pins
-                </>
+          {/* The profile as Pinterest has it — avatar, name, real counts. */}
+          <div className="flex items-start gap-3">
+            <div className="relative h-12 w-12 shrink-0 overflow-hidden rounded-full bg-surface-2 ring-1 ring-border">
+              {snapshot?.profileImage ? (
+                <img src={snapshot.profileImage} alt="" className="h-full w-full object-cover" />
+              ) : (
+                <div className="grid h-full w-full place-items-center text-muted-foreground">
+                  <UserCheck className="h-5 w-5" />
+                </div>
               )}
-            </p>
+            </div>
+            <div className="min-w-0 flex-1">
+              <h2
+                id="pinterest-profile-title"
+                className="truncate font-display text-lg font-bold leading-tight"
+              >
+                {snapshot?.businessName ??
+                  (snapshot?.username ? `@${snapshot.username}` : "Your Pinterest profile")}
+              </h2>
+              <p className="mt-0.5 truncate text-mini text-muted-foreground">
+                {connected ? (
+                  <>
+                    {snapshot!.followerCount.toLocaleString()} followers ·{" "}
+                    {snapshot!.pinCount.toLocaleString()} pins
+                  </>
+                ) : (
+                  "Not connected to Pinterest"
+                )}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close"
+              className="-mr-1 -mt-1 grid h-9 w-9 shrink-0 place-items-center rounded-full text-muted-foreground transition hover:bg-surface-2"
+            >
+              <X className="h-4 w-4" />
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close"
-            className="-mr-1 -mt-1 grid h-9 w-9 shrink-0 place-items-center rounded-full text-muted-foreground transition hover:bg-surface-2"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
 
-        {/* This is read-only on purpose — say so once, at the top. */}
-        <p className="mt-3 rounded-2xl bg-surface-2/70 p-3 text-[12px] leading-snug text-muted-foreground ring-1 ring-inset ring-border/70">
-          {connected ? (
-            <>
-              This is your live Pinterest profile — the page anyone who taps a pin lands on. Pinearn
-              can&apos;t edit it, so each fix opens the exact Pinterest setting. Come back and hit
-              recheck when you&apos;re done.
-            </>
-          ) : (
-            <>
-              {snapshot?.reason ?? "Pinterest isn't connected"} — so these checks fall back to what
-              Pinearn knows locally. Connect Pinterest in Settings to score the real profile.
-            </>
-          )}
-        </p>
-
-        <div className="mt-3 space-y-2">
-          {rows.map((row) => (
-            <div
-              key={row.key}
-              className={`rounded-2xl border p-3 ${
-                row.ok ? "border-border bg-surface" : "border-amber-500/30 bg-amber-500/[0.06]"
+          {/* The gauge is the sentence: number, four segments, points left. */}
+          <div className="mt-3.5 flex items-center gap-2.5">
+            <div className="flex flex-1 gap-1" aria-hidden>
+              {rows.map((row) => (
+                <span
+                  key={row.key}
+                  className={`h-1.5 flex-1 rounded-full transition-colors ${
+                    row.ok ? "bg-emerald-500" : "bg-surface-2 ring-1 ring-inset ring-border"
+                  }`}
+                />
+              ))}
+            </div>
+            <span
+              className={`font-display text-lead font-extrabold leading-none tabular-nums ${tone.text}`}
+            >
+              {score}%
+            </span>
+            <span
+              className={`rounded-full px-2 py-0.5 text-micro font-bold tabular-nums ${
+                allDone ? "bg-emerald-500/12 text-emerald-700" : "bg-primary/10 text-primary"
               }`}
             >
-              <div className="flex items-start gap-2.5">
+              {allDone ? "Done" : `+${gainPts} pts`}
+            </span>
+          </div>
+        </div>
+
+        {/* ---- One tappable line per check, open work first ---- */}
+        <div className="no-scrollbar min-h-0 flex-1 space-y-1.5 overflow-y-auto px-5 pb-3">
+          {ordered.map((row) => {
+            const waiting = !row.ok && opened.has(row.key);
+            const Icon = row.icon;
+            return (
+              <motion.div
+                key={row.key}
+                layout
+                transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
+                className={`flex items-center gap-2.5 rounded-2xl border p-2.5 transition-colors ${
+                  row.ok
+                    ? "border-border bg-surface"
+                    : waiting
+                      ? "border-primary/35 bg-primary/[0.04]"
+                      : "border-amber-500/30 bg-amber-500/[0.06]"
+                }`}
+              >
                 <span
-                  className={`mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full ${
-                    row.ok ? "bg-emerald-500/15 text-emerald-600" : "bg-amber-500/20 text-amber-700"
+                  className={`grid h-9 w-9 shrink-0 place-items-center rounded-xl ${
+                    row.ok
+                      ? "bg-emerald-500/12 text-emerald-600"
+                      : waiting
+                        ? "bg-primary/12 text-primary"
+                        : "bg-amber-500/15 text-amber-700"
                   }`}
                 >
                   {row.ok ? (
-                    <CheckCircle2 className="h-3.5 w-3.5" />
+                    <CheckCircle2 className="h-4 w-4" />
+                  ) : waiting ? (
+                    <Clock className="h-4 w-4" />
                   ) : (
-                    <X className="h-3 w-3" strokeWidth={3} />
+                    <Icon className="h-4 w-4" />
                   )}
                 </span>
+
                 <div className="min-w-0 flex-1">
-                  <p className="text-[13px] font-bold">{row.label}</p>
-                  {row.value ? (
-                    <p className="mt-0.5 line-clamp-2 break-words text-[12px] text-foreground/75">
-                      {row.value}
-                    </p>
-                  ) : (
-                    <p className="mt-0.5 text-[12px] italic text-muted-foreground">
-                      Not set on Pinterest
-                    </p>
-                  )}
-                  {!row.ok && (
-                    <p className="mt-1 text-[11px] leading-snug text-muted-foreground">
-                      {row.hint}
-                    </p>
-                  )}
+                  <p className="truncate text-body font-bold leading-tight">{row.label}</p>
+                  {/* Either the real value or a two-word state — never both, and
+                      never a sentence. */}
+                  <p className="truncate text-mini leading-tight text-muted-foreground">
+                    {row.ok ? (row.value ?? "Set") : waiting ? "Waiting on you" : "Missing"}
+                  </p>
                 </div>
 
                 {row.href ? (
@@ -697,55 +754,83 @@ function PinterestProfileSheet({
                     href={row.href}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className={`inline-flex min-h-8 shrink-0 items-center gap-1 rounded-full px-3 text-[11px] font-bold transition ${
-                      row.ok
-                        ? "bg-surface-2 text-muted-foreground ring-1 ring-border hover:text-foreground"
-                        : "bg-gradient-primary text-primary-foreground shadow-glow"
-                    }`}
+                    onClick={() => !row.ok && markOpened(row.key)}
+                    className={actionClass(row.ok)}
                   >
-                    {row.ok ? "Edit" : row.cta} <ArrowRight className="h-3 w-3" />
+                    {row.ok ? row.doneCta : row.cta}
+                    <ExternalLink className="h-3 w-3" />
                   </a>
                 ) : (
                   <Link
                     to="/profile"
                     search={{ focus: "pinterest" }}
-                    className={`inline-flex min-h-8 shrink-0 items-center gap-1 rounded-full px-3 text-[11px] font-bold transition ${
-                      row.ok
-                        ? "bg-surface-2 text-muted-foreground ring-1 ring-border hover:text-foreground"
-                        : "bg-gradient-primary text-primary-foreground shadow-glow"
-                    }`}
+                    className={actionClass(row.ok)}
                   >
-                    {row.ok ? "Manage" : row.cta} <ArrowRight className="h-3 w-3" />
+                    {row.ok ? row.doneCta : row.cta}
+                    <ArrowRight className="h-3 w-3" />
                   </Link>
                 )}
-              </div>
-            </div>
-          ))}
-        </div>
+              </motion.div>
+            );
+          })}
 
-        <div className="mt-4 flex gap-2">
-          <button
-            type="button"
-            onClick={onRecheck}
-            disabled={refreshing}
-            className="inline-flex min-h-[48px] flex-1 items-center justify-center gap-1.5 rounded-2xl border-2 border-primary bg-surface text-[13px] font-bold text-primary transition disabled:opacity-50"
-          >
-            <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
-            {refreshing ? "Rechecking…" : "Recheck profile"}
-          </button>
-          {connected && snapshot?.username && (
-            <a
-              href={`https://www.pinterest.com/${snapshot.username}/`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex min-h-[48px] shrink-0 items-center justify-center gap-1.5 rounded-2xl bg-surface-2 px-4 text-[13px] font-bold text-muted-foreground ring-1 ring-border transition hover:text-foreground"
-            >
-              <Link2 className="h-4 w-4" /> View
-            </a>
+          {/* The read-only rule, five words, once. When disconnected the head
+              line and the footer's one CTA already say the whole story. */}
+          {connected && (
+            <p className="pt-1 text-center text-micro font-medium text-muted-foreground/70">
+              Fixes open on Pinterest, then recheck
+            </p>
           )}
         </div>
-      </motion.div>
-    </motion.div>
+
+        {/* ---- Fixed foot: the round trip's second half ---- */}
+        <div
+          className="shrink-0 border-t border-border/70 bg-surface px-5 pt-3"
+          style={{ paddingBottom: "max(1rem, env(safe-area-inset-bottom))" }}
+        >
+          {connected ? (
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={onRecheck}
+                disabled={refreshing}
+                className={`inline-flex min-h-[46px] flex-1 items-center justify-center gap-1.5 rounded-2xl text-body font-bold transition disabled:opacity-50 ${
+                  // Loud only once there's something to recheck — before that the
+                  // work is on Pinterest, not in here.
+                  opened.size > 0
+                    ? "bg-gradient-primary text-primary-foreground shadow-glow"
+                    : "border-2 border-primary bg-surface text-primary"
+                }`}
+              >
+                <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
+                {refreshing ? "Rechecking…" : "Recheck"}
+              </button>
+              {snapshot?.username && (
+                <a
+                  href={`https://www.pinterest.com/${snapshot.username}/`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  aria-label="View profile on Pinterest"
+                  className="inline-flex min-h-[46px] shrink-0 items-center justify-center gap-1.5 rounded-2xl bg-surface-2 px-4 text-body font-bold text-muted-foreground ring-1 ring-border transition hover:text-foreground"
+                >
+                  <Link2 className="h-4 w-4" /> View
+                </a>
+              )}
+            </div>
+          ) : (
+            // Nothing in here can be scored until the account is connected, so
+            // that's the only action worth offering.
+            <Link
+              to="/profile"
+              search={{ focus: "pinterest" }}
+              className="inline-flex min-h-[46px] w-full items-center justify-center gap-1.5 rounded-2xl bg-gradient-primary text-body font-bold text-primary-foreground shadow-glow"
+            >
+              <Link2 className="h-4 w-4" /> Connect Pinterest <ArrowRight className="h-4 w-4" />
+            </Link>
+          )}
+        </div>
+      </>
+    </AppSheet>
   );
 }
 
@@ -812,7 +897,7 @@ function BoostRow({ sub, rank, onFix }: { sub: SubScore; rank: number; onFix: ()
         <div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-emerald-500/10 text-emerald-500">
           <Icon className="h-5 w-5" />
         </div>
-        <p className="min-w-0 flex-1 truncate text-[15px] font-semibold">{sub.label}</p>
+        <p className="min-w-0 flex-1 truncate text-lead font-semibold">{sub.label}</p>
         <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-500" />
       </div>
     );
@@ -841,7 +926,7 @@ function BoostRow({ sub, rank, onFix }: { sub: SubScore; rank: number; onFix: ()
         <Icon className="h-5 w-5" />
       </div>
       <div className="min-w-0 flex-1">
-        <p className="truncate text-[15px] font-semibold">{sub.label}</p>
+        <p className="truncate text-lead font-semibold">{sub.label}</p>
         <div className="mt-2 flex items-center gap-2.5">
           <div className="h-2 flex-1 overflow-hidden rounded-full bg-surface-2">
             <motion.div
@@ -900,7 +985,7 @@ function HowScoringWorks() {
                         freshness: "Content Freshness",
                       }[k]
                     }
-                    <span className="text-[11px] font-bold text-muted-foreground">
+                    <span className="text-mini font-bold text-muted-foreground">
                       {Math.round(SUB_SCORE_WEIGHTS[k] * 100)}% of score
                     </span>
                   </p>

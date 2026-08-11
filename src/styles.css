@@ -14,6 +14,23 @@
   --font-sans: "Figtree", ui-sans-serif, system-ui, sans-serif;
   --font-display: "Outfit", "Figtree", ui-sans-serif, system-ui, sans-serif;
 
+  /* Small-type scale.
+
+     The UI had grown nineteen one-off sizes, including pairs no eye can tell
+     apart — 10 next to 10.5, 11 next to 11.5, 12 next to 12.5 — which meant
+     every new label was a guess and two rows of the same rank could disagree
+     by half a pixel. These five are the whole vocabulary below `text-base`;
+     reach for the nearest one instead of inventing a sixteenth.
+
+     Deliberately font-size only, no paired line-height: these replace bare
+     `text-[11px]` utilities that never set leading, so adding one here would
+     silently reflow a few hundred rows. */
+  --text-nano: 0.5625rem; /* 9px  — badge overlays on thumbnails */
+  --text-micro: 0.625rem; /* 10px — eyebrows, chips, counters */
+  --text-mini: 0.6875rem; /* 11px — captions, secondary rows */
+  --text-body: 0.8125rem; /* 13px — dense body copy, sheet rows */
+  --text-lead: 0.9375rem; /* 15px — the largest small size: list titles */
+
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -447,4 +464,54 @@
 }
 @utility animate-grain {
   animation: grain 8s steps(10) infinite;
+}
+
+/* ---------------------------------------------------------------------------
+   Scanner primitives — used by the Boost analyser (components/boost-analyzer).
+   A rotating conic sweep behind a still centre reads as "working" without any
+   element having to jump, which is what makes a wait feel designed rather than
+   busy. Kept in CSS rather than framer-motion because a continuous transform
+   belongs on the compositor, not in a React render loop.
+   --------------------------------------------------------------------------- */
+@keyframes sweep-rotate {
+  to {
+    transform: rotate(1turn);
+  }
+}
+@utility animate-sweep {
+  animation: sweep-rotate 2.8s linear infinite;
+}
+@utility animate-sweep-slow {
+  animation: sweep-rotate 6s linear infinite reverse;
+}
+
+/* A highlight travelling across a surface — the "this is live" cue on the
+   primary action, at a slow enough cadence to feel premium, not urgent. */
+@keyframes sheen {
+  0% {
+    transform: translateX(-120%);
+  }
+  60%,
+  100% {
+    transform: translateX(220%);
+  }
+}
+@utility animate-sheen {
+  animation: sheen 3.2s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+}
+
+/* Slow vertical drift for the ambient specks around the scanner. */
+@keyframes drift {
+  0%,
+  100% {
+    transform: translateY(0) scale(1);
+    opacity: 0.35;
+  }
+  50% {
+    transform: translateY(-14px) scale(1.25);
+    opacity: 0.9;
+  }
+}
+@utility animate-drift {
+  animation: drift 4.5s ease-in-out infinite;
 }

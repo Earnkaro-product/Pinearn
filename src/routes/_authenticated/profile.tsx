@@ -163,7 +163,7 @@ function ProfilePage() {
               </h1>
               <p className="truncate text-xs text-muted-foreground">{email}</p>
               <span
-                className={`mt-2 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                className={`mt-2 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-mini font-medium ${
                   connected ? "bg-accent/15 text-accent" : "bg-muted text-muted-foreground"
                 }`}
               >

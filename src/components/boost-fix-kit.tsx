@@ -12,12 +12,15 @@ import {
   TriangleAlert,
   X,
 } from "lucide-react";
+import { AppSheet } from "@/components/app-sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { BaseFixCard, FixField } from "@/hooks/use-fix-flow";
 import type { KeywordSummary } from "@/lib/pin-seo.functions";
 
-/* ---------------- Bottom sheet shell (matches the app's hand-rolled sheets) --------------- */
+/* ---------------- Bottom sheet shell (shared with every other overlay) --------------- */
 
+/** Thin alias kept so the four sheets in this file read the same as before —
+ * the shell itself (Escape, scroll lock, focus, safe area) is shared now. */
 function Sheet({
   onClose,
   children,
@@ -27,41 +30,10 @@ function Sheet({
   children: React.ReactNode;
   labelledBy?: string;
 }) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.stopPropagation();
-        onClose();
-      }
-    };
-    document.addEventListener("keydown", onKey, true);
-    return () => document.removeEventListener("keydown", onKey, true);
-  }, [onClose]);
   return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      transition={{ duration: 0.2 }}
-      className="fixed inset-0 z-[60] flex items-end justify-center bg-background/60 backdrop-blur-sm sm:items-center sm:p-4"
-      onClick={onClose}
-    >
-      <motion.div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={labelledBy}
-        onClick={(e) => e.stopPropagation()}
-        initial={{ y: 40, opacity: 0.6 }}
-        animate={{ y: 0, opacity: 1 }}
-        exit={{ y: 40, opacity: 0 }}
-        transition={{ type: "spring", stiffness: 380, damping: 34 }}
-        className="w-full max-w-lg rounded-t-3xl border border-border bg-surface p-5 shadow-elevate sm:rounded-3xl"
-        style={{ paddingBottom: "max(1.25rem, env(safe-area-inset-bottom))" }}
-      >
-        <div className="mx-auto mb-4 h-1.5 w-10 rounded-full bg-border sm:hidden" />
-        {children}
-      </motion.div>
-    </motion.div>
+    <AppSheet onClose={onClose} labelledBy={labelledBy} size="lg">
+      {children}
+    </AppSheet>
   );
 }
 
@@ -112,7 +84,7 @@ export function FixEditSheet({
                 </label>
                 {(f.min != null || f.max != null) && (
                   <span
-                    className={`text-[11px] font-bold tabular-nums ${
+                    className={`text-mini font-bold tabular-nums ${
                       ok ? "text-emerald-600" : "text-amber-600"
                     }`}
                   >
@@ -216,12 +188,12 @@ export function ApproveAllSheet({
 
       {samples.length > 0 && (
         <div className="mt-4 space-y-2">
-          <p className="text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
+          <p className="text-mini font-bold uppercase tracking-wide text-muted-foreground">
             Preview
           </p>
           {samples.map((c) => (
             <div key={c.id} className="rounded-2xl border border-border bg-surface-2/40 p-3">
-              <p className="truncate text-[11px] text-muted-foreground line-through">
+              <p className="truncate text-mini text-muted-foreground line-through">
                 {c.original[c.fields[0].key]?.toString().trim() || "(empty)"}
               </p>
               {/* A flow may not have generated its copy yet (the pin Boost
@@ -237,7 +209,7 @@ export function ApproveAllSheet({
             </div>
           ))}
           {cards.length > samples.length && (
-            <p className="text-center text-[11px] text-muted-foreground">
+            <p className="text-center text-mini text-muted-foreground">
               + {cards.length - samples.length} more
             </p>
           )}
@@ -253,14 +225,14 @@ export function ApproveAllSheet({
           }`}
         >
           <div className="min-w-0">
-            <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-muted-foreground">
+            <p className="text-micro font-bold uppercase tracking-[0.12em] text-muted-foreground">
               Cost
             </p>
-            <p className="text-[13px] font-semibold">
+            <p className="text-body font-semibold">
               {covered} {covered === 1 ? unitLabel.replace(/s$/, "") : unitLabel} × 1 coin
             </p>
             {trimmed && (
-              <p className="mt-0.5 text-[11px] font-semibold leading-snug text-amber-800">
+              <p className="mt-0.5 text-mini font-semibold leading-snug text-amber-800">
                 Covers the first {covered} of {cards.length} — the rest stay queued until your
                 weekly refill.
               </p>
@@ -274,7 +246,7 @@ export function ApproveAllSheet({
             >
               −{covered.toLocaleString()}
             </p>
-            <p className="mt-0.5 text-[10px] font-semibold tabular-nums text-muted-foreground">
+            <p className="mt-0.5 text-micro font-semibold tabular-nums text-muted-foreground">
               {balance - covered === 0
                 ? "empties your wallet"
                 : `${(balance - covered).toLocaleString()} coins left`}
@@ -347,20 +319,20 @@ export function GuideSheet({
       </div>
 
       <div className="mt-4 rounded-2xl bg-emerald-500/[0.06] p-3.5 ring-1 ring-emerald-500/15">
-        <p className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide text-emerald-700">
+        <p className="flex items-center gap-1.5 text-mini font-bold uppercase tracking-wide text-emerald-700">
           <CheckCircle2 className="h-3.5 w-3.5" /> What passes the check
         </p>
-        <p className="mt-1 text-[13px] leading-relaxed text-foreground/80">{criteria}</p>
+        <p className="mt-1 text-body leading-relaxed text-foreground/80">{criteria}</p>
       </div>
 
       <div className="mt-4">
-        <p className="text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
+        <p className="text-mini font-bold uppercase tracking-wide text-muted-foreground">
           How to use this screen
         </p>
         <ol className="mt-2 space-y-2.5">
           {steps.map((s, i) => (
             <li key={i} className="flex items-start gap-3">
-              <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-primary/10 text-[11px] font-extrabold text-primary">
+              <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-primary/10 text-mini font-extrabold text-primary">
                 {i + 1}
               </span>
               <p className="text-sm leading-snug text-foreground/85">{s}</p>
@@ -473,11 +445,11 @@ export function DoneState({
           {gained > 0 && <span className="font-bold text-emerald-600"> (+{gained})</span>}
           {busy ? " — saving…" : ""}
         </p>
-        <p className="mt-0.5 text-[11px] text-muted-foreground">
+        <p className="mt-0.5 text-mini text-muted-foreground">
           {approvedCount} applied · {skippedCount} skipped · {total} reviewed
         </p>
         {coinsSpent != null && coinsSpent > 0 && (
-          <p className="mt-1.5 inline-flex items-center gap-1.5 rounded-full bg-amber-500/10 px-2.5 py-1 text-[11px] font-bold text-amber-800 ring-1 ring-inset ring-amber-500/20">
+          <p className="mt-1.5 inline-flex items-center gap-1.5 rounded-full bg-amber-500/10 px-2.5 py-1 text-mini font-bold text-amber-800 ring-1 ring-inset ring-amber-500/20">
             <Coins className="h-3 w-3" /> {coinsSpent} {coinsSpent === 1 ? "coin" : "coins"} spent
             {/* Undo refunds them, so say so where the undo lives. */}
             <span className="font-semibold opacity-75">· undo refunds</span>
@@ -518,7 +490,7 @@ export function DoneState({
                         className="flex items-start gap-2 rounded-2xl border border-border bg-surface-2/40 p-3"
                       >
                         <div className="min-w-0 flex-1">
-                          <p className="truncate text-[11px] text-muted-foreground line-through">
+                          <p className="truncate text-mini text-muted-foreground line-through">
                             {c.original[c.fields[0].key]?.toString().trim() || "(empty)"}
                           </p>
                           <p
@@ -536,7 +508,7 @@ export function DoneState({
                             setReverted((s) => new Set(s).add(c.id));
                             onRevertOne(c);
                           }}
-                          className="inline-flex min-h-8 shrink-0 items-center gap-1 rounded-full bg-surface px-2.5 text-[11px] font-bold text-muted-foreground ring-1 ring-border transition hover:text-foreground disabled:opacity-50"
+                          className="inline-flex min-h-8 shrink-0 items-center gap-1 rounded-full bg-surface px-2.5 text-mini font-bold text-muted-foreground ring-1 ring-border transition hover:text-foreground disabled:opacity-50"
                         >
                           <RotateCcw className="h-3 w-3" /> {isReverted ? "Undone" : "Undo"}
                         </button>
@@ -588,7 +560,7 @@ export function DeckSkeleton() {
 export function IssueChips({ issues }: { issues: string[] }) {
   if (issues.length === 0) {
     return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-500/20">
+      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-micro font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-500/20">
         <CheckCircle2 className="h-2.5 w-2.5" /> Already passing — checking for a stronger keyword
       </span>
     );
@@ -598,7 +570,7 @@ export function IssueChips({ issues }: { issues: string[] }) {
       {issues.map((issue) => (
         <span
           key={issue}
-          className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold text-amber-700 ring-1 ring-inset ring-amber-500/20"
+          className="rounded-full bg-amber-500/10 px-2 py-0.5 text-micro font-semibold text-amber-700 ring-1 ring-inset ring-amber-500/20"
         >
           {issue}
         </span>
@@ -615,7 +587,7 @@ function ScoreDelta({ current, next }: { current: number; next: number }) {
   const gain = next - current;
   const better = gain > 0;
   return (
-    <span className="inline-flex shrink-0 items-center gap-1 text-[10px] font-bold tabular-nums">
+    <span className="inline-flex shrink-0 items-center gap-1 text-micro font-bold tabular-nums">
       <span className="text-muted-foreground/70">{current}</span>
       <ArrowRight className="h-2.5 w-2.5 text-muted-foreground/50" />
       <span className={better ? "text-emerald-700" : "text-amber-700"}>{next}</span>
@@ -637,7 +609,7 @@ function FitChip({ len, min, max }: { len: number; min?: number; max?: number })
   const ok = (min == null || len >= min) && (max == null || len <= max);
   return (
     <span
-      className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold tabular-nums ring-1 ring-inset ${
+      className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-micro font-bold tabular-nums ring-1 ring-inset ${
         ok
           ? "bg-emerald-500/10 text-emerald-700 ring-emerald-500/20"
           : "bg-amber-500/10 text-amber-700 ring-amber-500/20"
@@ -718,13 +690,13 @@ export function FieldDiff({
 }) {
   return (
     <div className="overflow-hidden rounded-2xl border border-border bg-surface">
-      <p className="border-b border-border/70 bg-surface-2/50 px-3.5 py-2 text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
+      <p className="border-b border-border/70 bg-surface-2/50 px-3.5 py-2 text-mini font-bold uppercase tracking-wide text-muted-foreground">
         {heading}
       </p>
 
       {/* Without AI — demoted. */}
       <div className="px-3.5 py-2.5">
-        <p className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground/60">
+        <p className="text-micro font-bold uppercase tracking-wide text-muted-foreground/60">
           Without AI
         </p>
         <p
@@ -741,7 +713,7 @@ export function FieldDiff({
       {/* AI suggested — the payoff. */}
       <div className="bg-primary/[0.05] px-3.5 py-3">
         <div className="flex items-center justify-between">
-          <p className="text-[10px] font-bold uppercase tracking-wide text-primary">AI suggested</p>
+          <p className="text-micro font-bold uppercase tracking-wide text-primary">AI suggested</p>
           {loading ? (
             <span className="inline-flex h-5 items-center gap-1 rounded-full bg-primary/10 px-2">
               <TypingDots />
@@ -758,7 +730,7 @@ export function FieldDiff({
               initial={{ opacity: 0, y: 4 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
-              className="text-[15px] font-bold leading-snug text-foreground"
+              className="text-lead font-bold leading-snug text-foreground"
             >
               {field.value}
             </motion.p>
@@ -789,7 +761,7 @@ export function KeywordProof({
   return (
     <div className="rounded-2xl border border-border bg-surface-2/40 p-3">
       <div className="flex items-center justify-between gap-2">
-        <p className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
+        <p className="inline-flex items-center gap-1 text-micro font-bold uppercase tracking-wide text-muted-foreground">
           <TrendingUp className="h-3 w-3" /> Ranking for
         </p>
         <ScoreDelta current={result.currentScore} next={result.seoScore} />
@@ -798,7 +770,7 @@ export function KeywordProof({
       {/* The deck reviews copy that already passes, so an honest "this is not
           actually better" is a required state, not an edge case. */}
       {gain <= 0 && (
-        <p className="mt-1.5 rounded-xl bg-amber-500/10 px-2 py-1 text-[10px] font-semibold leading-snug text-amber-700">
+        <p className="mt-1.5 rounded-xl bg-amber-500/10 px-2 py-1 text-micro font-semibold leading-snug text-amber-700">
           {gain === 0
             ? "Scores the same as what you have — skip unless you prefer the wording."
             : "Your current copy scores higher. Best to skip this one."}
@@ -808,7 +780,7 @@ export function KeywordProof({
       <p className="mt-1 text-sm font-bold text-foreground">
         {kw.primary}
         {primaryStats?.volume != null && (
-          <span className="ml-1.5 text-[11px] font-semibold text-muted-foreground tabular-nums">
+          <span className="ml-1.5 text-mini font-semibold text-muted-foreground tabular-nums">
             {primaryStats.volume}/100 search interest
             {primaryStats.rising && <span className="text-emerald-600"> · rising</span>}
           </span>
@@ -820,7 +792,7 @@ export function KeywordProof({
           {supporting.map((t) => (
             <span
               key={t}
-              className="rounded-full bg-surface px-2 py-0.5 text-[10px] font-medium text-muted-foreground ring-1 ring-inset ring-border"
+              className="rounded-full bg-surface px-2 py-0.5 text-micro font-medium text-muted-foreground ring-1 ring-inset ring-border"
             >
               {t}
             </span>
@@ -828,7 +800,7 @@ export function KeywordProof({
         </div>
       )}
 
-      <p className="mt-1.5 text-[10px] text-muted-foreground/70">
+      <p className="mt-1.5 text-micro text-muted-foreground/70">
         {kw.hasTrendData
           ? `Live Pinterest Trends · ${kw.country}${kw.asOf ? ` · week of ${kw.asOf}` : ""}`
           : "From this pin's own details — no live trend data available"}
@@ -870,7 +842,7 @@ export function GeneratingNotice() {
           <Sparkles className="h-3.5 w-3.5 animate-pulse" />
         </span>
         {/* key remounts the <p> so each stage fades in as it swaps. */}
-        <p key={stage} className="animate-hint-in text-[11px] font-semibold text-muted-foreground">
+        <p key={stage} className="animate-hint-in text-mini font-semibold text-muted-foreground">
           {GENERATION_STAGES[stage].label}…
         </p>
       </div>
