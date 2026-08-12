@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { ArrowRight, Check, ChevronDown, Coins, Info, Search, Sparkles, X } from "lucide-react";
 import { LiveScorePill } from "@/components/health-widgets";
-import { pointsLabel } from "@/lib/boost-picker";
+import { pointsLabel } from "@/lib/health-score";
 
 /* ------------------------------------------------------------------ *
  * Shared furniture for the two boost pickers — the screen where a run
@@ -51,10 +51,12 @@ export function RailLabel({ text, metric }: { text: string; metric: string }) {
   );
 }
 
-/** Animated progress ring — the score as a shape, not another sentence. */
-export function ScoreRing({ score }: { score: number }) {
+/** Animated progress ring — the pts as a shape, with the number inside. The
+ * ring is the fraction, so the digits never have to spell out a denominator. */
+export function ScoreRing({ points, maxPoints }: { points: number; maxPoints: number }) {
   const r = 20;
   const c = 2 * Math.PI * r;
+  const share = maxPoints > 0 ? (points / maxPoints) * 100 : 0;
   return (
     <div className="relative grid h-14 w-14 shrink-0 place-items-center">
       <svg viewBox="0 0 48 48" className="h-14 w-14 -rotate-90">
@@ -68,34 +70,46 @@ export function ScoreRing({ score }: { score: number }) {
           strokeLinecap="round"
           strokeDasharray={c}
           initial={{ strokeDashoffset: c }}
-          animate={{ strokeDashoffset: c * (1 - Math.min(100, Math.max(2, score)) / 100) }}
+          // A floor of 2% keeps a sliver of colour visible at zero, so the ring
+          // reads as "empty" rather than "not loaded".
+          animate={{ strokeDashoffset: c * (1 - Math.min(100, Math.max(2, share)) / 100) }}
           transition={{ duration: 0.9, ease: [0.22, 1, 0.36, 1] }}
           className="stroke-primary"
         />
       </svg>
-      <span className="absolute text-xs font-bold tabular-nums">{score}%</span>
+      <span className="absolute flex flex-col items-center leading-none">
+        <span className="text-xs font-bold tabular-nums">{Math.round(points)}</span>
+        <span className="mt-px text-[9px] font-bold uppercase tracking-wide text-muted-foreground">
+          pts
+        </span>
+      </span>
     </div>
   );
 }
 
-/** The whole briefing in one slim band: where the score stands, what's on the
- * table, and the page's only instruction — everything else is pictures. */
+/** The whole briefing in one slim band: pts banked, pts on the table, and the
+ * page's only instruction — everything else is pictures. */
 export function PickerHeader({
   eyebrow,
   heading,
-  score,
   points,
+  maxPoints,
+  gainPoints,
   onGuide,
 }: {
   eyebrow: string;
   heading: string;
-  score: number;
+  /** Pts this area has already banked on the 100-pt Boost Score. */
   points: number;
+  /** The most this area can be worth. */
+  maxPoints: number;
+  /** Pts still recoverable from everything on this screen. */
+  gainPoints: number;
   onGuide: () => void;
 }) {
   return (
     <header className="flex items-center gap-3.5 rounded-3xl border border-border bg-surface p-4 shadow-sm">
-      <ScoreRing score={score} />
+      <ScoreRing points={points} maxPoints={maxPoints} />
       <div className="min-w-0 flex-1">
         <p className="text-micro font-bold uppercase tracking-[0.14em] text-muted-foreground">
           {eyebrow}
@@ -106,7 +120,7 @@ export function PickerHeader({
       </div>
       <div className="shrink-0 text-right">
         <p className="font-display text-[19px] font-bold leading-none text-primary">
-          +{pointsLabel(points)}
+          +{pointsLabel(gainPoints)}
         </p>
         <p className="mt-1 text-micro font-semibold text-muted-foreground">pts available</p>
       </div>
@@ -447,14 +461,15 @@ export function LaunchScreen({
   );
 }
 
-/** Compact status bar for a review surface. Score, position, a segmented
+/** Compact status bar for a review surface. Live pts, position, a segmented
  * progress track (applied vs skipped vs remaining) and the run's promise, in
  * one band — the three centred rows this replaced cost ~70px of the card's
  * height on a small phone and read as three unrelated captions. */
 export function ReviewProgressHeader({
   label,
   hint,
-  score,
+  points,
+  maxPoints,
   index,
   total,
   approvedCount,
@@ -463,7 +478,9 @@ export function ReviewProgressHeader({
 }: {
   label: string;
   hint: string;
-  score: number;
+  /** Pts this area has banked so far — climbs live as fixes land. */
+  points: number;
+  maxPoints: number;
   index: number;
   total: number;
   approvedCount: number;
@@ -479,7 +496,7 @@ export function ReviewProgressHeader({
     <div className={`shrink-0 ${showTrack ? "pb-3" : "pb-2"}`}>
       <div className="flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2.5">
-          <LiveScorePill label={label} score={score} />
+          <LiveScorePill label={label} points={points} maxPoints={maxPoints} />
           <p className="min-w-0 text-mini font-semibold leading-tight text-muted-foreground">
             {total > 1 ? (
               <>

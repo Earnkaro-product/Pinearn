@@ -7,6 +7,7 @@ import {
   useReducedMotion,
   useTransform,
 } from "framer-motion";
+import { pointsLabel } from "@/lib/health-score";
 
 /** Score → semantic colour. Red until it's genuinely healthy — this is a
  * diagnosis, not a participation trophy. */
@@ -29,15 +30,21 @@ export function AnimatedNumber({
   from,
   className,
   duration = 1.1,
+  decimals = 0,
 }: {
   value: number;
   from?: number | null;
   className?: string;
   duration?: number;
+  /** Decimal places to hold while climbing. One place is what makes a points
+   * total move on a single fix when the area is worth 40 pts across 80 pins. */
+  decimals?: number;
 }) {
   const reduce = useReducedMotion();
   const mv = useMotionValue(from ?? value);
-  const rounded = useTransform(mv, (v) => Math.round(v));
+  const rounded = useTransform(mv, (v) =>
+    decimals > 0 ? v.toFixed(decimals) : String(Math.round(v)),
+  );
   const first = useRef(true);
   useEffect(() => {
     // Reduced motion, or first render with no explicit start point: show the
@@ -55,74 +62,44 @@ export function AnimatedNumber({
   return <motion.span className={className}>{rounded}</motion.span>;
 }
 
-/** One horizontal sub-score progress bar. Tappable when `onClick` is set. */
-export function SubScoreBar({
+/**
+ * The live points pill shown inside the fix flows — bigger and louder than a
+ * label now, because it IS the reward. Every time the total rises, a "+N pts"
+ * chip springs out of it and the pill gives a quick scale pulse, so the payoff
+ * registers even though the user's eyes are on the card. aria-live keeps
+ * screen-reader users in the loop.
+ *
+ * Points, never a percentage: `points` is what this area has banked out of
+ * `maxPoints` on the 100-point Boost Score, so the pill reads in the same unit
+ * as the plan the creator came from. It carries one decimal on purpose — an
+ * area worth 40 pts spread over 80 pins moves 0.5 pts per fix, and a whole
+ * number would sit still through the first few swipes.
+ */
+export function LiveScorePill({
   label,
-  score,
-  detail,
-  onClick,
+  points,
+  maxPoints,
 }: {
   label: string;
-  score: number;
-  detail?: string;
-  onClick?: () => void;
+  points: number;
+  maxPoints: number;
 }) {
-  const tone = scoreTone(score);
-  const inner = (
-    <>
-      <div className="flex items-baseline justify-between gap-2">
-        <span className="text-sm font-semibold">{label}</span>
-        <span className={`text-sm font-extrabold tabular-nums ${tone.text}`}>
-          <AnimatedNumber value={score} />%
-        </span>
-      </div>
-      <div className="mt-2 h-2 overflow-hidden rounded-full bg-surface-2">
-        <motion.div
-          className={`h-full rounded-full ${tone.bar}`}
-          initial={false}
-          animate={{ width: `${score}%` }}
-          transition={{ duration: 0.9, ease: [0.22, 1, 0.36, 1] }}
-        />
-      </div>
-      {detail && <p className="mt-1.5 text-mini text-muted-foreground">{detail}</p>}
-    </>
-  );
-  if (!onClick) {
-    return <div className="rounded-2xl border border-border bg-surface p-4">{inner}</div>;
-  }
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="w-full rounded-2xl border border-border bg-surface p-4 text-left transition hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-elevate"
-    >
-      {inner}
-    </button>
-  );
-}
-
-/**
- * The live score pill shown inside the fix flows — bigger and louder than a
- * label now, because it IS the reward. Every time the integer score rises, a
- * "+N" chip springs out of it and the pill gives a quick scale pulse, so the
- * payoff registers even though the user's eyes are on the card. aria-live keeps
- * screen-reader users in the loop.
- */
-export function LiveScorePill({ label, score }: { label: string; score: number }) {
   const reduce = useReducedMotion();
-  const tone = scoreTone(score);
-  const prev = useRef(score);
+  // Tone tracks the share earned, not the raw points — 8 pts is healthy out of
+  // 10 and dire out of 40.
+  const tone = scoreTone(maxPoints > 0 ? (points / maxPoints) * 100 : 0);
+  const prev = useRef(points);
   const [delta, setDelta] = useState<{ n: number; id: number } | null>(null);
   const pulse = useRef(0);
 
   useEffect(() => {
-    const d = score - prev.current;
-    prev.current = score;
+    const d = points - prev.current;
+    prev.current = points;
     if (d > 0) {
       pulse.current += 1;
       setDelta({ n: d, id: pulse.current });
     }
-  }, [score]);
+  }, [points]);
 
   return (
     <div className="relative inline-flex flex-col items-center">
@@ -130,16 +107,17 @@ export function LiveScorePill({ label, score }: { label: string; score: number }
         key={pulse.current}
         animate={reduce ? undefined : { scale: [1, 1.08, 1] }}
         transition={{ duration: 0.45, ease: "easeOut" }}
-        className={`inline-flex items-center gap-2 rounded-full px-4 py-2 ring-1 ring-inset ring-border/50 ${tone.bg}`}
+        className={`inline-flex items-baseline gap-1.5 rounded-full px-3 py-2 ring-1 ring-inset ring-border/50 ${tone.bg}`}
       >
-        <span className="text-xs font-semibold text-muted-foreground">{label}</span>
+        <span className="text-mini font-semibold text-muted-foreground">{label}</span>
         <span
-          className={`text-lg font-extrabold tabular-nums ${tone.text}`}
+          className={`text-base font-extrabold tabular-nums ${tone.text}`}
           aria-live="polite"
-          aria-label={`${label} ${score} percent`}
+          aria-label={`${label} ${pointsLabel(points)} of ${maxPoints} points`}
         >
-          <AnimatedNumber value={score} duration={0.6} />%
+          <AnimatedNumber value={points} duration={0.6} decimals={1} />
         </span>
+        <span className="text-micro font-bold text-muted-foreground">/{maxPoints} pts</span>
       </motion.div>
       <AnimatePresence>
         {delta && (
@@ -152,7 +130,7 @@ export function LiveScorePill({ label, score }: { label: string; score: number }
             onAnimationComplete={() => setDelta(null)}
             className="pointer-events-none absolute -top-1 right-1 rounded-full bg-emerald-500 px-2 py-0.5 text-mini font-extrabold text-white shadow"
           >
-            +{delta.n}%
+            +{pointsLabel(delta.n)} pts
           </motion.span>
         )}
       </AnimatePresence>

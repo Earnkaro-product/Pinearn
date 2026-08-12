@@ -30,7 +30,7 @@ import {
   SelectionBar,
 } from "@/components/boost-picker-kit";
 import { useLongPress } from "@/hooks/use-long-press";
-import { metricLabel, pointsLabel } from "@/lib/boost-picker";
+import { metricLabel } from "@/lib/boost-picker";
 import {
   ApproveAllSheet,
   DeckSkeleton,
@@ -57,11 +57,14 @@ import type { HealthData } from "@/hooks/use-health-score";
 import {
   boardIdOf,
   byIssueCountDesc,
+  maxPointsFor,
   PIN_DESC_MAX,
   PIN_DESC_MIN,
   PIN_TITLE_MAX,
   PIN_TITLE_MIN,
   pinSeoIssues,
+  pointsEarned,
+  pointsLabel,
   SCORE_CRITERIA,
   SUB_SCORE_WEIGHTS,
 } from "@/lib/health-score";
@@ -393,8 +396,9 @@ function FixPinSeoPage() {
         ) : flow.done ? (
           <DoneState
             scoreLabel="Pin SEO"
-            score={flow.score}
-            gained={flow.gained}
+            points={pointsEarned("pinSeo", flow.score)}
+            maxPoints={maxPointsFor("pinSeo")}
+            gained={pointsEarned("pinSeo", flow.gained)}
             approvedCount={flow.approvedCount}
             skippedCount={flow.skippedCount}
             total={flow.total}
@@ -424,7 +428,8 @@ function FixPinSeoPage() {
             <ReviewProgressHeader
               label="Pin SEO"
               hint="Strongest gains first"
-              score={flow.score}
+              points={pointsEarned("pinSeo", flow.score)}
+              maxPoints={maxPointsFor("pinSeo")}
               index={flow.index}
               total={flow.total}
               approvedCount={flow.approvedCount}
@@ -819,8 +824,9 @@ function PinBoostPicker({
         <PickerHeader
           eyebrow="Pin SEO"
           heading="Pick pins to boost"
-          score={score}
-          points={overallPointsFor(failingTotal, ranked.length)}
+          points={pointsEarned("pinSeo", score)}
+          maxPoints={maxPointsFor("pinSeo")}
+          gainPoints={overallPointsFor(failingTotal, ranked.length)}
           onGuide={onGuide}
         />
 
@@ -855,7 +861,6 @@ function PinBoostPicker({
                   statusById={statusById}
                   perPinPoints={perPinPoints}
                   score={score}
-                  totalRanked={ranked.length}
                 />
               )}
 
@@ -916,8 +921,7 @@ function PinBoostPicker({
                       flipped={flippedId === card.id}
                       boosted={statusById[card.id] === "approved"}
                       points={card.issues.length > 0 ? perPinPoints : 0}
-                      seoNow={score}
-                      seoDelta={card.issues.length > 0 ? 100 / Math.max(1, ranked.length) : 0}
+                      pointsNow={pointsEarned("pinSeo", score)}
                       onToggle={() => toggleOne(card.id)}
                       onFlip={() => setFlippedId((cur) => (cur === card.id ? null : card.id))}
                     />
@@ -1107,7 +1111,6 @@ function SuggestedRail({
   statusById,
   perPinPoints,
   score,
-  totalRanked,
 }: {
   cards: PinFixCard[];
   selected: Set<string>;
@@ -1118,7 +1121,6 @@ function SuggestedRail({
   statusById: Record<string, string | undefined>;
   perPinPoints: number;
   score: number;
-  totalRanked: number;
 }) {
   const ids = cards.map((c) => c.id);
   const allQueued = ids.length > 0 && ids.every((id) => selected.has(id));
@@ -1193,8 +1195,7 @@ function SuggestedRail({
               flipped={flippedId === card.id}
               boosted={statusById[card.id] === "approved"}
               points={card.issues.length > 0 ? perPinPoints : 0}
-              seoNow={score}
-              seoDelta={card.issues.length > 0 ? 100 / Math.max(1, totalRanked) : 0}
+              pointsNow={pointsEarned("pinSeo", score)}
               onToggle={() => onToggle(card.id)}
               onFlip={() => onFlip(card.id)}
             />
@@ -1374,8 +1375,7 @@ function PinPickCard({
   flipped,
   boosted,
   points,
-  seoNow,
-  seoDelta,
+  pointsNow,
   onToggle,
   onFlip,
   rank,
@@ -1385,9 +1385,11 @@ function PinPickCard({
   selected: boolean;
   flipped: boolean;
   boosted: boolean;
+  /** Pts fixing this one pin adds to the overall score. Zero when it already
+   * passes — the rewrite is then a keyword play, not a score play. */
   points: number;
-  seoNow: number;
-  seoDelta: number;
+  /** Pin SEO's banked pts right now, so the flip side can show the move. */
+  pointsNow: number;
   onToggle: () => void;
   onFlip: () => void;
   /** 1-based position in the suggested rail; adds the rank pip and, at 1, the
@@ -1486,14 +1488,14 @@ function PinPickCard({
             {points > 0 ? `+${pointsLabel(points)}` : "+0"}
           </span>
           <span className="text-micro font-bold uppercase tracking-wide text-muted-foreground">
-            health pts
+            boost pts
           </span>
           <span className="text-mini font-semibold leading-snug text-muted-foreground">
             {points > 0 ? (
               <>
-                SEO {seoNow}% →{" "}
+                {pointsLabel(pointsNow)} →{" "}
                 <span className="text-emerald-600">
-                  {Math.min(100, Math.round(seoNow + seoDelta))}%
+                  {pointsLabel(Math.min(maxPointsFor("pinSeo"), pointsNow + points))} pts
                 </span>
               </>
             ) : (

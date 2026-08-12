@@ -15,6 +15,7 @@ import {
 import { AppSheet } from "@/components/app-sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { BaseFixCard, FixField } from "@/hooks/use-fix-flow";
+import { pointsLabel } from "@/lib/health-score";
 import type { KeywordSummary } from "@/lib/pin-seo.functions";
 
 /* ---------------- Bottom sheet shell (shared with every other overlay) --------------- */
@@ -388,7 +389,8 @@ export function OptimizedState({
  * exactly what changed, so bulk apply → review → selective undo is one loop. */
 export function DoneState({
   scoreLabel,
-  score,
+  points,
+  maxPoints,
   gained,
   approvedCount,
   skippedCount,
@@ -401,7 +403,10 @@ export function DoneState({
   busy,
 }: {
   scoreLabel: string;
-  score: number;
+  /** Pts this area now holds on the 100-pt Boost Score. */
+  points: number;
+  maxPoints: number;
+  /** Pts the run just added. */
   gained: number;
   approvedCount: number;
   skippedCount: number;
@@ -441,8 +446,13 @@ export function DoneState({
             : "All reviewed"}
         </h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          {scoreLabel} is now <span className="font-bold text-foreground">{score}%</span>
-          {gained > 0 && <span className="font-bold text-emerald-600"> (+{gained})</span>}
+          {scoreLabel} is now{" "}
+          <span className="font-bold text-foreground">
+            {pointsLabel(points)}/{maxPoints} pts
+          </span>
+          {gained > 0 && (
+            <span className="font-bold text-emerald-600"> (+{pointsLabel(gained)})</span>
+          )}
           {busy ? " — saving…" : ""}
         </p>
         <p className="mt-0.5 text-mini text-muted-foreground">

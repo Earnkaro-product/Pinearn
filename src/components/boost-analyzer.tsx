@@ -51,12 +51,12 @@ const STEPS: Step[] = [
   },
   {
     icon: UserCheck,
-    label: "Reviewing your profile",
+    label: "Checking profile SEO",
     detail: () => "Bio, avatar, website & socials",
   },
   {
     icon: CalendarClock,
-    label: "Measuring content freshness",
+    label: "Measuring content SEO",
     detail: () => "Pin activity over the last 30 days",
   },
 ];
