@@ -170,7 +170,7 @@ function Dashboard() {
         <div className="grid grid-cols-3 gap-3 sm:gap-4">
           <QuickAction to="/pins/attach" icon={Link2} label="Attach" />
           <QuickAction to="/pins/create" icon={Plus} label="Create pin" />
-          <QuickAction to="/boost" icon={Rocket} label="Boost Pins" />
+          <QuickAction to="/boost" icon={Rocket} label="Pinterest SEO" />
         </div>
       </div>
 

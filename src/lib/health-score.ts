@@ -37,7 +37,7 @@ export type HealthBoard = {
 /**
  * The PINTEREST profile, which is what this score is about.
  *
- * It used to be scored from the Pinearn storefront — storefront description as
+ * Profile SEO used to be scored from the Pinearn storefront — storefront description as
  * "bio", `is_published` as "website claimed". That measured the wrong profile: a
  * creator with a perfect storefront and an empty Pinterest bio scored 100 while
  * every visitor who tapped through from a pin landed on a blank page. These flags
@@ -180,12 +180,17 @@ export type HealthReport = {
 // Pin SEO drives reach hardest, so it carries the most weight. Revisit once
 // real usage data shows which sub-score correlates with impressions/saves.
 //
-// Profile Completeness is deliberately the lightest of the four. It's four
-// one-off switches on a profile Pinearn can't edit — the creator fixes them once,
-// on pinterest.com, and never touches them again. At its old 0.20 it could swing
+// Profile SEO is deliberately the lightest of the four. It's four one-off
+// switches on a profile Pinearn can't edit — the creator fixes them once, on
+// pinterest.com, and never touches them again. At its old 0.20 it could swing
 // the headline number by 20 points for work that has nothing to do with the pins
 // and boards the product actually improves, which made the score jump for reasons
 // the creator couldn't act on inside the app. Must sum to 1.
+//
+// The weights ARE the points: the score is out of 100 pts and each area's weight
+// is its slice of them (0.4 → 40 pts). Read them through `maxPointsFor` /
+// `pointsEarned` rather than multiplying by 100 at each call site — the whole
+// feature speaks in pts, never percentages.
 export const SUB_SCORE_WEIGHTS: Record<SubScoreKey, number> = {
   pinSeo: 0.4,
   boardStructure: 0.28,
@@ -196,9 +201,32 @@ export const SUB_SCORE_WEIGHTS: Record<SubScoreKey, number> = {
 export const SUB_SCORE_LABELS: Record<SubScoreKey, string> = {
   pinSeo: "Pin SEO",
   boardStructure: "Board Structure",
-  profile: "Profile Completeness",
-  freshness: "Content Freshness",
+  profile: "Profile SEO",
+  freshness: "Content SEO",
 };
+
+/** The most points this area can put on the 100-point score. */
+export function maxPointsFor(key: SubScoreKey): number {
+  return Math.round(SUB_SCORE_WEIGHTS[key] * 100);
+}
+
+/**
+ * An area's internal 0–100 pass rate expressed as points banked on the overall
+ * score. Deliberately unrounded — a run applies one fix at a time and the
+ * fraction is what makes the live number visibly move; round (or `pointsLabel`)
+ * only at the point of display.
+ */
+export function pointsEarned(key: SubScoreKey, score: number): number {
+  return SUB_SCORE_WEIGHTS[key] * score;
+}
+
+/** Points as the creator should read them: never a rounded-up "0.0", never
+ * more precision than the number deserves. */
+export function pointsLabel(points: number): string {
+  if (points <= 0) return "0";
+  if (points < 0.1) return "<0.1";
+  return points.toFixed(points < 10 ? 1 : 0);
+}
 
 // Plain-language pass criteria, surfaced in the "How your score works"
 // explainer so the heuristics are auditable rather than a black box. Built
@@ -207,9 +235,8 @@ export const SCORE_CRITERIA: Record<SubScoreKey, string> = {
   pinSeo: `A pin passes when its title is ${PIN_TITLE_MIN}–${PIN_TITLE_MAX} characters, its description ${PIN_DESC_MIN}–${PIN_DESC_MAX}, and neither is generic ("IMG_1234", "Pin 3"…).`,
   boardStructure:
     "A board passes when its name is specific (not a placeholder) and it has a description.",
-  profile:
-    "Four checks worth 25 each, read from your Pinterest profile: an About bio, a profile photo, a website URL, and a connected account. You fix these on Pinterest — Pinearn can only point you at them.",
-  freshness: `A board counts as fresh when it has a pin from the last ${FRESH_DAYS} days.`,
+  profile: `Four checks read from your Pinterest profile — an About bio, a profile photo, a website URL and a connected account — each worth a quarter of the ${maxPointsFor("profile")} pts. You fix these on Pinterest; Pinearn points you at them.`,
+  freshness: `A board passes when it has a pin from the last ${FRESH_DAYS} days.`,
 };
 
 // Named after the fields as Pinterest labels them, so the sheet's rows and the

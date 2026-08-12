@@ -5,7 +5,6 @@ import {
   ArrowRight,
   CalendarClock,
   CheckCircle2,
-  ChevronDown,
   ChevronRight,
   Clock,
   Compass,
@@ -30,6 +29,7 @@ import { AppShell } from "@/components/app-shell";
 import { AppSheet } from "@/components/app-sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AnimatedNumber, scoreTone } from "@/components/health-widgets";
+import { SeoInsightButton, SeoInsightSheet } from "@/components/seo-insight";
 import {
   BoostAnalyzer,
   hasAnalyzedThisSession,
@@ -40,14 +40,18 @@ import type { PinterestProfileSnapshot } from "@/lib/pinterest-profile.functions
 import {
   boardIssues,
   boardPassesStructure,
+  maxPointsFor,
   pinPassesSeo,
   pinSeoIssues,
+  pointsEarned,
+  pointsLabel,
   recordScore,
   saveLastSeenScore,
   SCORE_CRITERIA,
   staleBoards,
-  SUB_SCORE_WEIGHTS,
+  SUB_SCORE_LABELS,
   takeLastSeenScore,
+  type HealthReport,
   type ProfileItem,
   type ProfileItemKey,
   type SubScore,
@@ -94,10 +98,16 @@ function BoostPinsPage() {
     }
   }, [report, analyzing, recorded]);
 
-  // Profile Completeness scores the Pinterest profile, so its fix can't be a
-  // route inside Pinearn — the bio, photo and website all live on pinterest.com.
-  // The sheet shows what Pinterest currently has and hands over a link per field.
+  // Profile SEO scores the Pinterest profile, so its fix can't be a route inside
+  // Pinearn — the bio, photo and website all live on pinterest.com. The sheet
+  // shows what Pinterest currently has and hands over a link per field.
   const [profileSheet, setProfileSheet] = useState(false);
+
+  // The scoring explainer, and the per-area "what drives this" bulb. Both are
+  // sheets so they can open over the plan (and, for the bulb, over a briefing)
+  // without the page losing its place.
+  const [scoringSheet, setScoringSheet] = useState(false);
+  const [insightKey, setInsightKey] = useState<SubScoreKey | null>(null);
   const goFreshness = (boardId?: string) => {
     if (report) saveLastSeenScore(report.overall);
     navigate({ to: "/pins/create", search: { board: boardId } });
@@ -173,7 +183,7 @@ function BoostPinsPage() {
                 </div>
               </div>
 
-              <HowScoringWorks />
+              <HowScoringTrigger onOpen={() => setScoringSheet(true)} />
 
               {/* ---- One prioritized plan (grid + list merged) ---- */}
               <div className="mt-6">
@@ -192,6 +202,18 @@ function BoostPinsPage() {
         </AnimatePresence>
       </div>
 
+      {/* The whole scoring model, on demand — a sheet rather than an accordion
+          so it can be read properly without pushing the plan off screen. */}
+      <AnimatePresence>
+        {scoringSheet && report && (
+          <HowScoringSheet
+            report={report}
+            onExplain={(key) => setInsightKey(key)}
+            onClose={() => setScoringSheet(false)}
+          />
+        )}
+      </AnimatePresence>
+
       {/* Intermediate briefing — what's wrong + how we'll fix it, before the flow. */}
       <AnimatePresence>
         {briefingKey && report && data && (
@@ -200,9 +222,16 @@ function BoostPinsPage() {
             data={data}
             profileItems={report.profileItems}
             onStart={() => goFix(briefingKey)}
+            onExplain={() => setInsightKey(briefingKey)}
             onClose={() => setBriefingKey(null)}
           />
         )}
+      </AnimatePresence>
+
+      {/* The bulb: what actually drives this area's pts. Opens over whichever
+          sheet named it, and closes back to it. */}
+      <AnimatePresence>
+        {insightKey && <SeoInsightSheet subKey={insightKey} onClose={() => setInsightKey(null)} />}
       </AnimatePresence>
 
       {/* The profile fix itself: their live Pinterest profile, field by field. */}
@@ -306,16 +335,23 @@ function FixBriefing({
   data,
   profileItems,
   onStart,
+  onExplain,
   onClose,
 }: {
   sub: SubScore;
   data: HealthData;
   profileItems: ProfileItem[];
   onStart: () => void;
+  /** Opens the bulb — what drives this area, and why Pinterest cares. */
+  onExplain: () => void;
   onClose: () => void;
 }) {
   const tone = scoreTone(sub.score);
   const Icon = SUB_ICONS[sub.key];
+  // Everything the creator reads here is points on the 100-pt score: banked
+  // now, and where the bar can get to.
+  const maxPts = maxPointsFor(sub.key);
+  const nowPts = pointsEarned(sub.key, sub.score);
   const items = missingItemsFor(sub.key, data, profileItems);
   const shown = items.slice(0, 6);
 
@@ -368,27 +404,28 @@ function FixBriefing({
               <h2 id="briefing-title" className="font-display text-lg font-bold leading-tight">
                 {sub.label}
               </h2>
-              {/* Where the score goes, not two separate figures to add up.
-                    "1% now · +40 pts to gain" made the reader do the sum; the
-                    destination is the motivating number, so show it. */}
+              {/* Where the pts go, not two separate figures to add up. The
+                    destination is the motivating number, so show it — and in the
+                    same unit as the plan row that was just tapped. */}
               <p className="mt-0.5 flex items-center gap-1.5 text-xs font-bold">
-                <span className={tone.text}>{sub.score}%</span>
+                <span className={tone.text}>{pointsLabel(nowPts)} pts</span>
                 <ArrowRight className="h-3 w-3 text-muted-foreground/50" />
-                <span className="text-emerald-600">
-                  {Math.min(100, sub.score + sub.potentialGain)}%
-                </span>
+                <span className="text-emerald-600">{maxPts} pts</span>
                 <span className="font-medium text-muted-foreground">possible</span>
               </p>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close"
-            className="-mr-1 -mt-1 grid h-9 w-9 shrink-0 place-items-center rounded-full text-muted-foreground transition hover:bg-surface-2"
-          >
-            <X className="h-4 w-4" />
-          </button>
+          <div className="-mr-1 -mt-1 flex shrink-0 items-center gap-1">
+            <SeoInsightButton label={sub.label} onClick={onExplain} />
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close"
+              className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-muted-foreground transition hover:bg-surface-2"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
         </motion.div>
 
         {/* The one number that matters, then ONE bar showing what it's made
@@ -546,9 +583,11 @@ function PinterestProfileSheet({
   const connected = !!snapshot?.connected;
   const okOf = (key: ProfileItemKey) => items.find((i) => i.key === key)?.ok ?? false;
   const tone = scoreTone(score);
-  // What this section is still worth to the headline number — the same maths the
-  // boost plan ranks areas by, so the two never disagree.
-  const gainPts = Math.round(SUB_SCORE_WEIGHTS.profile * (100 - score));
+  // Points banked and points still on the table — the same maths the boost plan
+  // ranks areas by, so the two never disagree.
+  const maxPts = maxPointsFor("profile");
+  const nowPts = pointsEarned("profile", score);
+  const gainPts = maxPts - nowPts;
 
   const rows: ProfileRow[] = [
     {
@@ -677,7 +716,7 @@ function PinterestProfileSheet({
             </button>
           </div>
 
-          {/* The gauge is the sentence: number, four segments, points left. */}
+          {/* The gauge is the sentence: four segments, pts banked, pts left. */}
           <div className="mt-3.5 flex items-center gap-2.5">
             <div className="flex flex-1 gap-1" aria-hidden>
               {rows.map((row) => (
@@ -692,14 +731,15 @@ function PinterestProfileSheet({
             <span
               className={`font-display text-lead font-extrabold leading-none tabular-nums ${tone.text}`}
             >
-              {score}%
+              {pointsLabel(nowPts)}
+              <span className="text-mini font-bold text-muted-foreground">/{maxPts} pts</span>
             </span>
             <span
               className={`rounded-full px-2 py-0.5 text-micro font-bold tabular-nums ${
                 allDone ? "bg-emerald-500/12 text-emerald-700" : "bg-primary/10 text-primary"
               }`}
             >
-              {allDone ? "Done" : `+${gainPts} pts`}
+              {allDone ? "Done" : `+${pointsLabel(gainPts)} pts`}
             </span>
           </div>
         </div>
@@ -871,7 +911,7 @@ function ScoreRing({ score, from }: { score: number; from?: number | null }) {
           <AnimatedNumber value={score} from={from ?? 0} duration={1.4} />
         </span>
         <span className="mt-2 text-xs font-semibold tracking-wide text-muted-foreground">
-          / 100
+          / 100 pts
         </span>
       </div>
     </div>
@@ -885,11 +925,11 @@ function BoostRow({ sub, rank, onFix }: { sub: SubScore; rank: number; onFix: ()
   const Icon = SUB_ICONS[sub.key];
   const optimized = sub.score >= 100;
 
-  // Show points earned out of this area's max contribution to the overall
-  // score (its weight as points), e.g. Pin SEO at 20% → "7/35". The bar itself
-  // stays proportional to the raw percentage.
-  const totalPts = Math.round(SUB_SCORE_WEIGHTS[sub.key] * 100);
-  const earnedPts = Math.round(SUB_SCORE_WEIGHTS[sub.key] * sub.score);
+  // Points earned out of this area's max contribution to the overall score,
+  // e.g. Pin SEO at a fifth of its checks passing → "8/40 pts". The bar length
+  // is the same fraction, drawn rather than named.
+  const totalPts = maxPointsFor(sub.key);
+  const earnedPts = Math.round(pointsEarned(sub.key, sub.score));
 
   if (optimized) {
     return (
@@ -948,57 +988,174 @@ function BoostRow({ sub, rank, onFix }: { sub: SubScore; rank: number; onFix: ()
 
 /* ---------------- "How your score works" explainer ---------------- */
 
-function HowScoringWorks() {
-  const [open, setOpen] = useState(false);
-  const keys: SubScoreKey[] = ["pinSeo", "boardStructure", "profile", "freshness"];
+// Ranked by weight, so the sheet reads in the order the pts actually matter.
+const SCORING_ORDER: SubScoreKey[] = ["pinSeo", "boardStructure", "freshness", "profile"];
+
+// One colour per area, reused by the split bar and its legend. Four distinct
+// hues rather than four shades of one, so a 10-pt segment is still tellable
+// apart from a 40-pt one at the 10px height the bar is drawn at.
+const WEIGHT_COLORS = ["bg-rose-500", "bg-violet-400", "bg-amber-400", "bg-sky-400"];
+
+/** The row under the hero. Says nothing itself — its whole job is opening the
+ * sheet, so a creator who wants the rules can get all of them at once instead
+ * of an accordion that pushes their plan off the screen. */
+function HowScoringTrigger({ onOpen }: { onOpen: () => void }) {
   return (
-    <div className="mt-3 rounded-xl border border-border bg-surface">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-1.5 px-3 py-2 text-left"
-        aria-expanded={open}
-      >
-        <Info className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-        <span className="flex-1 text-xs font-semibold">How your score works</span>
-        <ChevronDown
-          className={`h-3.5 w-3.5 text-muted-foreground transition ${open ? "rotate-180" : ""}`}
-        />
-      </button>
-      <AnimatePresence>
-        {open && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: "auto", opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            className="overflow-hidden"
-          >
-            <div className="space-y-3 px-4 pb-4">
-              {keys.map((k) => (
-                <div key={k} className="border-t border-border/60 pt-3">
-                  <p className="flex items-center justify-between text-sm font-semibold">
-                    {
-                      {
-                        pinSeo: "Pin SEO",
-                        boardStructure: "Board Structure",
-                        profile: "Profile Completeness",
-                        freshness: "Content Freshness",
-                      }[k]
-                    }
-                    <span className="text-mini font-bold text-muted-foreground">
-                      {Math.round(SUB_SCORE_WEIGHTS[k] * 100)}% of score
-                    </span>
-                  </p>
-                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                    {SCORE_CRITERIA[k]}
-                  </p>
-                </div>
-              ))}
+    <button
+      type="button"
+      onClick={onOpen}
+      className="mt-3 flex w-full items-center gap-2 rounded-xl border border-border bg-surface px-3 py-2.5 text-left transition hover:bg-surface-2/60 active:scale-[0.995]"
+    >
+      <Info className="h-4 w-4 shrink-0 text-muted-foreground" />
+      <span className="flex-1 text-xs font-semibold">How your score works</span>
+      <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/60" />
+    </button>
+  );
+}
+
+/**
+ * The scoring model, end to end: what the 100 pts are, how they're split, how
+ * each slice is earned, and what moves it.
+ *
+ * The accordion this replaced could only afford four stacked paragraphs of
+ * criteria, which answered "what are the rules" but never "where did MY 26 pts
+ * come from". Here the split is drawn as one 100-pt bar, every area shows the
+ * pts it has banked against the pts it holds, and the bulb is one tap away —
+ * so the same sheet works for a first-timer and for someone auditing a number
+ * they think is wrong.
+ */
+function HowScoringSheet({
+  report,
+  onExplain,
+  onClose,
+}: {
+  report: HealthReport;
+  onExplain: (key: SubScoreKey) => void;
+  onClose: () => void;
+}) {
+  const subByKey = (key: SubScoreKey) => report.subScores.find((s) => s.key === key)!;
+
+  return (
+    <AppSheet onClose={onClose} labelledBy="scoring-title" layout="panel" grabber={false}>
+      <>
+        <div className="shrink-0 px-5 pb-3 pt-3">
+          <div className="mx-auto mb-3 h-1.5 w-10 rounded-full bg-border sm:hidden" />
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <h2 id="scoring-title" className="font-display text-xl font-bold leading-tight">
+                How your score works
+              </h2>
+              <p className="mt-1 text-mini leading-relaxed text-muted-foreground">
+                Your Boost Score is 100 pts, split across four areas of Pinterest SEO. You hold{" "}
+                <span className="font-bold text-foreground">{report.overall} pts</span> right now.
+              </p>
             </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close"
+              className="-mr-1 -mt-1 grid h-9 w-9 shrink-0 place-items-center rounded-full text-muted-foreground transition hover:bg-surface-2"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+
+          {/* The split, drawn once. Four segments sized by the pts they carry —
+              the fastest possible answer to "which of these is worth my time". */}
+          <div className="mt-4 flex h-2.5 gap-0.5 overflow-hidden rounded-full">
+            {SCORING_ORDER.map((k, i) => (
+              <motion.span
+                key={k}
+                className={`${WEIGHT_COLORS[i]} first:rounded-l-full last:rounded-r-full`}
+                initial={{ width: 0 }}
+                animate={{ width: `${maxPointsFor(k)}%` }}
+                transition={{ duration: 0.6, delay: 0.08 + i * 0.05, ease: [0.22, 1, 0.36, 1] }}
+              />
+            ))}
+          </div>
+          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+            {SCORING_ORDER.map((k, i) => (
+              <span
+                key={k}
+                className="inline-flex items-center gap-1.5 text-micro font-semibold text-muted-foreground"
+              >
+                <span className={`h-1.5 w-1.5 rounded-full ${WEIGHT_COLORS[i]}`} />
+                {SUB_SCORE_LABELS[k]}
+                <span className="font-bold text-foreground/70">{maxPointsFor(k)} pts</span>
+              </span>
+            ))}
+          </div>
+        </div>
+
+        <div className="no-scrollbar min-h-0 flex-1 space-y-2.5 overflow-y-auto px-5 pb-3">
+          {SCORING_ORDER.map((k) => {
+            const sub = subByKey(k);
+            const Icon = SUB_ICONS[k];
+            const maxPts = maxPointsFor(k);
+            const nowPts = pointsEarned(k, sub.score);
+            const tone = scoreTone(sub.score);
+            return (
+              <div key={k} className="rounded-2xl border border-border bg-surface p-3.5">
+                <div className="flex items-center gap-3">
+                  <span
+                    className={`grid h-9 w-9 shrink-0 place-items-center rounded-xl ${tone.bg} ${tone.text}`}
+                  >
+                    <Icon className="h-4 w-4" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-body font-bold leading-tight">
+                      {SUB_SCORE_LABELS[k]}
+                    </p>
+                    <p className={`mt-0.5 text-mini font-bold tabular-nums ${tone.text}`}>
+                      {pointsLabel(nowPts)}
+                      <span className="font-semibold text-muted-foreground">
+                        {" "}
+                        of {maxPts} pts earned
+                      </span>
+                    </p>
+                  </div>
+                  <SeoInsightButton label={SUB_SCORE_LABELS[k]} onClick={() => onExplain(k)} />
+                </div>
+                <p className="mt-2.5 text-mini leading-relaxed text-muted-foreground">
+                  {SCORE_CRITERIA[k]}
+                </p>
+              </div>
+            );
+          })}
+
+          {/* The one rule that isn't per-area, and the one thing people get
+              wrong: the pts are a share, not a checklist you complete. */}
+          <div className="rounded-2xl bg-surface-2/60 p-3.5 ring-1 ring-inset ring-border/60">
+            <p className="text-mini font-bold uppercase tracking-[0.12em] text-muted-foreground">
+              How pts are earned
+            </p>
+            <p className="mt-1.5 text-mini leading-relaxed text-foreground/80">
+              Each area gives you its pts in proportion to how much of it passes. Half your pins
+              passing Pin SEO banks half of its {maxPointsFor("pinSeo")} pts — you never need
+              everything perfect to move the number.
+            </p>
+            <p className="mt-2 text-mini leading-relaxed text-foreground/80">
+              Nothing is scored on a schedule and nothing is deducted for trying. Every fix is
+              undoable, and the score is recalculated from your live Pinterest data each time you
+              recheck.
+            </p>
+          </div>
+        </div>
+
+        <div
+          className="shrink-0 border-t border-border/70 bg-surface px-5 pt-3"
+          style={{ paddingBottom: "max(1rem, env(safe-area-inset-bottom))" }}
+        >
+          <button
+            type="button"
+            onClick={onClose}
+            className="min-h-[48px] w-full rounded-2xl bg-gradient-primary text-body font-bold text-primary-foreground shadow-glow"
+          >
+            Got it
+          </button>
+        </div>
+      </>
+    </AppSheet>
   );
 }
 

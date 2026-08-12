@@ -25,7 +25,7 @@ import {
   SelectionBar,
 } from "@/components/boost-picker-kit";
 import { useLongPress } from "@/hooks/use-long-press";
-import { metricLabel, pointsLabel } from "@/lib/boost-picker";
+import { metricLabel } from "@/lib/boost-picker";
 import {
   ApproveAllSheet,
   DeckSkeleton,
@@ -48,6 +48,9 @@ import {
   boardIdOf,
   boardIssues,
   byIssueCountDesc,
+  maxPointsFor,
+  pointsEarned,
+  pointsLabel,
   SCORE_CRITERIA,
   SUB_SCORE_WEIGHTS,
 } from "@/lib/health-score";
@@ -302,8 +305,9 @@ function FixBoardsPage() {
         ) : flow.done ? (
           <DoneState
             scoreLabel="Board Structure"
-            score={flow.score}
-            gained={flow.gained}
+            points={pointsEarned("boardStructure", flow.score)}
+            maxPoints={maxPointsFor("boardStructure")}
+            gained={pointsEarned("boardStructure", flow.gained)}
             approvedCount={flow.approvedCount}
             skippedCount={flow.skippedCount}
             total={flow.total}
@@ -330,7 +334,8 @@ function FixBoardsPage() {
             <ReviewProgressHeader
               label="Board Structure"
               hint="Strongest gains first"
-              score={flow.score}
+              points={pointsEarned("boardStructure", flow.score)}
+              maxPoints={maxPointsFor("boardStructure")}
               index={flow.index}
               total={flow.total}
               approvedCount={flow.approvedCount}
@@ -677,8 +682,9 @@ function BoardBoostPicker({
         <PickerHeader
           eyebrow="Board Structure"
           heading="Pick boards to boost"
-          score={score}
-          points={overallPointsFor(failingTotal, ranked.length)}
+          points={pointsEarned("boardStructure", score)}
+          maxPoints={maxPointsFor("boardStructure")}
+          gainPoints={overallPointsFor(failingTotal, ranked.length)}
           onGuide={onGuide}
         />
 
@@ -732,8 +738,7 @@ function BoardBoostPicker({
                 flipped={flippedId === card.id}
                 boosted={statusById[card.id] === "approved"}
                 points={card.issues.length > 0 ? perBoardPoints : 0}
-                structureNow={score}
-                structureDelta={card.issues.length > 0 ? 100 / Math.max(1, ranked.length) : 0}
+                pointsNow={pointsEarned("boardStructure", score)}
                 onToggle={() => toggleOne(card.id)}
                 onFlip={() => setFlippedId((cur) => (cur === card.id ? null : card.id))}
               />
@@ -908,7 +913,7 @@ function SuggestedBoardsRail({
 
 /** One grid card: the board as its cover collage, with what's wrong with it in
  * the corner and a check dot. Hold it and it flips to the one sentence that
- * matters — what fixing it adds to the health score. */
+ * matters — the pts fixing it adds to the Boost Score. */
 function BoardPickCard({
   card,
   index,
@@ -916,8 +921,7 @@ function BoardPickCard({
   flipped,
   boosted,
   points,
-  structureNow,
-  structureDelta,
+  pointsNow,
   onToggle,
   onFlip,
 }: {
@@ -926,9 +930,10 @@ function BoardPickCard({
   selected: boolean;
   flipped: boolean;
   boosted: boolean;
+  /** Pts fixing this one board adds to the overall score. */
   points: number;
-  structureNow: number;
-  structureDelta: number;
+  /** Board Structure's banked pts right now, so the flip side shows the move. */
+  pointsNow: number;
   onToggle: () => void;
   onFlip: () => void;
 }) {
@@ -1017,14 +1022,14 @@ function BoardPickCard({
             {points > 0 ? `+${pointsLabel(points)}` : "+0"}
           </span>
           <span className="text-micro font-bold uppercase tracking-wide text-muted-foreground">
-            health pts
+            boost pts
           </span>
           <span className="text-mini font-semibold leading-snug text-muted-foreground">
             {points > 0 ? (
               <>
-                Structure {structureNow}% →{" "}
+                {pointsLabel(pointsNow)} →{" "}
                 <span className="text-emerald-600">
-                  {Math.min(100, Math.round(structureNow + structureDelta))}%
+                  {pointsLabel(Math.min(maxPointsFor("boardStructure"), pointsNow + points))} pts
                 </span>
               </>
             ) : (
