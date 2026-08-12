@@ -6,7 +6,7 @@ import { withPinterestToken } from "@/lib/pinterest-oauth.functions";
 /**
  * The creator's Pinterest profile, read live from Pinterest.
  *
- * Profile Completeness scores the PINTEREST profile, not the Pinearn storefront:
+ * Profile Completeness scores the PINTEREST profile, not the ShopMyPin storefront:
  * the bio, photo and website that decide whether a pin's traffic turns into a
  * follow live on pinterest.com, and a fully-filled storefront never moved them.
  * Nothing here is writable — Pinterest owns these fields, so the product's job is

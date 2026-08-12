@@ -37,7 +37,7 @@ export type HealthBoard = {
 /**
  * The PINTEREST profile, which is what this score is about.
  *
- * Profile SEO used to be scored from the Pinearn storefront — storefront description as
+ * Profile SEO used to be scored from the ShopMyPin storefront — storefront description as
  * "bio", `is_published` as "website claimed". That measured the wrong profile: a
  * creator with a perfect storefront and an empty Pinterest bio scored 100 while
  * every visitor who tapped through from a pin landed on a blank page. These flags
@@ -53,7 +53,7 @@ export type HealthProfile = {
   websiteClaimed: boolean;
   // account connected → we can read (and the creator can fix) the profile at all
   socialLinked: boolean;
-  // False when Pinterest couldn't be read and the flags fall back to what Pinearn
+  // False when Pinterest couldn't be read and the flags fall back to what ShopMyPin
   // knows locally — the UI says so rather than presenting a guess as fact.
   fromPinterest?: boolean;
 };
@@ -181,7 +181,7 @@ export type HealthReport = {
 // real usage data shows which sub-score correlates with impressions/saves.
 //
 // Profile SEO is deliberately the lightest of the four. It's four one-off
-// switches on a profile Pinearn can't edit — the creator fixes them once, on
+// switches on a profile ShopMyPin can't edit — the creator fixes them once, on
 // pinterest.com, and never touches them again. At its old 0.20 it could swing
 // the headline number by 20 points for work that has nothing to do with the pins
 // and boards the product actually improves, which made the score jump for reasons
@@ -235,7 +235,7 @@ export const SCORE_CRITERIA: Record<SubScoreKey, string> = {
   pinSeo: `A pin passes when its title is ${PIN_TITLE_MIN}–${PIN_TITLE_MAX} characters, its description ${PIN_DESC_MIN}–${PIN_DESC_MAX}, and neither is generic ("IMG_1234", "Pin 3"…).`,
   boardStructure:
     "A board passes when its name is specific (not a placeholder) and it has a description.",
-  profile: `Four checks read from your Pinterest profile — an About bio, a profile photo, a website URL and a connected account — each worth a quarter of the ${maxPointsFor("profile")} pts. You fix these on Pinterest; Pinearn points you at them.`,
+  profile: `Four checks read from your Pinterest profile — an About bio, a profile photo, a website URL and a connected account — each worth a quarter of the ${maxPointsFor("profile")} pts. You fix these on Pinterest; ShopMyPin points you at them.`,
   freshness: `A board passes when it has a pin from the last ${FRESH_DAYS} days.`,
 };
 

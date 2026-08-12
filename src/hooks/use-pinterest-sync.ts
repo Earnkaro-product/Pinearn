@@ -193,7 +193,7 @@ export function reportSyncResult(result: PinterestSyncResult) {
   // Nothing imported, but the account isn't empty — the pins are all saves.
   if (pins.created + pins.updated + pins.rehomed === 0 && pins.savedSkipped > 0) {
     toast.info(
-      `${pins.savedSkipped} saved ${pins.savedSkipped === 1 ? "pin" : "pins"} found — Pinearn only works on pins you created.`,
+      `${pins.savedSkipped} saved ${pins.savedSkipped === 1 ? "pin" : "pins"} found — ShopMyPin only works on Pins you created.`,
       { duration: 7000 },
     );
     return;

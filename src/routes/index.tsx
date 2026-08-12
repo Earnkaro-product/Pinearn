@@ -6,15 +6,15 @@ import { ArrowRight, BadgeCheck, TrendingUp } from "lucide-react";
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "Pinearn — Your pins already get clicks. Now make them pay." },
+      { title: "ShopMyPin — Your Pins already get clicks. Now make them pay." },
       {
         name: "description",
         content:
-          "Connect Pinterest and Pinearn auto-detects the products in your pins, attaches your affiliate links, and turns a whole board into income in about a minute.",
+          "Connect Pinterest and ShopMyPin auto-detects the products in your Pins, attaches your affiliate links, and turns a whole board into income in about a minute.",
       },
       {
         property: "og:title",
-        content: "Pinearn — Your pins already get clicks. Now make them pay.",
+        content: "ShopMyPin — Your Pins already get clicks. Now make them pay.",
       },
       {
         property: "og:description",
@@ -125,12 +125,12 @@ function Splash({ onDone }: { onDone: () => void }) {
         transition={{ duration: 0.7, ease: [0.16, 1, 0.3, 1] }}
       >
         <motion.img
-          src="/pinearn-logo.png"
-          alt="Pinearn"
+          src="/shopmypin-logo.png"
+          alt="ShopMyPin"
           draggable={false}
           animate={reduce ? undefined : { scale: [1, 1.04, 1] }}
           transition={{ duration: 2.2, repeat: Infinity, ease: "easeInOut", delay: 0.7 }}
-          className="h-28 w-28 rounded-[28px] shadow-elevate"
+          className="h-28 w-28"
         />
       </motion.div>
 
@@ -140,7 +140,7 @@ function Splash({ onDone }: { onDone: () => void }) {
         transition={{ delay: reduce ? 0 : 0.35, duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
         className="mt-5 font-display text-3xl font-semibold tracking-tight"
       >
-        Pinearn
+        ShopMyPin
       </motion.p>
 
       {/* Bottom tagline + progress shimmer */}
@@ -302,10 +302,10 @@ function Welcome() {
           initial={reduce ? undefined : { opacity: 0, y: 16 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
-          src="/pinearn-logo.png"
+          src="/shopmypin-logo.png"
           alt=""
           draggable={false}
-          className="mx-auto h-14 w-14 rounded-2xl shadow-elevate"
+          className="mx-auto h-14 w-14"
         />
         <motion.h1
           variants={stagger}
@@ -329,7 +329,7 @@ function Welcome() {
           transition={{ delay: 0.55, duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
           className="mx-auto mt-2.5 max-w-[27ch] text-sm text-muted-foreground"
         >
-          Start your Pinterest affiliate journey now.
+          Turn the Pins you've already posted into income.
         </motion.p>
       </div>
 

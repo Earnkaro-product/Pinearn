@@ -3,7 +3,7 @@ import { ChevronLeft } from "lucide-react";
 
 export const Route = createFileRoute("/privacy")({
   head: () => ({
-    meta: [{ title: "Privacy Policy — Pinearn" }],
+    meta: [{ title: "Privacy Policy — ShopMyPin" }],
   }),
   component: PrivacyPolicy,
 });

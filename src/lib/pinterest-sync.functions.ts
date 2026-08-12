@@ -24,7 +24,7 @@ import { withPinterestToken } from "@/lib/pinterest-oauth.functions";
  * was skipped forever, so:
  *
  *   - renaming a board or rewriting a pin on pinterest.com changed nothing here
- *   - deleting a pin there left it in Pinearn permanently
+ *   - deleting a pin there left it in ShopMyPin permanently
  *   - a connection made from Settings (rather than onboarding) never synced at
  *     all, because the only caller was the onboarding screen
  *   - analytics were never part of the connect flow — impressions and clicks
@@ -154,7 +154,7 @@ async function hasConnectionStateColumns(supabase: Supa): Promise<boolean> {
  *
  * `baseline` is what Pinterest said last time. If the local value still equals it,
  * nobody has touched this field here — Pinterest is the authority, adopt the new
- * value. If it differs, someone rewrote it in Pinearn and that wins. With no
+ * value. If it differs, someone rewrote it in ShopMyPin and that wins. With no
  * baseline (pre-migration rows, or a database without the columns) the safe
  * assumption is "locally owned", except when the local value is empty — an empty
  * field can only be improved by Pinterest's copy.
@@ -448,7 +448,7 @@ async function reconcileBoards({
       if (error) {
         // The board id is spoken for. Either this user already has the row and
         // the lookup above missed it, or — before
-        // 20260803140000_pinterest_ids_per_user.sql — another Pinearn account
+        // 20260803140000_pinterest_ids_per_user.sql — another ShopMyPin account
         // connected to the same Pinterest account claimed it globally.
         // Recovering the row here is what keeps the board's pins from being
         // skipped, which is how "0 pins and boards found" happened.
@@ -464,7 +464,7 @@ async function reconcileBoards({
           board.id,
           error.message,
           isDuplicateKey(error)
-            ? "— this Pinterest board is already imported under a DIFFERENT Pinearn account. Apply supabase/migrations/20260803140000_pinterest_ids_per_user.sql to allow per-user copies."
+            ? "— this Pinterest board is already imported under a DIFFERENT ShopMyPin account. Apply supabase/migrations/20260803140000_pinterest_ids_per_user.sql to allow per-user copies."
             : "",
         );
         continue;
@@ -735,7 +735,7 @@ async function reconcilePins({
           user_id: userId,
           title,
           description,
-          // Image and link are Pinterest's alone — nothing in Pinearn edits them,
+          // Image and link are Pinterest's alone — nothing in ShopMyPin edits them,
           // so they track the source unconditionally.
           image_url: p.imageUrl,
           external_url: p.link,
@@ -779,7 +779,7 @@ async function reconcilePins({
       result.pins.created += landed;
       if (blocked > 0) {
         console.warn(
-          `[pinterest-sync] ${blocked} pin(s) on board ${board.id} are already imported under a different Pinearn account — apply 20260803140000_pinterest_ids_per_user.sql to allow per-user copies`,
+          `[pinterest-sync] ${blocked} pin(s) on board ${board.id} are already imported under a different ShopMyPin account — apply 20260803140000_pinterest_ids_per_user.sql to allow per-user copies`,
         );
       }
     }

@@ -1220,7 +1220,12 @@ function toLensMatch(item: LensApiItem, index: number): LensMatch {
 // in the wrong colours. Visual-only search plus the look gate beats steering.
 const LENS_SUCCESS_TTL_MS = 6 * 60 * 60 * 1000;
 const LENS_EMPTY_TTL_MS = 2 * 60 * 1000;
-const lensCache = new Map<string, { expires: number; matches: LensMatch[] }>();
+/** Where a cached entry's results originally came from. Carried purely so the
+ * funnel debug trace can say "this tab's products came off a week-old row"
+ * rather than leaving someone guessing why a re-scan changed nothing. Never
+ * read on the match path. */
+type LensOrigin = "db" | "live";
+const lensCache = new Map<string, { expires: number; matches: LensMatch[]; origin: LensOrigin }>();
 const lensInFlight = new Map<string, Promise<LensMatch[]>>();
 
 // ...and the same list again in Postgres, because the Map above is per-process
@@ -1328,6 +1333,7 @@ async function searchGoogleLens(imageUrl: string, crop: string | null = null) {
       lensCache.set(cacheKey, {
         expires: Date.now() + (matches.length > 0 ? LENS_SUCCESS_TTL_MS : LENS_EMPTY_TTL_MS),
         matches,
+        origin: fresh ? "live" : "db",
       });
       if (fresh) void saveLensRow(imageUrl, region, matches);
       return matches;
@@ -1553,9 +1559,18 @@ export async function cropResultFor(imageUrl: string): Promise<CropResult> {
 // must never reach CK, a paid per-request API.
 // -------------------------------------------------------------
 
-function filterSupportedRetailers(matches: LensMatch[]): LensMatch[] {
+/** `dropped`, when passed, collects the matches this filter rejected. Nothing on
+ * the match path passes it — only the funnel debug trace, which is the one
+ * consumer that needs the identities and not just the counts. The live pipeline
+ * has never recorded them, so "why is this retailer missing" was unanswerable
+ * from the logs alone. */
+function filterSupportedRetailers(matches: LensMatch[], dropped?: LensMatch[]): LensMatch[] {
   const before = matches.length;
-  const filtered = matches.filter((m) => isSupportedRetailerLink(m.link));
+  const filtered = matches.filter((m) => {
+    const ok = isSupportedRetailerLink(m.link);
+    if (!ok) dropped?.push(m);
+    return ok;
+  });
   logNet("FILTER", { before, after: filtered.length });
   return filtered;
 }
@@ -2630,8 +2645,24 @@ export async function searchComponent(
   title: string,
   description: string,
   stage: ComponentStage = "verified",
+  trace?: ComponentTrace,
 ): Promise<RawVisualMatch[]> {
   const key = componentKey(imageUrl, componentIndex, stage, title);
+  // As in `componentPool`: a traced run skips the memo and its result is never
+  // written back, so the debug view can never be answered by (or pollute) the
+  // cache the real screen reads.
+  if (trace)
+    return (
+      await searchComponentUncached(
+        imageUrl,
+        crops,
+        componentIndex,
+        title,
+        description,
+        stage,
+        trace,
+      )
+    ).matches;
   const cached = componentCache.get(key);
   if (cached && cached.expires > Date.now()) return cached.matches;
   const existing = componentInFlight.get(key);
@@ -2659,6 +2690,7 @@ async function searchComponentUncached(
   title: string,
   description: string,
   stage: ComponentStage,
+  trace?: ComponentTrace,
 ): Promise<StagedResult> {
   const startedAt = Date.now();
 
@@ -2668,13 +2700,42 @@ async function searchComponentUncached(
   // return the same thing and "fast" is simply the answer.
   if (componentIndex < 0) {
     const raw = await searchGoogleLens(imageUrl).catch(() => [] as LensMatch[]);
-    const deduped = dedupeMatches(
-      rankMatches(filterSupportedRetailers(raw), { title, description }),
-    );
+    const rejects: LensMatch[] = [];
+    const supported = filterSupportedRetailers(raw, trace && rejects);
+    const deduped = dedupeMatches(rankMatches(supported, { title, description }));
     const top = [...deduped.filter((m) => m.price), ...deduped.filter((m) => !m.price)].slice(
       0,
       FULL_IMAGE_MAX,
     );
+    if (trace) {
+      trace.searches.push({
+        kind: "whole",
+        cropParam: null,
+        box: null,
+        answered: true,
+        rawCount: raw.length,
+        keptCount: supported.length,
+        unsupported: hostTally(rejects),
+        origin: lensOrigin(imageUrl, null),
+      });
+      const kept = new Set(top);
+      for (const m of deduped) {
+        trace.gate.push({
+          m,
+          cat: categoryOfTitle(m.title),
+          from: "whole",
+          kept: kept.has(m),
+          // The whole-image path has no category gate and no look gate; the only
+          // thing that removes a card is the cap, after a price-first reorder.
+          reason: kept.has(m) ? undefined : "full_image_cap",
+        });
+      }
+      trace.final = top.map((m, i) => ({ m, rank: i, score: undefined, verdict: null }));
+      trace.cropResults = 0;
+      trace.wholeResults = supported.length;
+      trace.landed = true;
+      trace.durationMs = Date.now() - startedAt;
+    }
     logNet("COMPONENT", {
       durationMs: Date.now() - startedAt,
       component: "whole_image",
@@ -2690,6 +2751,7 @@ async function searchComponentUncached(
     title,
     description,
     stage === "fast",
+    trace,
   );
   if (!built) return { matches: [], partial: false };
   const { crop, pool, landed } = built;
@@ -2707,12 +2769,24 @@ async function searchComponentUncached(
   // decided yet; those calls were wasted and stole limiter slots from the
   // cards being shown. These are the same calls, only sooner.
   if (stage === "fast") {
-    const project = (p: ComponentPool) =>
-      p.pool
-        .filter((c) => (c.fromCrop ? p.landed : true))
-        .sort((a, b) => a.score - b.score)
+    const project = (p: ComponentPool) => {
+      const eligible = p.pool.filter((c) => {
+        const ok = c.fromCrop ? p.landed : true;
+        if (!ok) trace?.poolDrops.push({ m: c.m, score: c.score, reason: "landed_veto" });
+        return ok;
+      });
+      const ranked = eligible.sort((a, b) => a.score - b.score);
+      if (trace) {
+        for (const c of ranked.slice(PER_TAG_MAX))
+          trace.poolDrops.push({ m: c.m, score: c.score, reason: "tab_cap" });
+        trace.final = ranked
+          .slice(0, PER_TAG_MAX)
+          .map((c, i) => ({ m: c.m, rank: i, score: c.score, verdict: null }));
+      }
+      return ranked
         .slice(0, PER_TAG_MAX)
         .map((c) => ({ ...toRawVisualMatch(c.m), tag: p.crop.label, score: c.score }));
+    };
 
     let settled = built;
     let out = project(built);
@@ -2723,16 +2797,40 @@ async function searchComponentUncached(
     // build comes back empty, wait for the whole pool after all: this costs
     // time only on the tabs that had nothing to show for it.
     if (out.length === 0 && built.partial) {
-      const full = await componentPool(imageUrl, crops, componentIndex, title, description);
+      // The rebuild re-runs every gate over the complete sources, so it re-records
+      // all of them. Without clearing first the trace would show each search and
+      // each gate decision twice — once from the impatient build that was thrown
+      // away, once from the one whose answer is actually returned.
+      if (trace) {
+        trace.searches = [];
+        trace.gate = [];
+        trace.poolDrops = [];
+      }
+      const full = await componentPool(
+        imageUrl,
+        crops,
+        componentIndex,
+        title,
+        description,
+        false,
+        trace,
+      );
       if (full) {
         settled = full;
         out = project(full);
       }
     }
-    if (VERIFY_ENABLED && settled.pool.length > 0) {
+    // A traced run must not fire the background verification the real fast stage
+    // does: it would spend vision calls for a panel that reads verdicts from
+    // cache, on a pool the shopper's own request has already verified.
+    if (VERIFY_ENABLED && settled.pool.length > 0 && !trace) {
       void searchComponent(imageUrl, crops, componentIndex, title, description, "verified").catch(
         () => [],
       );
+    }
+    if (trace) {
+      trace.pooled = settled.pool.length;
+      trace.durationMs = Date.now() - startedAt;
     }
     logNet("COMPONENT", {
       durationMs: Date.now() - startedAt,
@@ -2795,13 +2893,26 @@ async function searchComponentUncached(
       at += wave.length;
       spent += wave.length;
       const verdicts = await Promise.all(
-        wave.map((c) => Promise.race([looksSame(crop, c.m.thumbnail, c.m.title), deadline])),
+        // A traced run reads verdicts from cache ONLY. The look gate is the one
+        // stage that costs a model call per card, and opening a debug panel must
+        // never buy any: by the time it opens, the head this pin actually
+        // verified is in the cache, and anything outside it is honestly reported
+        // as unjudged rather than paid for again.
+        wave.map((c) =>
+          trace
+            ? lookVerdictCached(crop, c.m.thumbnail)
+            : Promise.race([looksSame(crop, c.m.thumbnail, c.m.title), deadline]),
+        ),
       );
       seenAny ||= verdicts.some((v) => v !== null);
       wave.forEach((c, i) => {
         const v = verdicts[i];
+        trace?.verdicts.push({ link: canonicalizeProductUrl(c.m.link), verdict: v });
         if (v !== "different") judged.push({ c, v });
-        else lookRejected++;
+        else {
+          lookRejected++;
+          trace?.poolDrops.push({ m: c.m, score: c.score, reason: "look_different" });
+        }
       });
     }
     // Everything past the verified head fills the rest of the tab unjudged —
@@ -2818,21 +2929,59 @@ async function searchComponentUncached(
     const all = [...judged, ...tail];
     const kept = verifierBlind && !landed ? all.filter(({ c }) => !c.fromCrop) : all;
     lookRejected += all.length - kept.length;
-    out = kept
-      .sort((a, b) => verdictRank(a.v) - verdictRank(b.v) || a.c.score - b.c.score)
-      .slice(0, PER_TAG_MAX)
-      .map(({ c, v }) => ({
-        ...toRawVisualMatch(c.m),
-        tag: crop.label,
-        score: c.score,
-        ...(v ? { lookMatch: v as "same" | "close" } : {}),
-      }));
+    if (trace) {
+      const survived = new Set(kept.map(({ c }) => c));
+      for (const { c } of all)
+        if (!survived.has(c))
+          // Distinct from `look_different`: the live pipeline folds both into one
+          // `lookRejected` counter, which is why "the verifier was blind and the
+          // box didn't land" has never been separable from a real rejection.
+          trace.poolDrops.push({ m: c.m, score: c.score, reason: "verifier_blind_veto" });
+    }
+    const ordered = kept.sort(
+      (a, b) => verdictRank(a.v) - verdictRank(b.v) || a.c.score - b.c.score,
+    );
+    if (trace) {
+      for (const { c } of ordered.slice(PER_TAG_MAX))
+        trace.poolDrops.push({ m: c.m, score: c.score, reason: "tab_cap" });
+      trace.final = ordered
+        .slice(0, PER_TAG_MAX)
+        .map(({ c, v }, i) => ({ m: c.m, rank: i, score: c.score, verdict: v }));
+      trace.verifierBlind = verifierBlind;
+      trace.headSize = headSize;
+    }
+    out = ordered.slice(0, PER_TAG_MAX).map(({ c, v }) => ({
+      ...toRawVisualMatch(c.m),
+      tag: crop.label,
+      score: c.score,
+      ...(v ? { lookMatch: v as "same" | "close" } : {}),
+    }));
   } else {
-    out = pool
-      .filter((c) => (c.fromCrop ? landed : true))
-      .sort((a, b) => a.score - b.score)
+    const eligible = pool.filter((c) => {
+      const ok = c.fromCrop ? landed : true;
+      if (!ok) trace?.poolDrops.push({ m: c.m, score: c.score, reason: "landed_veto" });
+      return ok;
+    });
+    const ordered = eligible.sort((a, b) => a.score - b.score);
+    if (trace) {
+      for (const c of ordered.slice(PER_TAG_MAX))
+        trace.poolDrops.push({ m: c.m, score: c.score, reason: "tab_cap" });
+      trace.final = ordered
+        .slice(0, PER_TAG_MAX)
+        .map((c, i) => ({ m: c.m, rank: i, score: c.score, verdict: null }));
+      // This branch is also reached by an empty pool, which is not the same
+      // thing as the gate being switched off — only claim the latter.
+      trace.verifyDisabled = !VERIFY_ENABLED;
+    }
+    out = ordered
       .slice(0, PER_TAG_MAX)
       .map((c) => ({ ...toRawVisualMatch(c.m), tag: crop.label, score: c.score }));
+  }
+
+  if (trace) {
+    trace.pooled = pool.length;
+    trace.lookRejected = lookRejected;
+    trace.durationMs = Date.now() - startedAt;
   }
 
   logNet("COMPONENT", {
@@ -2872,14 +3021,24 @@ async function componentPool(
   title: string,
   description: string,
   impatient = false,
+  trace?: ComponentTrace,
 ): Promise<ComponentPool | null> {
   const key = componentKey(imageUrl, componentIndex, "pool", title);
-  const cached = poolCache.get(key);
-  if (cached && cached.expires > Date.now()) return cached.result;
+  // A traced build always runs the real thing: a cached pool would answer
+  // correctly and record nothing, which is the one outcome a debug view cannot
+  // use. Every expensive input (detection, each Lens region) is cached
+  // underneath, and everything this repeats is deterministic, so the replay
+  // costs no API calls and reaches the same pool.
+  if (!trace) {
+    const cached = poolCache.get(key);
+    if (cached && cached.expires > Date.now()) return cached.result;
+  }
   // An impatient build never joins (or becomes) the shared entry: the full
   // build it would join is precisely the wait it exists to skip.
   if (impatient)
-    return buildComponentPool(imageUrl, crops, componentIndex, title, description, true);
+    return buildComponentPool(imageUrl, crops, componentIndex, title, description, true, trace);
+  if (trace)
+    return buildComponentPool(imageUrl, crops, componentIndex, title, description, false, trace);
   const existing = poolInFlight.get(key);
   if (existing) return existing;
 
@@ -2900,6 +3059,9 @@ async function buildComponentPool(
   title: string,
   description: string,
   impatient: boolean,
+  /** Debug sink. Every `trace?.` call below is inert in production — nothing on
+   * the match path passes one. See the funnel trace section further down. */
+  trace?: ComponentTrace,
 ): Promise<ComponentPool | null> {
   if (!crops[componentIndex]) return null;
   const crop = crops[componentIndex];
@@ -2970,7 +3132,18 @@ async function buildComponentPool(
     [cropRaw, wholeRaw] = await Promise.all([cropSearch, wholeSearch]);
   }
   const partial = cropRaw === null || wholeRaw === null;
-  let cropOwn = filterSupportedRetailers(cropRaw ?? []);
+  const cropRejects: LensMatch[] = [];
+  let cropOwn = filterSupportedRetailers(cropRaw ?? [], trace && cropRejects);
+  trace?.searches.push({
+    kind: "crop",
+    cropParam: crop.crop,
+    box: crop.box,
+    answered: cropRaw !== null,
+    rawCount: cropRaw?.length ?? 0,
+    keptCount: cropOwn.length,
+    unsupported: hostTally(cropRejects),
+    origin: lensOrigin(imageUrl, crop.crop),
+  });
 
   let widened = false;
   if (cropRaw !== null && cropOwn.length < WIDEN_RETRY_BELOW && crop.crop) {
@@ -2987,7 +3160,8 @@ async function buildComponentPool(
         wide = await searchGoogleLens(imageUrl, late).catch(() => [] as LensMatch[]);
       }
     }
-    const wideOwn = wide ? filterSupportedRetailers(wide) : null;
+    const wideRejects: LensMatch[] = [];
+    const wideOwn = wide ? filterSupportedRetailers(wide, trace && wideRejects) : null;
     if (wideOwn && wideOwn.length > cropOwn.length) {
       // Merge rather than replace: the tight crop's few results are the
       // best-anchored ones there are, so they keep their lead.
@@ -2995,9 +3169,39 @@ async function buildComponentPool(
       cropOwn = [...cropOwn, ...wideOwn.filter((m) => !held.has(canonicalizeProductUrl(m.link)))];
       widened = true;
     }
+    // Recorded whether or not the merge was taken: "the widen fired and was
+    // rejected because it found no more than the tight crop" is a distinct
+    // answer from "the widen never ran", and the live pipeline keeps neither.
+    if (trace) {
+      const wideParam = wideCrop ?? lensCropParam(widenBox(crop.box, WIDEN_FACTOR));
+      trace.searches.push({
+        kind: "widened",
+        cropParam: wideParam,
+        box: widenBox(crop.box, WIDEN_FACTOR),
+        answered: wide !== null,
+        rawCount: wide?.length ?? 0,
+        keptCount: wideOwn?.length ?? 0,
+        unsupported: hostTally(wideRejects),
+        origin: lensOrigin(imageUrl, wideParam),
+        merged: widened,
+        speculated: !!wideCrop,
+      });
+    }
   }
 
-  const wholeOwn = filterSupportedRetailers(wholeRaw ?? []);
+  const wholeRejects: LensMatch[] = [];
+  const wholeOwn = filterSupportedRetailers(wholeRaw ?? [], trace && wholeRejects);
+  trace?.searches.push({
+    kind: "whole",
+    cropParam: null,
+    box: null,
+    answered: wholeRaw !== null,
+    rawCount: wholeRaw?.length ?? 0,
+    keptCount: wholeOwn.length,
+    unsupported: hostTally(wholeRejects),
+    origin: lensOrigin(imageUrl, null),
+  });
+
   const niche = detectNiche([...cropOwn, ...wholeOwn], { title, description });
   const labelWords = extractKeywords(crop.label);
 
@@ -3018,16 +3222,47 @@ async function buildComponentPool(
   // with no category ("other") takes only its own region's results.
   const cands: Cand[] = [];
   for (const { m, cat } of cropCategorised) {
-    if (!categoriesAgree(crop.category, cat)) continue;
+    if (!categoriesAgree(crop.category, cat)) {
+      trace?.gate.push({ m, cat, from: "crop", kept: false, reason: "category_conflict" });
+      continue;
+    }
     const labelHits = keywordOverlap(extractKeywords(m.title), labelWords);
-    cands.push({ m, score: baseScore(m, queryWords, niche) - labelHits * 6, fromCrop: true });
+    const score = baseScore(m, queryWords, niche) - labelHits * 6;
+    trace?.gate.push({ m, cat, from: "crop", kept: true, score, labelHits });
+    cands.push({ m, score, fromCrop: true });
   }
   if (crop.category !== "other") {
     for (const m of wholeOwn) {
       const cat = categoryOfTitle(m.title);
-      if (cat === "other" || !categoriesAgree(crop.category, cat)) continue;
+      if (cat === "other" || !categoriesAgree(crop.category, cat)) {
+        trace?.gate.push({
+          m,
+          cat,
+          from: "whole",
+          kept: false,
+          // Two different rules, and telling them apart is the point: an
+          // unreadable title is a vocabulary gap, a conflict is the gate
+          // working.
+          reason: cat === "other" ? "whole_needs_category" : "category_conflict",
+        });
+        continue;
+      }
       const labelHits = keywordOverlap(extractKeywords(m.title), labelWords);
-      cands.push({ m, score: baseScore(m, queryWords, niche) - labelHits * 6, fromCrop: false });
+      const score = baseScore(m, queryWords, niche) - labelHits * 6;
+      trace?.gate.push({ m, cat, from: "whole", kept: true, score, labelHits });
+      cands.push({ m, score, fromCrop: false });
+    }
+  } else if (trace) {
+    // The whole-image source is skipped WHOLE for an "other" crop. Without this
+    // the trace would look as though the search simply returned nothing usable.
+    for (const m of wholeOwn) {
+      trace.gate.push({
+        m,
+        cat: categoryOfTitle(m.title),
+        from: "whole",
+        kept: false,
+        reason: "crop_category_other",
+      });
     }
   }
 
@@ -3040,9 +3275,24 @@ async function buildComponentPool(
     const held = bySource.get(link);
     if (!held) {
       if (bySource.size < VERIFY_POOL_MAX) bySource.set(link, c);
+      else trace?.poolDrops.push({ m: c.m, score: c.score, reason: "pool_cap" });
     } else if (c.fromCrop && !held.fromCrop) {
       held.fromCrop = true;
+      trace?.poolDrops.push({ m: c.m, score: c.score, reason: "duplicate_promoted_crop" });
+    } else {
+      trace?.poolDrops.push({ m: c.m, score: c.score, reason: "duplicate" });
     }
+  }
+
+  if (trace) {
+    trace.niche = niche?.key ?? null;
+    trace.landed = landed;
+    trace.widened = widened;
+    trace.partial = partial;
+    trace.cropResults = cropOwn.length;
+    trace.wholeResults = wholeOwn.length;
+    trace.queryWords = [...queryWords];
+    trace.labelWords = [...labelWords];
   }
 
   return {
@@ -3053,6 +3303,415 @@ async function buildComponentPool(
     widened,
     cropResults: cropOwn.length,
     wholeResults: wholeOwn.length,
+  };
+}
+
+// =============================================================================
+// FUNNEL DEBUG TRACE
+//
+// The pipeline above is eleven stages long, every one of them lossy, and until
+// now it reported only COUNTS: `FILTER before=47 after=6` tells you forty-one
+// results were thrown away and nothing about which, and the category gate — the
+// stage most likely to be the reason a tab is wrong — logged nothing whatsoever.
+// So "the products under this pill are wrong" was not a debuggable complaint.
+// You could see the answer and the totals, never the decisions in between.
+//
+// This section is the answer to that. It is deliberately NOT a second copy of
+// the funnel: every fact below is recorded by the real functions as they run
+// (`trace?.push(...)` at each gate), because a re-implementation would drift
+// from the thing it describes and then quietly lie — the exact failure the
+// category-vocabulary comment further up this file warns about.
+//
+// Three rules keep it honest and free:
+//   1. Nothing on the match path passes a trace, so every hook is inert in
+//      production. No payload grows, no cache key changes.
+//   2. A traced run BYPASSES the pool and component memos (a cached answer
+//      records nothing) but still reads every underlying cache — detection,
+//      each Lens region, each verdict — so the replay makes no paid API call
+//      and, because every stage between them is deterministic, reproduces the
+//      same tab the shopper is looking at.
+//   3. The look gate is read CACHE-ONLY when tracing. Opening this panel must
+//      never buy a vision call; a candidate the pin never verified is reported
+//      as unjudged rather than judged now.
+// =============================================================================
+
+/** Where each gate's rejects came from, and why each one is not on screen. */
+export type DropReason =
+  | "category_conflict"
+  | "whole_needs_category"
+  | "crop_category_other"
+  | "full_image_cap"
+  | "pool_cap"
+  | "duplicate"
+  | "duplicate_promoted_crop"
+  | "landed_veto"
+  | "look_different"
+  | "verifier_blind_veto"
+  | "tab_cap";
+
+/** The mutable sink the instrumented functions write into. Internal — it holds
+ * `LensMatch` objects; `toWireComponent` projects it to the client shape. */
+type ComponentTrace = {
+  searches: Array<{
+    kind: "crop" | "widened" | "whole";
+    cropParam: string | null;
+    box: Box | null;
+    /** False when the fast stage's grace expired before this source landed. */
+    answered: boolean;
+    rawCount: number;
+    keptCount: number;
+    unsupported: Array<{ host: string; count: number }>;
+    origin: LensOrigin | "memory" | "unknown";
+    merged?: boolean;
+    speculated?: boolean;
+  }>;
+  gate: Array<{
+    m: LensMatch;
+    cat: ProductCategory;
+    from: "crop" | "whole";
+    kept: boolean;
+    reason?: DropReason;
+    score?: number;
+    labelHits?: number;
+  }>;
+  poolDrops: Array<{ m: LensMatch; score: number; reason: DropReason }>;
+  verdicts: Array<{ link: string; verdict: LookVerdict | null }>;
+  final: Array<{ m: LensMatch; rank: number; score?: number; verdict: LookVerdict | null }>;
+  niche: string | null;
+  landed: boolean;
+  widened: boolean;
+  partial: boolean;
+  verifierBlind: boolean;
+  verifyDisabled: boolean;
+  cropResults: number;
+  wholeResults: number;
+  pooled: number;
+  lookRejected: number;
+  headSize: number;
+  queryWords: string[];
+  labelWords: string[];
+  durationMs: number;
+};
+
+function newComponentTrace(): ComponentTrace {
+  return {
+    searches: [],
+    gate: [],
+    poolDrops: [],
+    verdicts: [],
+    final: [],
+    niche: null,
+    landed: false,
+    widened: false,
+    partial: false,
+    verifierBlind: false,
+    verifyDisabled: false,
+    cropResults: 0,
+    wholeResults: 0,
+    pooled: 0,
+    lookRejected: 0,
+    headSize: 0,
+    queryWords: [],
+    labelWords: [],
+    durationMs: 0,
+  };
+}
+
+/** Rejected links grouped by host, commonest first — "42 dropped" is a number,
+ * "38 from aliexpress.com" is a diagnosis. */
+function hostTally(matches: LensMatch[]): Array<{ host: string; count: number }> {
+  const counts = new Map<string, number>();
+  for (const m of matches) {
+    let host: string;
+    try {
+      host = new URL(m.link).hostname.replace(/^www\./, "");
+    } catch {
+      host = "(unparseable)";
+    }
+    counts.set(host, (counts.get(host) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([host, count]) => ({ host, count }))
+    .sort((a, b) => b.count - a.count);
+}
+
+/** Whether this region's results are sitting in memory, and if so where they
+ * originally came from. Answers "I re-scanned and nothing changed" — a week-old
+ * `lens_searches` row is the usual reason. */
+function lensOrigin(imageUrl: string, crop: string | null): LensOrigin | "memory" | "unknown" {
+  const entry = lensCache.get(JSON.stringify([imageUrl, crop ?? ""]));
+  if (!entry || entry.expires <= Date.now()) return "unknown";
+  return entry.origin;
+}
+
+/** The look verdict for this candidate IF one is already known, without ever
+ * calling the model. Checks the in-process cache, then the durable row. */
+async function lookVerdictCached(
+  crop: Crop,
+  thumbnail: string | null,
+): Promise<LookVerdict | null> {
+  if (!thumbnail) return null;
+  const target = verdictTarget(crop);
+  const cached = verifyCache.get(JSON.stringify([thumbnail, target]));
+  if (cached && cached.expires > Date.now()) return cached.verdict;
+  return loadVerdictRow(thumbnail, target);
+}
+
+/* ---------------- The wire shape ---------------- */
+
+/** One candidate as the debug panel sees it. */
+export type FunnelCandidate = {
+  title: string;
+  link: string;
+  source: string;
+  thumbnail: string | null;
+  price: string | null;
+  /** Google's own result position within its search — the raw similarity proxy. */
+  position: number;
+  /** What `categoryOfTitle` read the RETAILER's title as. */
+  titleCategory: ProductCategory;
+  /** Which Lens search produced it. "both" means the region search and the
+   * whole-image search independently found the same listing. */
+  from: "crop" | "whole" | "both";
+  /** Rank score, lower better. Absent for candidates dropped before scoring. */
+  score?: number;
+  /** How many of the pill's own label words appear in the title. */
+  labelHits?: number;
+  /** The look gate's verdict, when one was already known. */
+  verdict?: LookVerdict | null;
+  /** Absent when this candidate is on screen. */
+  droppedAt?: DropReason;
+  /** Its position in the tab, when it survived. */
+  finalRank?: number;
+};
+
+export type FunnelSearch = ComponentTrace["searches"][number];
+
+/** One detected object, all the way through to its tab. */
+export type FunnelComponent = {
+  key: number;
+  label: string;
+  category: ProductCategory;
+  /** The object's look as detection described it — the look gate's target. */
+  signature: string;
+  /** Normalised 0-1, and PADDED (see `paddingFor`) — what was actually sent. */
+  box: Box | null;
+  /** SearchAPI's region string, or null when the box was near-full-frame and
+   * this component shares the whole-image search instead. */
+  cropParam: string | null;
+  /** Share of the frame, 0-1. Under 0.12 warms a speculative widened search. */
+  boxArea: number;
+  searches: FunnelSearch[];
+  candidates: FunnelCandidate[];
+  niche: string | null;
+  landed: boolean;
+  widened: boolean;
+  partial: boolean;
+  verifierBlind: boolean;
+  verifyDisabled: boolean;
+  cropResults: number;
+  wholeResults: number;
+  pooled: number;
+  headSize: number;
+  queryWords: string[];
+  labelWords: string[];
+  durationMs: number;
+};
+
+export type FunnelTrace = {
+  imageUrl: string;
+  /** The title/description the RANKING used — the pin row's copy wins over the
+   * caller's, and a mismatch here silently changes every cache key. */
+  title: string;
+  description: string;
+  stage: ComponentStage;
+  detection: {
+    objects: number;
+    /** True when the detector explicitly found nothing purchasable. Note this
+     * is also what an unfetchable image collapses to. */
+    noProducts: boolean;
+    /** The component list is exactly `CROP_MAX` long, so the detector may have
+     * found more objects and had them truncated. Deliberately a "maybe": the
+     * only way to know is a second detection, and this panel is not allowed to
+     * buy a model call. */
+    atCropCap: boolean;
+    durationMs: number;
+  };
+  components: FunnelComponent[];
+  /** The limits every count above is measured against. */
+  limits: {
+    cropMax: number;
+    perTagMax: number;
+    fullImageMax: number;
+    verifyPoolMax: number;
+    widenRetryBelow: number;
+    widenFactor: number;
+    widenSpeculateBelowArea: number;
+    verifyBudgetPerPin: number;
+    verifyEnabled: boolean;
+    detectEnabled: boolean;
+  };
+  durationMs: number;
+};
+
+function toWireCandidates(t: ComponentTrace): FunnelCandidate[] {
+  const verdictByLink = new Map(t.verdicts.map((v) => [v.link, v.verdict]));
+  const finalByLink = new Map(t.final.map((f) => [canonicalizeProductUrl(f.m.link), f] as const));
+  const dropByLink = new Map(
+    t.poolDrops.map((d) => [canonicalizeProductUrl(d.m.link), d] as const),
+  );
+
+  const base = (
+    m: LensMatch,
+    extra: Partial<FunnelCandidate> & Pick<FunnelCandidate, "from" | "titleCategory">,
+  ): FunnelCandidate => {
+    const link = canonicalizeProductUrl(m.link);
+    const fin = finalByLink.get(link);
+    const drop = fin ? undefined : dropByLink.get(link);
+    return {
+      title: m.title,
+      link,
+      source: m.source,
+      thumbnail: m.thumbnail,
+      price: m.price?.value ?? null,
+      position: m.position,
+      verdict: verdictByLink.get(link) ?? undefined,
+      finalRank: fin?.rank,
+      droppedAt: drop?.reason,
+      ...extra,
+    };
+  };
+
+  // Every candidate the gate SAW, kept or not, COLLAPSED BY PRODUCT — the same
+  // listing legitimately reaches the gate from both the region and the
+  // whole-image search, and the pool itself keeps one of the two. Reporting both
+  // rows would show one card twice, sharing a rank it only holds once. The kept,
+  // better-scoring row wins and its source becomes "both", which is worth
+  // knowing: a product confirmed by both searches is the strongest signal the
+  // pipeline has.
+  const byLink = new Map<string, FunnelCandidate>();
+  for (const { m, cat, from, kept, reason, score, labelHits } of t.gate) {
+    const row = base(m, {
+      from,
+      titleCategory: cat,
+      score,
+      labelHits,
+      ...(kept ? {} : { droppedAt: reason }),
+    });
+    const held = byLink.get(row.link);
+    if (!held) {
+      byLink.set(row.link, row);
+      continue;
+    }
+    const heldKept = held.droppedAt == null;
+    const rowWins = heldKept === kept ? (row.score ?? Infinity) < (held.score ?? Infinity) : kept;
+    const winner = rowWins ? row : held;
+    byLink.set(row.link, { ...winner, from: held.from === row.from ? winner.from : "both" });
+  }
+
+  // A tab's final cards must appear even on the whole-image path, which records
+  // no per-candidate gate rows of its own.
+  for (const f of t.final) {
+    const link = canonicalizeProductUrl(f.m.link);
+    if (byLink.has(link)) continue;
+    byLink.set(
+      link,
+      base(f.m, { from: "whole", titleCategory: categoryOfTitle(f.m.title), score: f.score }),
+    );
+  }
+
+  const out = [...byLink.values()];
+
+  // Survivors first, in tab order; then everything that was dropped, best-
+  // scoring first, because the near-misses are what you came to look at.
+  return out.sort((a, b) => {
+    if (a.finalRank != null && b.finalRank != null) return a.finalRank - b.finalRank;
+    if (a.finalRank != null) return -1;
+    if (b.finalRank != null) return 1;
+    return (a.score ?? a.position) - (b.score ?? b.position);
+  });
+}
+
+/**
+ * Run the whole funnel for one image and report every decision it made.
+ *
+ * `stage` picks WHICH answer to explain: "fast" is the tab the shopper saw
+ * first, "verified" is the one that replaced it. Tracing the fast stage is the
+ * right choice when the complaint is "the wrong products appeared"; the
+ * verified stage when it is "a product I wanted disappeared".
+ */
+export async function traceVisualFunnel(
+  imageUrl: string,
+  title = "",
+  description = "",
+  stage: ComponentStage = "verified",
+): Promise<FunnelTrace> {
+  const startedAt = Date.now();
+  const detectStart = Date.now();
+  const { crops, noProducts } = await cropResultFor(imageUrl);
+  const detectMs = Date.now() - detectStart;
+
+  // Keys exactly as the client asks for them: the detected components, or the
+  // whole-image sentinel when the detector explicitly found nothing.
+  const keys = crops.length ? crops.map((_, i) => i) : noProducts ? [-1] : [];
+
+  const components = await Promise.all(
+    keys.map(async (key): Promise<FunnelComponent> => {
+      const trace = newComponentTrace();
+      await searchComponent(imageUrl, crops, key, title, description, stage, trace).catch(() => []);
+      const crop = crops[key];
+      return {
+        key,
+        label: crop?.label ?? "Whole image",
+        category: crop?.category ?? "other",
+        signature: crop?.signature ?? "",
+        box: crop?.box ?? null,
+        cropParam: crop?.crop ?? null,
+        boxArea: crop ? crop.box.w * crop.box.h : 1,
+        searches: trace.searches,
+        candidates: toWireCandidates(trace),
+        niche: trace.niche,
+        landed: trace.landed,
+        widened: trace.widened,
+        partial: trace.partial,
+        verifierBlind: trace.verifierBlind,
+        verifyDisabled: trace.verifyDisabled,
+        cropResults: trace.cropResults,
+        wholeResults: trace.wholeResults,
+        pooled: trace.pooled,
+        headSize: trace.headSize,
+        queryWords: trace.queryWords,
+        labelWords: trace.labelWords,
+        durationMs: trace.durationMs,
+      };
+    }),
+  );
+
+  return {
+    imageUrl,
+    title,
+    description,
+    stage,
+    detection: {
+      objects: crops.length,
+      noProducts,
+      atCropCap: crops.length >= CROP_MAX,
+      durationMs: detectMs,
+    },
+    components,
+    limits: {
+      cropMax: CROP_MAX,
+      perTagMax: PER_TAG_MAX,
+      fullImageMax: FULL_IMAGE_MAX,
+      verifyPoolMax: VERIFY_POOL_MAX,
+      widenRetryBelow: WIDEN_RETRY_BELOW,
+      widenFactor: WIDEN_FACTOR,
+      widenSpeculateBelowArea: WIDEN_SPECULATE_BELOW_AREA,
+      verifyBudgetPerPin: VERIFY_BUDGET_PER_PIN,
+      verifyEnabled: VERIFY_ENABLED,
+      detectEnabled: DETECT_ENABLED,
+    },
+    durationMs: Date.now() - startedAt,
   };
 }
 
@@ -3430,6 +4089,61 @@ export const visualSearchComponent = createServerFn({ method: "POST" })
       if (!(e instanceof TimeoutError)) console.error("[visualSearchComponent] failed", e);
       return { matches: [] as RawVisualMatch[] };
     }
+  });
+
+/** The whole funnel for one pin or image, every stage and every dropped
+ * candidate — what the "Debug funnel" button on the matching-products screens
+ * reads.
+ *
+ * Behind the same auth as every other visual-search call, and it needs no more
+ * privilege than they do: it explains a search the caller can already run, over
+ * an image they can already see. It buys nothing — detection, Lens and the look
+ * verdicts are all read from cache — so it is safe to open repeatedly on the
+ * same pin. */
+export const visualSearchDebug = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .validator(
+    (d: {
+      pinId?: string;
+      imageUrl?: string;
+      title?: string;
+      description?: string;
+      stage?: ComponentStage;
+    }) =>
+      z
+        .object({
+          pinId: z.string().uuid().optional(),
+          imageUrl: z.string().url().optional(),
+          title: z.string().optional().default(""),
+          description: z.string().optional().default(""),
+          stage: z.enum(["fast", "verified"]).optional().default("verified"),
+        })
+        .refine((v) => !!v.pinId || !!v.imageUrl, "pinId or imageUrl is required")
+        .parse(d),
+  )
+  .handler(async ({ data, context }) => {
+    let imageUrl = data.imageUrl ?? null;
+    let title = data.title;
+    let description = data.description;
+
+    // Resolved exactly as `visualSearchComponents` resolves it, or the trace
+    // would explain a search run under a different ranking context (and a
+    // different cache key) than the one on screen.
+    if (data.pinId) {
+      const { data: pin, error } = await context.supabase
+        .from("pins")
+        .select("id,title,description,image_url")
+        .eq("id", data.pinId)
+        .maybeSingle();
+      if (error) throw new Error(error.message);
+      if (!pin) throw new Error("Pin not found");
+      imageUrl = pin.image_url;
+      title = pin.title ?? "";
+      description = pin.description ?? "";
+    }
+
+    if (!imageUrl) throw new Error("This pin has no image to trace");
+    return traceVisualFunnel(imageUrl, title, description, data.stage);
   });
 
 // Per-URL CK lookup, callable directly by the client — the other half of

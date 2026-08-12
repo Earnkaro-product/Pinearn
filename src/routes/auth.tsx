@@ -191,10 +191,8 @@ function AuthPage() {
         </div>
 
         <Link to="/" className="relative z-10 flex items-center gap-2">
-          <div className="grid h-8 w-8 place-items-center rounded-lg bg-primary shadow-glow">
-            <span className="font-display text-sm font-bold text-primary-foreground">P</span>
-          </div>
-          <span className="font-display text-lg font-semibold">Pinearn</span>
+          <img src="/shopmypin-logo.png" alt="" draggable={false} className="h-8 w-8" />
+          <span className="font-display text-lg font-semibold">ShopMyPin</span>
         </Link>
 
         <div className="relative z-10 max-w-md">
@@ -220,7 +218,7 @@ function AuthPage() {
         <div className="relative z-10 max-w-md rounded-2xl border border-border bg-surface/80 p-5 shadow-elevate backdrop-blur">
           <Quote className="h-5 w-5 text-primary/50" />
           <p className="mt-2 text-sm leading-relaxed text-foreground/85">
-            “Pinearn found products for pins I'd posted years ago — that old Pinterest traffic
+            “ShopMyPin found products for Pins I'd posted years ago — that old Pinterest traffic
             finally pays me.”
           </p>
           <p className="mt-3 text-xs font-semibold text-muted-foreground">Creator name · @handle</p>
@@ -245,10 +243,8 @@ function AuthPage() {
         </div>
 
         <Link to="/" className="absolute left-5 top-5 z-10 flex items-center gap-2 lg:hidden">
-          <div className="grid h-7 w-7 place-items-center rounded-lg bg-primary shadow-glow">
-            <span className="font-display text-xs font-bold text-primary-foreground">P</span>
-          </div>
-          <span className="font-display text-base font-semibold">Pinearn</span>
+          <img src="/shopmypin-logo.png" alt="" draggable={false} className="h-7 w-7" />
+          <span className="font-display text-base font-semibold">ShopMyPin</span>
         </Link>
 
         <motion.div
@@ -259,7 +255,7 @@ function AuthPage() {
         >
           <div className="rounded-3xl border border-border bg-surface/90 px-5 py-6 shadow-elevate backdrop-blur-xl sm:p-8">
             <h1 className="font-display text-2xl font-semibold leading-tight">
-              {step === "phone" ? "Welcome to Pinearn" : "Enter the code"}
+              {step === "phone" ? "Welcome to ShopMyPin" : "Enter the code"}
             </h1>
             <p className="mt-1.5 text-sm text-muted-foreground">
               {step === "phone"
@@ -339,7 +335,7 @@ function AuthPage() {
                     >
                       Privacy Policy
                     </Link>{" "}
-                    and Terms, including how Pinearn uses my phone number and Pinterest data.
+                    and Terms, including how ShopMyPin uses my phone number and Pinterest data.
                   </span>
                 </label>
                 <button
@@ -445,7 +441,7 @@ function AuthPage() {
           </div>
 
           <p className="mt-5 text-center text-xs text-muted-foreground">
-            By continuing you're joining Pinearn — free, always, for Pinterest creators.
+            By continuing you're joining ShopMyPin — free, always, for Pinterest creators.
           </p>
         </motion.div>
       </div>

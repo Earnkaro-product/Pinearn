@@ -52,8 +52,8 @@ export function PinterestSyncBanner({ compact = false }: { compact?: boolean }) 
         <div className="min-w-0 flex-1">
           <p className="text-body font-bold text-amber-900">Pinterest needs reconnecting</p>
           <p className="mt-0.5 text-xs leading-snug text-amber-800/85">
-            Its access expired or was revoked, so nothing new can be imported. Your pins, boards and
-            earnings in Pinearn are untouched.
+            Its access expired or was revoked, so nothing new can be imported. Your Pins, boards and
+            earnings in ShopMyPin are untouched.
           </p>
         </div>
         <button

@@ -71,7 +71,7 @@ export const Route = createFileRoute("/s/$slug")({
   head: ({ loaderData }) => ({
     meta: loaderData
       ? [
-          { title: `${loaderData.store.name} · Pinearn` },
+          { title: `${loaderData.store.name} · ShopMyPin` },
           {
             name: "description",
             content: loaderData.store.description ?? `Shop ${loaderData.store.name}`,
@@ -237,7 +237,7 @@ function PublicStorefront() {
       <footer className="px-6 py-8 text-center text-xs text-muted-foreground">
         Powered by{" "}
         <Link to="/" className="text-primary hover:underline">
-          Pinearn
+          ShopMyPin
         </Link>
       </footer>
     </div>
@@ -309,7 +309,7 @@ function NotFound() {
         <h1 className="font-display text-2xl font-semibold">Storefront not found</h1>
         <p className="mt-2 text-sm text-muted-foreground">This link may have been removed.</p>
         <Link to="/" className="mt-6 inline-block text-sm text-primary hover:underline">
-          Back to Pinearn
+          Back to ShopMyPin
         </Link>
       </div>
     </div>
@@ -322,7 +322,7 @@ function ErrorBoundary() {
       <div>
         <h1 className="font-display text-2xl font-semibold">Something went wrong</h1>
         <Link to="/" className="mt-6 inline-block text-sm text-primary hover:underline">
-          Back to Pinearn
+          Back to ShopMyPin
         </Link>
       </div>
     </div>
