@@ -29,7 +29,7 @@ import { WalletPill } from "@/components/wallet-pill";
 const NAV = [
   { to: "/dashboard", label: "Home", icon: Home },
   { to: "/pins", label: "Pins", icon: Pin },
-  { to: "/analytics", label: "Stats", icon: BarChart3 },
+  { to: "/analytics", label: "Earnings", icon: BarChart3 },
   { to: "/storefront", label: "My Store", icon: Store },
 ] as const;
 
@@ -119,10 +119,8 @@ export function AppShell({
         {/* Desktop sidebar */}
         <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col border-r border-sidebar-border bg-sidebar p-4 md:flex">
           <Link to="/dashboard" className="mb-6 flex items-center gap-2 px-2">
-            <div className="grid h-9 w-9 place-items-center rounded-xl bg-primary text-primary-foreground shadow-glow">
-              <span className="font-display text-base font-bold">P</span>
-            </div>
-            <span className="font-display text-lg font-semibold tracking-tight">Pinearn</span>
+            <img src="/shopmypin-logo.png" alt="" draggable={false} className="h-9 w-9" />
+            <span className="font-display text-lg font-semibold tracking-tight">ShopMyPin</span>
           </Link>
 
           <ProfileSwitcher

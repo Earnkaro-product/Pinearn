@@ -119,7 +119,7 @@ export function NewUserCta() {
               gradient="from-orange-100 via-amber-50 to-rose-50"
               eyebrow="Let's get started"
               headline="Create your first pin"
-              body="Pins are how Pinearn turns your content into income. Create one now, attach a product, and start earning."
+              body="Pins are how ShopMyPin turns your content into income. Create one now, make it shoppable, and start earning."
               ctaLabel="Create my first pin"
               onAct={act}
               onSkip={dismiss}

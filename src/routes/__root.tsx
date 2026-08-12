@@ -89,25 +89,25 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { name: "theme-color", content: "#e60023" },
       { name: "apple-mobile-web-app-capable", content: "yes" },
       { name: "apple-mobile-web-app-status-bar-style", content: "default" },
-      { name: "apple-mobile-web-app-title", content: "Pinearn" },
-      { title: "Pinearn — Turn Pinterest traffic into affiliate revenue" },
+      { name: "apple-mobile-web-app-title", content: "ShopMyPin" },
+      { title: "ShopMyPin — Turn your Pins into income" },
       {
         name: "description",
         content:
-          "Pinearn is the all-in-one Pinterest monetization platform for creators. Import content, attach a storefront link to any pin, and track earnings in real time.",
+          "ShopMyPin turns your Pinterest Pins into affiliate income. Connect your account, make any Pin shoppable, and watch clicks become earnings — in real time.",
       },
-      { property: "og:title", content: "Pinearn — Pinterest affiliate revenue for creators" },
+      { property: "og:title", content: "ShopMyPin — Turn your Pins into income" },
       {
         property: "og:description",
         content:
-          "Import content from any platform, format it into monetized pins, and track clicks & earnings in one dashboard.",
+          "Make any Pin shoppable, attach your affiliate links, and track clicks & earnings in one place. Built for Pinterest creators.",
       },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
     ],
     links: [
       { rel: "stylesheet", href: appCss },
-      { rel: "icon", href: "/pinearn-favicon.png", type: "image/png" },
+      { rel: "icon", href: "/shopmypin-favicon.png", type: "image/png" },
     ],
   }),
   shellComponent: RootShell,

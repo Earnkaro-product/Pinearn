@@ -29,7 +29,7 @@ const STAGE_COPY: Record<Stage, { title: string; body: string }> = {
     title: "Importing your Pinterest…",
     body: "Reading your boards, pins and profile. This is the only slow bit — a big account takes a few seconds.",
   },
-  done: { title: "All set", body: "Taking you back to Pinearn." },
+  done: { title: "All set", body: "Taking you back to ShopMyPin." },
 };
 
 function PinterestCallbackPage() {
@@ -121,7 +121,7 @@ function PinterestCallbackPage() {
               onClick={() => navigate({ to: "/dashboard" })}
               className="rounded-full border border-border px-5 py-2.5 text-sm font-semibold text-muted-foreground transition hover:text-foreground"
             >
-              Back to Pinearn
+              Back to ShopMyPin
             </button>
           </div>
         </>

@@ -99,7 +99,7 @@ function BoostPinsPage() {
   }, [report, analyzing, recorded]);
 
   // Profile SEO scores the Pinterest profile, so its fix can't be a route inside
-  // Pinearn — the bio, photo and website all live on pinterest.com. The sheet
+  // ShopMyPin — the bio, photo and website all live on pinterest.com. The sheet
   // shows what Pinterest currently has and hands over a link per field.
   const [profileSheet, setProfileSheet] = useState(false);
 

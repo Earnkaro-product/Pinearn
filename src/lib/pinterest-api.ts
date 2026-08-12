@@ -424,7 +424,7 @@ export async function listUserPins(accessToken: string): Promise<PinterestPin[]>
 export type PinterestAccount = {
   username: string | null;
   accountId: string | null;
-  // The profile fields the health score reads. Pinterest owns them — Pinearn can
+  // The profile fields the health score reads. Pinterest owns them — ShopMyPin can
   // only report what's set and send the creator to the right settings page.
   about: string | null;
   websiteUrl: string | null;

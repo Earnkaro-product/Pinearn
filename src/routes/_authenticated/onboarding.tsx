@@ -152,7 +152,7 @@ function OnboardingPage() {
       // like one — say which it is.
       if (landed === 0 && r.pins.savedSkipped > 0) {
         toast.info(
-          `Found ${r.pins.savedSkipped} saved ${r.pins.savedSkipped === 1 ? "pin" : "pins"} on your boards. Pinearn works on pins you created — create one on Pinterest and sync again.`,
+          `Found ${r.pins.savedSkipped} saved ${r.pins.savedSkipped === 1 ? "pin" : "pins"} on your boards. ShopMyPin works on Pins you created — create one on Pinterest and sync again.`,
           { duration: 8000 },
         );
       }
@@ -267,10 +267,8 @@ function OnboardingPage() {
       />
       <div className="mx-auto w-full max-w-md px-4 pt-8 sm:max-w-lg">
         <div className="mb-6 flex items-center gap-2">
-          <div className="grid h-8 w-8 place-items-center rounded-lg bg-gradient-primary shadow-glow">
-            <span className="font-display text-sm font-bold text-primary-foreground">P</span>
-          </div>
-          <span className="font-display text-lg font-semibold">Pinearn</span>
+          <img src="/shopmypin-logo.png" alt="" draggable={false} className="h-8 w-8" />
+          <span className="font-display text-lg font-semibold">ShopMyPin</span>
           <span className="ml-auto inline-flex items-center gap-1 rounded-full border border-primary/30 bg-primary/10 px-2.5 py-0.5 text-mini font-medium text-primary">
             <Lock className="h-3 w-3" /> Required
           </span>
@@ -323,7 +321,7 @@ function OnboardingPage() {
                   Connect Pinterest to continue
                 </h1>
                 <p className="text-xs text-muted-foreground">
-                  Pinearn only works when your Pinterest is linked & synced.
+                  ShopMyPin runs on your Pins — link your Pinterest to unlock everything.
                 </p>
               </div>
             </div>
@@ -393,7 +391,7 @@ function OnboardingPage() {
             )}
 
             <p className="mt-4 text-center text-mini text-muted-foreground">
-              You can't skip this step — Pinearn needs Pinterest data to build your storefront.
+              This step can't be skipped — ShopMyPin builds your storefront from your Pinterest.
             </p>
           </div>
         )}
