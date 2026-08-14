@@ -90,14 +90,12 @@ export function ScoreRing({ points, maxPoints }: { points: number; maxPoints: nu
 /** The whole briefing in one slim band: pts banked, pts on the table, and the
  * page's only instruction — everything else is pictures. */
 export function PickerHeader({
-  eyebrow,
   heading,
   points,
   maxPoints,
   gainPoints,
   onGuide,
 }: {
-  eyebrow: string;
   heading: string;
   /** Pts this area has already banked on the 100-pt Boost Score. */
   points: number;
@@ -108,21 +106,17 @@ export function PickerHeader({
   onGuide: () => void;
 }) {
   return (
+    // The eyebrow ("Pin SEO") went: the app bar directly above already says
+    // which flow this is, so it was the same words twice, one line apart.
     <header className="flex items-center gap-3.5 rounded-3xl border border-border bg-surface p-4 shadow-sm">
       <ScoreRing points={points} maxPoints={maxPoints} />
       <div className="min-w-0 flex-1">
-        <p className="text-micro font-bold uppercase tracking-[0.14em] text-muted-foreground">
-          {eyebrow}
-        </p>
-        <h2 className="mt-0.5 font-display text-[22px] font-bold leading-tight tracking-tight">
+        <h2 className="font-display text-[22px] font-bold leading-tight tracking-tight">
           {heading}
         </h2>
-      </div>
-      <div className="shrink-0 text-right">
-        <p className="font-display text-[19px] font-bold leading-none text-primary">
-          +{pointsLabel(gainPoints)}
+        <p className="mt-0.5 text-mini font-bold text-primary">
+          +{pointsLabel(gainPoints)} pts to win
         </p>
-        <p className="mt-1 text-micro font-semibold text-muted-foreground">pts available</p>
       </div>
       <button
         type="button"
@@ -404,7 +398,7 @@ export function SelectionBar({
  * puts in the frame — a pin image, a board's cover collage. */
 export function LaunchScreen({
   title,
-  badge = "Loading boost run",
+  badge = "Boost run",
   children,
 }: {
   title: string;
@@ -467,7 +461,6 @@ export function LaunchScreen({
  * height on a small phone and read as three unrelated captions. */
 export function ReviewProgressHeader({
   label,
-  hint,
   points,
   maxPoints,
   index,
@@ -477,7 +470,6 @@ export function ReviewProgressHeader({
   onGuide,
 }: {
   label: string;
-  hint: string;
   /** Pts this area has banked so far — climbs live as fixes land. */
   points: number;
   maxPoints: number;
@@ -497,28 +489,26 @@ export function ReviewProgressHeader({
       <div className="flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2.5">
           <LiveScorePill label={label} points={points} maxPoints={maxPoints} />
+          {/* Position only. The "strongest gains first" reassurance belonged to
+              the picker, where the order is chosen — repeating it on every card
+              of the run spent a line saying nothing new. */}
           <p className="min-w-0 text-mini font-semibold leading-tight text-muted-foreground">
             {total > 1 ? (
-              <>
-                <span className="tabular-nums text-foreground">
-                  {Math.min(index + 1, total)}/{total}
-                </span>{" "}
-                in queue
-                <span className="block text-micro font-medium text-muted-foreground/80">
-                  {hint}
-                </span>
-              </>
+              <span className="tabular-nums text-foreground">
+                {Math.min(index + 1, total)}/{total}
+              </span>
             ) : (
-              <span className="text-foreground">Just this one</span>
+              <span className="text-foreground">1 of 1</span>
             )}
           </p>
         </div>
         <button
           type="button"
           onClick={onGuide}
-          className="inline-flex min-h-8 shrink-0 items-center gap-1 rounded-full bg-surface px-2.5 text-mini font-bold text-primary ring-1 ring-primary/20 transition hover:bg-primary/10"
+          aria-label="How it works"
+          className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-surface text-primary ring-1 ring-primary/20 transition hover:bg-primary/10"
         >
-          <Info className="h-3 w-3" /> How it works
+          <Info className="h-4 w-4" />
         </button>
       </div>
 
@@ -538,16 +528,25 @@ export function ReviewProgressHeader({
             />
           </div>
 
-          <div className="mt-1.5 flex items-center justify-between text-micro font-semibold tabular-nums">
-            <span className="inline-flex items-center gap-1 text-emerald-600">
+          {/* The dots ARE the legend — they're the same two colours as the
+              segments directly above, so "applied" and "skipped" were labels
+              for something already colour-coded an eighth of an inch away. */}
+          <div className="mt-1.5 flex items-center gap-3 text-micro font-semibold tabular-nums">
+            <span
+              className="inline-flex items-center gap-1 text-emerald-600"
+              aria-label={`${approvedCount} applied`}
+            >
               <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-              {approvedCount} applied
+              {approvedCount}
             </span>
-            <span className="inline-flex items-center gap-1 text-muted-foreground">
+            <span
+              className="inline-flex items-center gap-1 text-muted-foreground"
+              aria-label={`${skippedCount} skipped`}
+            >
               <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/40" />
-              {skippedCount} skipped
+              {skippedCount}
             </span>
-            <span className="text-muted-foreground/70">
+            <span className="ml-auto text-muted-foreground/70">
               {Math.max(total - approvedCount - skippedCount, 0)} left
             </span>
           </div>

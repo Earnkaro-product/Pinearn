@@ -5,6 +5,7 @@ import { getServiceSupabase } from "@/integrations/supabase/service-client";
 import type { Database, Json } from "@/integrations/supabase/types";
 import { z } from "zod";
 import {
+  createBoard as createPinterestBoardRemote,
   createPin as createPinterestPinRemote,
   getAccountAnalytics,
   getPinAnalytics,
@@ -379,6 +380,103 @@ export const createPinterestPin = createServerFn({ method: "POST" })
     if (pErr) throw new Error(pErr.message);
 
     return { id: inserted.id, pinterestPinId: pin.id };
+  });
+
+// -------------------------------------------------------------
+// Create a brand-new Pinterest board from inside the app (create-pin wizard's
+// board picker). The real board is created on Pinterest FIRST — if that call
+// fails nothing is written locally — then mirrored exactly the way the sync
+// mirrors an imported board: a `collections` row (what the create-pin flow
+// publishes to), plus a `boards` row + membership so the Boards tab sees it.
+// -------------------------------------------------------------
+
+export const createPinterestBoard = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .validator((d: { name: string; description?: string }) =>
+    z
+      .object({ name: z.string().min(1).max(180), description: z.string().max(500).optional() })
+      .parse(d),
+  )
+  .handler(async ({ data, context }) => {
+    const { supabase, userId } = context;
+
+    const { data: storefront, error: sErr } = await supabase
+      .from("storefronts")
+      .select("id")
+      .eq("user_id", userId)
+      .maybeSingle();
+    if (sErr) throw new Error(sErr.message);
+    if (!storefront) throw new Error("No storefront found for user");
+
+    const board = await withPinterestToken(userId, (t) =>
+      createPinterestBoardRemote(t, { name: data.name.trim(), description: data.description }),
+    );
+
+    // Same slug-collision handling as the sync — emoji-only names all collapse
+    // to the "board" fallback, so disambiguate against every slug in use.
+    const { data: existingSlugRows } = await supabase
+      .from("collections")
+      .select("slug")
+      .eq("storefront_id", storefront.id);
+    const usedSlugs = new Set((existingSlugRows ?? []).map((c) => c.slug as string));
+    const base = slugify(board.name);
+    let slug = base;
+    for (let n = 2; usedSlugs.has(slug); n++) slug = `${base}-${n}`;
+
+    const { data: cPos } = await supabase
+      .from("collections")
+      .select("position")
+      .eq("storefront_id", storefront.id)
+      .order("position", { ascending: false })
+      .limit(1);
+
+    const { data: coll, error: cErr } = await supabase
+      .from("collections")
+      .insert({
+        user_id: userId,
+        storefront_id: storefront.id,
+        name: board.name,
+        slug,
+        description: board.description ?? null,
+        source: "pinterest",
+        pinterest_board_id: board.id,
+        position: (cPos?.[0]?.position ?? -1) + 1,
+      })
+      .select("id")
+      .single();
+    if (cErr) throw new Error(cErr.message);
+
+    const { data: bPos } = await supabase
+      .from("boards")
+      .select("position")
+      .eq("storefront_id", storefront.id)
+      .order("position", { ascending: false })
+      .limit(1);
+
+    const { data: boardRow, error: bErr } = await supabase
+      .from("boards")
+      .insert({
+        user_id: userId,
+        storefront_id: storefront.id,
+        name: board.name,
+        source: "pinterest",
+        pinterest_board_id: board.id,
+        position: (bPos?.[0]?.position ?? -1) + 1,
+      })
+      .select("id")
+      .single();
+    // The board row is presentation-only (Boards tab); the collection row above
+    // is what publishing needs, so a failure here shouldn't lose the board.
+    if (!bErr && boardRow) {
+      await supabase
+        .from("board_collections")
+        .upsert(
+          { board_id: boardRow.id, collection_id: coll.id, user_id: userId, position: 0 },
+          { onConflict: "board_id,collection_id" },
+        );
+    }
+
+    return { id: coll.id as string, name: board.name };
   });
 
 // -------------------------------------------------------------

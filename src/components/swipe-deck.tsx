@@ -232,11 +232,10 @@ function DeckHint() {
   return (
     <p className="mt-2 text-center text-mini text-muted-foreground">
       {coarse ? (
-        "Swipe right to apply · left to skip · shake to undo"
+        "Swipe right to apply · left to skip"
       ) : (
         <>
-          Drag, or press <Kbd>→</Kbd> apply · <Kbd>←</Kbd> skip · <Kbd>{mac ? "⌘Z" : "Ctrl+Z"}</Kbd>{" "}
-          undo
+          <Kbd>→</Kbd> apply · <Kbd>←</Kbd> skip · <Kbd>{mac ? "⌘Z" : "Ctrl+Z"}</Kbd> undo
         </>
       )}
     </p>

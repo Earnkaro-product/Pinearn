@@ -10,17 +10,17 @@ import { Search, Sparkles, Check, Link2, ArrowRight, PackageSearch } from "lucid
 // WHAT is in the pin. Saying "matching your shoes" beats a generic spinner
 // line, and it is true — that is the stage actually running.
 const SCAN_MESSAGES = [
-  "Reading your pin for shoppable products…",
-  "Matching only retailers that pay you commission…",
-  "Pulling live prices & stock from each store…",
-  "Ranking the closest visual matches…",
+  "Reading your pin…",
+  "Matching retailers that pay you…",
+  "Pulling live prices and stock…",
+  "Ranking the closest matches…",
 ];
 
 const MATCHING_MESSAGES = [
-  "Finding the closest visual matches…",
-  "Comparing colour, pattern and shape…",
-  "Checking live prices & stock…",
-  "Keeping only retailers that pay you…",
+  "Finding the closest matches…",
+  "Comparing colour and shape…",
+  "Checking prices and stock…",
+  "Keeping only paying retailers…",
 ];
 
 /** The phases, in order. `useScanPhase` (hooks/use-scan-phase.ts) owns the

@@ -55,12 +55,13 @@ import {
   SUB_SCORE_WEIGHTS,
 } from "@/lib/health-score";
 
-// How to drive the deck — surfaced any time via the header's "How it works".
+// How to drive the deck — surfaced any time via the header's info button. One
+// action per step; the controls are on screen while this is read.
 const BOARD_GUIDE_STEPS = [
-  "Queue boards one by one or with Select all — then start the run.",
-  "Hold any board to flip it and see what fixing it adds to your score.",
-  "In the run, Apply fix accepts the suggested name & description; Skip leaves the board untouched.",
-  "Tap Edit to adjust the wording first — and undo any fix anytime.",
+  "Tap boards to queue them, then Boost.",
+  "Hold a board to see what it's worth.",
+  "Apply keeps the rewrite, Skip moves on.",
+  "Edit the wording, or undo, anytime.",
 ];
 
 // Filmstrip sizing — mirrors the pin review navigator so the two flows feel
@@ -310,7 +311,6 @@ function FixBoardsPage() {
             gained={pointsEarned("boardStructure", flow.gained)}
             approvedCount={flow.approvedCount}
             skippedCount={flow.skippedCount}
-            total={flow.total}
             appliedCards={flow.appliedCards}
             onRevertOne={(c) => flow.revertOne(c as BoardFixCard)}
             onUndoAll={flow.undoAll}
@@ -333,7 +333,6 @@ function FixBoardsPage() {
                 segmented progress track, and the applied/skipped split. */}
             <ReviewProgressHeader
               label="Board Structure"
-              hint="Strongest gains first"
               points={pointsEarned("boardStructure", flow.score)}
               maxPoints={maxPointsFor("boardStructure")}
               index={flow.index}
@@ -399,11 +398,11 @@ function FixBoardsPage() {
                   ) : (
                     <Check className="h-5 w-5" strokeWidth={3} />
                   )}
-                  {currentGenerating ? "Writing…" : "Apply fix"}
+                  {currentGenerating ? "Writing…" : "Apply"}
                 </motion.button>
               </div>
 
-              {/* "Approve all remaining (1)" is the Apply button with a confirm
+              {/* "Apply all 1" is the Apply button with a confirm
                   sheet in front of the same single write — the bulk path only
                   earns its row once there's more than one left. */}
               {remaining.length > 1 && (
@@ -415,12 +414,12 @@ function FixBoardsPage() {
                 >
                   {preparingBulk ? (
                     <>
-                      <Loader2 className="h-4 w-4 animate-spin" /> Writing rewrites… {bulkReady}/
+                      <Loader2 className="h-4 w-4 animate-spin" /> Writing {bulkReady}/
                       {remaining.length}
                     </>
                   ) : (
                     <>
-                      <CheckCheck className="h-4 w-4" /> Approve all remaining ({remaining.length})
+                      <CheckCheck className="h-4 w-4" /> Apply all {remaining.length}
                     </>
                   )}
                 </motion.button>
@@ -680,7 +679,6 @@ function BoardBoostPicker({
     >
       <div className="no-scrollbar min-h-0 flex-1 space-y-4 overflow-y-auto px-1 pb-2">
         <PickerHeader
-          eyebrow="Board Structure"
           heading="Pick boards to boost"
           points={pointsEarned("boardStructure", score)}
           maxPoints={maxPointsFor("boardStructure")}
@@ -754,9 +752,9 @@ function BoardBoostPicker({
                 onClick={() => setLimit((l) => l + BOARD_GRID_PAGE_SIZE)}
                 className="inline-flex min-h-10 flex-1 items-center justify-center gap-1.5 rounded-2xl border border-dashed border-border bg-surface/70 text-xs font-bold text-primary transition hover:bg-primary/[0.04]"
               >
-                Show more
+                Show
                 <span className="font-semibold tabular-nums text-muted-foreground">
-                  · {hidden} left
+                  {hidden} more
                 </span>
               </button>
             )}
@@ -777,7 +775,7 @@ function BoardBoostPicker({
         selectedCount={selectedIds.length}
         unit="board"
         unitPlural="boards"
-        emptyLabel="Select boards to boost"
+        emptyLabel="Select boards"
         selectedPoints={overallPointsFor(selectedFailing, ranked.length)}
         onStart={() => selectedIds.length > 0 && onStart(selectedIds)}
         onClear={() => setSelected(new Set())}
@@ -804,7 +802,6 @@ function SuggestedBoardsRail({
 }) {
   const ids = cards.map((c) => c.id);
   const allQueued = ids.length > 0 && ids.every((id) => selected.has(id));
-  const totalFixes = cards.reduce((n, c) => n + c.issues.length, 0);
 
   return (
     <motion.section
@@ -832,12 +829,11 @@ function SuggestedBoardsRail({
             </span>
             Start here
           </p>
+          {/* Every cover already wears its fix count, so this line was the
+              same tally a second time. */}
           <h3 className="mt-1 font-display text-[17px] font-bold leading-tight tracking-tight">
             Your {cards.length} messiest {cards.length === 1 ? "board" : "boards"}
           </h3>
-          <p className="mt-0.5 text-mini font-medium text-muted-foreground">
-            {totalFixes} fixes · ranked by reach
-          </p>
         </div>
         <button
           type="button"
@@ -854,7 +850,7 @@ function SuggestedBoardsRail({
               className="animate-sheen pointer-events-none absolute inset-y-0 w-1/3 bg-gradient-to-r from-transparent via-white/30 to-transparent"
             />
           )}
-          {allQueued ? "Clear" : `Queue all ${cards.length}`}
+          {allQueued ? "Clear" : "Queue all"}
         </button>
       </div>
 
@@ -901,7 +897,7 @@ function SuggestedBoardsRail({
               <p className="mt-1 line-clamp-1 px-0.5 text-mini font-bold">{card.title}</p>
               <p className="px-0.5 text-micro font-medium text-muted-foreground">
                 {card.pinCount} {card.pinCount === 1 ? "pin" : "pins"}
-                {card.impressions > 0 && <> · {metricLabel(card.impressions)} views</>}
+                {card.impressions > 0 && <> · {metricLabel(card.impressions)}</>}
               </p>
             </motion.button>
           );
@@ -1018,18 +1014,19 @@ function BoardPickCard({
           }}
           className="absolute inset-0 flex flex-col items-center justify-center gap-1 overflow-hidden rounded-2xl border-2 border-primary/40 bg-surface p-2 text-center"
         >
+          {/* Unit on the number, not a caption under it — same as the pin card. */}
           <span className="font-display text-[26px] font-bold leading-none tabular-nums text-primary">
             {points > 0 ? `+${pointsLabel(points)}` : "+0"}
-          </span>
-          <span className="text-micro font-bold uppercase tracking-wide text-muted-foreground">
-            boost pts
+            <span className="ml-1 text-mini font-bold uppercase tracking-wide text-muted-foreground">
+              pts
+            </span>
           </span>
           <span className="text-mini font-semibold leading-snug text-muted-foreground">
             {points > 0 ? (
               <>
                 {pointsLabel(pointsNow)} →{" "}
                 <span className="text-emerald-600">
-                  {pointsLabel(Math.min(maxPointsFor("boardStructure"), pointsNow + points))} pts
+                  {pointsLabel(Math.min(maxPointsFor("boardStructure"), pointsNow + points))}
                 </span>
               </>
             ) : (
@@ -1051,7 +1048,7 @@ function BoardPickCard({
  * the transition confirms the selection landed. */
 function BoardLaunch({ card, count }: { card: BoardFixCard; count: number }) {
   return (
-    <LaunchScreen title={count > 1 ? `Queuing ${count} boards` : "Locking onto this board"}>
+    <LaunchScreen title={`${count} ${count === 1 ? "board" : "boards"} queued`}>
       <BoardCover covers={card?.covers ?? []} flat />
     </LaunchScreen>
   );
@@ -1149,7 +1146,7 @@ function BoardRewriteCard({
         <div className="rounded-2xl border border-amber-500/30 bg-amber-500/5 p-3">
           <p className="text-mini font-semibold text-amber-800">Couldn&apos;t write this one</p>
           <p className="mt-0.5 text-mini leading-snug text-amber-700/80">
-            Try again, or Skip to move on. Nothing was changed on your board.
+            Your board is untouched.
           </p>
           {/* The only retry path now that the always-on Redo chip is gone — it
               belongs with the failure, not on top of every healthy rewrite. */}
@@ -1364,7 +1361,7 @@ function BoardGridSheet({
         <div className="min-w-0 flex-1">
           <h3 className="truncate font-display text-lg font-bold leading-tight">Your boards</h3>
           <p className="text-xs text-muted-foreground">
-            {cards.length} {cards.length === 1 ? "board" : "boards"} to fix
+            {cards.length} {cards.length === 1 ? "board" : "boards"}
             {fixedCount > 0 && (
               <span className="font-semibold text-emerald-600"> · {fixedCount} done</span>
             )}

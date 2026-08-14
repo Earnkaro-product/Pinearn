@@ -69,12 +69,14 @@ import {
   SUB_SCORE_WEIGHTS,
 } from "@/lib/health-score";
 
-// How to drive the deck — surfaced any time via the header's "How it works".
+// How to drive the deck — surfaced any time via the header's info button. Each
+// step is one action, not a sentence explaining it: the reader is mid-flow with
+// the controls in front of them, so naming the control is the whole instruction.
 const PIN_GUIDE_STEPS = [
-  "Queue pins one by one, by board, or Select all — then start the run.",
-  "Hold any pin to flip it and see what fixing it adds to your score.",
-  "In the run, Apply fix accepts a rewrite; Skip leaves the pin untouched.",
-  "Tap Edit to adjust wording first — and undo any fix anytime.",
+  "Tap pins to queue them, then Boost.",
+  "Hold a pin to see what it's worth.",
+  "Apply keeps the rewrite, Skip moves on.",
+  "Edit the wording, or undo, anytime.",
 ];
 
 // Filmstrip sizing — mirrors the board review navigator so the two flows feel
@@ -401,7 +403,6 @@ function FixPinSeoPage() {
             gained={pointsEarned("pinSeo", flow.gained)}
             approvedCount={flow.approvedCount}
             skippedCount={flow.skippedCount}
-            total={flow.total}
             appliedCards={flow.appliedCards}
             coinsSpent={showCoinCost ? coinsSpent : undefined}
             onRevertOne={(c) => flow.revertOne(c as PinFixCard)}
@@ -427,7 +428,6 @@ function FixPinSeoPage() {
                 the height, which is space the rewrite card gets instead. */}
             <ReviewProgressHeader
               label="Pin SEO"
-              hint="Strongest gains first"
               points={pointsEarned("pinSeo", flow.score)}
               maxPoints={maxPointsFor("pinSeo")}
               index={flow.index}
@@ -504,11 +504,7 @@ function FixPinSeoPage() {
                   ) : (
                     <Check className="h-5 w-5" strokeWidth={3} />
                   )}
-                  {currentGenerating
-                    ? "Writing…"
-                    : !canAffordOne
-                      ? "Out of coins this week"
-                      : "Apply fix"}
+                  {currentGenerating ? "Writing…" : !canAffordOne ? "Out of coins" : "Apply"}
                   {/* The price rides the button, so the cost of the tap is
                       visible at the moment of tapping rather than only in the
                       header balance. */}
@@ -520,7 +516,7 @@ function FixPinSeoPage() {
                 </motion.button>
               </div>
 
-              {/* "Approve all remaining (1)" is the Apply button with extra
+              {/* "Apply all 1" is the Apply button with extra
                   steps — a confirm sheet in front of the same single write. The
                   bulk path only earns its row once there's more than one left. */}
               {remaining.length > 1 && (
@@ -537,17 +533,17 @@ function FixPinSeoPage() {
                 >
                   {preparingBulk ? (
                     <>
-                      <Loader2 className="h-4 w-4 animate-spin" /> Writing rewrites… {bulkReady}/
+                      <Loader2 className="h-4 w-4 animate-spin" /> Writing {bulkReady}/
                       {remaining.length}
                     </>
                   ) : (
                     <>
                       <CheckCheck className="h-4 w-4" />
                       {bulkCovered === 0
-                        ? "Out of coins this week"
+                        ? "Out of coins"
                         : bulkTrimmed
-                          ? `Approve next ${bulkCovered} of ${remaining.length}`
-                          : `Approve all remaining (${remaining.length})`}
+                          ? `Apply ${bulkCovered} of ${remaining.length}`
+                          : `Apply all ${remaining.length}`}
                       {/* One coin per pin the batch will actually apply — the same
                         number the confirm sheet charges. */}
                       {showCoinCost && bulkCovered > 0 && (
@@ -822,7 +818,6 @@ function PinBoostPicker({
     >
       <div className="no-scrollbar min-h-0 flex-1 space-y-4 overflow-y-auto px-1 pb-2">
         <PickerHeader
-          eyebrow="Pin SEO"
           heading="Pick pins to boost"
           points={pointsEarned("pinSeo", score)}
           maxPoints={maxPointsFor("pinSeo")}
@@ -893,17 +888,14 @@ function PinBoostPicker({
               {/* The grid was unlabelled, which left the suggested rail and 300
                   more cards running together as one undifferentiated scroll.
                   Naming it is what makes the rail above read as a shortcut. */}
+              {/* The count sat on the right of this row, but the filter chip
+                  directly above already carries it — same number, twice. */}
               {shown.length > 0 && (
-                <div className="flex items-baseline justify-between gap-2 pt-1">
-                  <h3 className="font-display text-lead font-bold tracking-tight">
-                    {filter === "all"
-                      ? "All pins"
-                      : QUEUE_FILTERS.find((f) => f.key === filter)?.label}
-                  </h3>
-                  <p className="text-mini font-semibold text-muted-foreground">
-                    {visible.length} {visible.length === 1 ? "pin" : "pins"}
-                  </p>
-                </div>
+                <h3 className="pt-1 font-display text-lead font-bold tracking-tight">
+                  {filter === "all"
+                    ? "All pins"
+                    : QUEUE_FILTERS.find((f) => f.key === filter)?.label}
+                </h3>
               )}
 
               {shown.length === 0 ? (
@@ -937,9 +929,9 @@ function PinBoostPicker({
                       onClick={() => setLimit((l) => l + PIN_GRID_PAGE_SIZE)}
                       className="inline-flex min-h-10 flex-1 items-center justify-center gap-1.5 rounded-2xl border border-dashed border-border bg-surface/70 text-xs font-bold text-primary transition hover:bg-primary/[0.04]"
                     >
-                      Show more
+                      Show
                       <span className="font-semibold tabular-nums text-muted-foreground">
-                        · {hidden} left
+                        {hidden} more
                       </span>
                     </button>
                   )}
@@ -977,14 +969,9 @@ function PinBoostPicker({
                     />
                   )}
                   <div>
-                    <div className="mb-2 flex items-baseline justify-between gap-2 pt-1">
-                      <h3 className="font-display text-lead font-bold tracking-tight">
-                        All boards
-                      </h3>
-                      <p className="text-mini font-semibold text-muted-foreground">
-                        {lanes.length} {lanes.length === 1 ? "board" : "boards"}
-                      </p>
-                    </div>
+                    <h3 className="mb-2 pt-1 font-display text-lead font-bold tracking-tight">
+                      All boards
+                    </h3>
                     <div className="grid grid-cols-2 gap-3">
                       {lanes.map((lane, i) => {
                         const ids = lane.cards.map((c) => c.id);
@@ -1012,14 +999,15 @@ function PinBoostPicker({
         selectedCount={selectedIds.length}
         unit="pin"
         unitPlural="pins"
-        emptyLabel="Select pins to boost"
+        emptyLabel="Select pins"
         selectedPoints={overallPointsFor(selectedFailing, ranked.length)}
         coins={boostCost(selectedIds.length)}
         onStart={() => selectedIds.length > 0 && onStart(selectedIds)}
         onClear={() => setSelected(new Set())}
       />
       {/* Cost of the selection, one line, under the CTA — enough to price the tap
-          without turning the bar into a receipt. */}
+          without turning the bar into a receipt. The coin count already rides
+          the CTA, so this line only has to say what's left afterwards. */}
       {selectedIds.length > 0 && (
         <p
           className={`shrink-0 pb-1 text-center text-micro font-semibold ${
@@ -1028,13 +1016,10 @@ function PinBoostPicker({
         >
           {selectedIds.length > balance ? (
             <>
-              {coinLabel(selectedIds.length)} needed · {balance} left this week, refills{" "}
-              {resetCountdown()}
+              Only {balance} coins left · refills {resetCountdown()}
             </>
           ) : (
-            <>
-              {coinLabel(selectedIds.length)} · {balance - selectedIds.length} left this week
-            </>
+            <>{balance - selectedIds.length} coins left after this</>
           )}
         </p>
       )}
@@ -1124,7 +1109,6 @@ function SuggestedRail({
 }) {
   const ids = cards.map((c) => c.id);
   const allQueued = ids.length > 0 && ids.every((id) => selected.has(id));
-  const totalFixes = cards.reduce((n, c) => n + c.issues.length, 0);
 
   return (
     <motion.section
@@ -1153,12 +1137,11 @@ function SuggestedRail({
             </span>
             Start here
           </p>
+          {/* The fix count lived here too, but every card in the rail already
+              wears its own fix badge — this line was the same tally again. */}
           <h3 className="mt-1 font-display text-[17px] font-bold leading-tight tracking-tight">
             Your {cards.length} biggest wins
           </h3>
-          <p className="mt-0.5 text-mini font-medium text-muted-foreground">
-            {totalFixes} fixes · ranked by reach
-          </p>
         </div>
         <button
           type="button"
@@ -1175,7 +1158,7 @@ function SuggestedRail({
               className="animate-sheen pointer-events-none absolute inset-y-0 w-1/3 bg-gradient-to-r from-transparent via-white/30 to-transparent"
             />
           )}
-          {allQueued ? "Clear" : `Queue all ${cards.length}`}
+          {allQueued ? "Clear" : "Queue all"}
         </button>
       </div>
 
@@ -1219,7 +1202,6 @@ function SuggestedBoardsRail({
 }) {
   const allIds = lanes.flatMap((l) => l.cards.map((c) => c.id));
   const allQueued = allIds.length > 0 && allIds.every((id) => selected.has(id));
-  const totalFixes = lanes.reduce((n, l) => n + l.fixes, 0);
 
   return (
     // Same panel as the pins rail. Two tabs of the same page cannot present
@@ -1251,9 +1233,6 @@ function SuggestedBoardsRail({
           <h3 className="mt-1 font-display text-[17px] font-bold leading-tight tracking-tight">
             Your {lanes.length} messiest {lanes.length === 1 ? "board" : "boards"}
           </h3>
-          <p className="mt-0.5 text-mini font-medium text-muted-foreground">
-            {totalFixes} fixes · whole board per tap
-          </p>
         </div>
         <button
           type="button"
@@ -1345,8 +1324,10 @@ function SuggestedBoardsRail({
               <p className="mt-1.5 line-clamp-2 px-0.5 text-mini font-semibold leading-[1.35]">
                 {lane.name}
               </p>
-              <p className="mt-0.5 px-0.5 text-micro font-semibold text-amber-600/90">
-                {lane.cards.length} {lane.cards.length === 1 ? "pin" : "pins"} · {lane.fixes} fixes
+              {/* The fix count is already the badge on the cover, so the caption
+                  only carries what the picture can't: how big the board is. */}
+              <p className="mt-0.5 px-0.5 text-micro font-semibold text-muted-foreground">
+                {lane.cards.length} {lane.cards.length === 1 ? "pin" : "pins"}
               </p>
             </motion.button>
           );
@@ -1484,18 +1465,21 @@ function PinPickCard({
           }}
           className="absolute inset-0 flex flex-col items-center justify-center gap-1 overflow-hidden rounded-xl border-2 border-primary/40 bg-surface p-2 text-center"
         >
+          {/* The unit rides the number instead of a caption line under it —
+              three lines of text on a card read in half a second was one too
+              many. */}
           <span className="font-display text-[28px] font-bold leading-none tabular-nums text-primary">
             {points > 0 ? `+${pointsLabel(points)}` : "+0"}
-          </span>
-          <span className="text-micro font-bold uppercase tracking-wide text-muted-foreground">
-            boost pts
+            <span className="ml-1 text-mini font-bold uppercase tracking-wide text-muted-foreground">
+              pts
+            </span>
           </span>
           <span className="text-mini font-semibold leading-snug text-muted-foreground">
             {points > 0 ? (
               <>
                 {pointsLabel(pointsNow)} →{" "}
                 <span className="text-emerald-600">
-                  {pointsLabel(Math.min(maxPointsFor("pinSeo"), pointsNow + points))} pts
+                  {pointsLabel(Math.min(maxPointsFor("pinSeo"), pointsNow + points))}
                 </span>
               </>
             ) : (
@@ -1616,7 +1600,7 @@ function BoardPickCard({
  * the transition confirms the selection landed. */
 function PinLaunch({ card, count }: { card: PinFixCard; count: number }) {
   return (
-    <LaunchScreen title={count > 1 ? `Queuing ${count} pins` : "Locking onto this pin"}>
+    <LaunchScreen title={`${count} ${count === 1 ? "pin" : "pins"} queued`}>
       {card.image_url ? (
         <img src={card.image_url} alt="" className="h-full w-full object-cover" />
       ) : (
@@ -1629,7 +1613,7 @@ function PinLaunch({ card, count }: { card: PinFixCard; count: number }) {
 }
 
 /** The hero of the pin fix flow: what the copy is optimized for, then a
- * Without AI → AI suggested comparison for the Title and Description. */
+ * Now → AI comparison for the Title and Description. */
 function RewriteCard({
   card,
   ai,
@@ -1702,9 +1686,7 @@ function RewriteCard({
       ) : ai.status === "error" ? (
         <div className="rounded-2xl border border-amber-500/30 bg-amber-500/5 p-3">
           <p className="text-mini font-semibold text-amber-800">Couldn&apos;t write this one</p>
-          <p className="mt-0.5 text-mini leading-snug text-amber-700/80">
-            Try again, or Skip to move on. Nothing was changed on your pin.
-          </p>
+          <p className="mt-0.5 text-mini leading-snug text-amber-700/80">Your pin is untouched.</p>
           {/* The only retry path now that the always-on Redo chip is gone — it
               belongs with the failure, not on top of every healthy rewrite. */}
           <button
@@ -1966,9 +1948,9 @@ function PinGridSheet({
           <X className="h-4 w-4" />
         </button>
         <div className="min-w-0 flex-1">
-          <h3 className="truncate font-display text-lg font-bold leading-tight">Your board</h3>
+          <h3 className="truncate font-display text-lg font-bold leading-tight">Your pins</h3>
           <p className="text-xs text-muted-foreground">
-            {cards.length} {cards.length === 1 ? "pin" : "pins"} to fix
+            {cards.length} {cards.length === 1 ? "pin" : "pins"}
             {fixedCount > 0 && (
               <span className="font-semibold text-emerald-600"> · {fixedCount} done</span>
             )}

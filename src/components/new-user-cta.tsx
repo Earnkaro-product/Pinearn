@@ -102,13 +102,15 @@ export function NewUserCta() {
           transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
           className="relative w-full max-w-sm overflow-hidden rounded-3xl border border-border bg-surface shadow-elevate sm:max-w-md"
         >
+          {/* The eyebrow ("Ready to earn", "Let's get started") said nothing the
+              headline didn't, and each body was two sentences of pitch in a
+              modal the creator can't dismiss by tapping away. One line each. */}
           {variant === "monetize" ? (
             <CtaCard
               icon={Sparkles}
               gradient="from-fuchsia-50 via-rose-100 to-orange-50"
-              eyebrow="Ready to earn"
               headline={`${pinCount} pins are just sitting there`}
-              body="Attach a product to any pin and start earning commission on every click. It takes less than a minute to go live."
+              body="Attach a product and earn on every click."
               ctaLabel="Monetise my pins"
               onAct={act}
               onSkip={dismiss}
@@ -117,9 +119,8 @@ export function NewUserCta() {
             <CtaCard
               icon={ImagePlus}
               gradient="from-orange-100 via-amber-50 to-rose-50"
-              eyebrow="Let's get started"
               headline="Create your first pin"
-              body="Pins are how ShopMyPin turns your content into income. Create one now, make it shoppable, and start earning."
+              body="Make it shoppable and start earning."
               ctaLabel="Create my first pin"
               onAct={act}
               onSkip={dismiss}
@@ -134,7 +135,6 @@ export function NewUserCta() {
 function CtaCard({
   icon: Icon,
   gradient,
-  eyebrow,
   headline,
   body,
   ctaLabel,
@@ -143,7 +143,6 @@ function CtaCard({
 }: {
   icon: typeof Sparkles;
   gradient: string;
-  eyebrow: string;
   headline: string;
   body: string;
   ctaLabel: string;
@@ -167,10 +166,7 @@ function CtaCard({
       </div>
 
       <div className="px-6 pb-6 pt-6 text-center sm:px-8 sm:pb-8">
-        <span className="text-mini font-semibold uppercase tracking-widest text-primary">
-          {eyebrow}
-        </span>
-        <h2 className="mt-1.5 font-display text-2xl font-bold leading-tight text-foreground">
+        <h2 className="font-display text-2xl font-bold leading-tight text-foreground">
           {headline}
         </h2>
         <p className="mx-auto mt-2.5 max-w-[30ch] text-sm leading-relaxed text-muted-foreground">

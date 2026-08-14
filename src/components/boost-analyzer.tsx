@@ -37,27 +37,27 @@ const STEPS: Step[] = [
   {
     icon: ScanSearch,
     label: "Scanning your Pinterest",
-    detail: (c) => `${c.pins} pins · ${c.boards} boards found`,
+    detail: (c) => `${c.pins} pins · ${c.boards} boards`,
   },
   {
     icon: Type,
-    label: "Checking titles & descriptions",
-    detail: (c) => `${c.pins} pins checked against SEO rules`,
+    label: "Reading titles",
+    detail: (c) => `${c.pins} pins`,
   },
   {
     icon: LayoutGrid,
-    label: "Auditing board structure",
-    detail: (c) => `${c.boards} boards reviewed`,
+    label: "Auditing boards",
+    detail: (c) => `${c.boards} boards`,
   },
   {
     icon: UserCheck,
-    label: "Checking profile SEO",
-    detail: () => "Bio, avatar, website & socials",
+    label: "Checking your profile",
+    detail: () => "Bio · photo · website",
   },
   {
     icon: CalendarClock,
-    label: "Measuring content SEO",
-    detail: () => "Pin activity over the last 30 days",
+    label: "Measuring activity",
+    detail: () => "Last 30 days",
   },
 ];
 
@@ -263,10 +263,12 @@ export function BoostAnalyzer({
         ))}
       </div>
 
+      {/* Only the honest wait gets a word. "This only takes a few seconds" was
+          a caption on a screen that is already visibly working. */}
       <div className="mt-4 flex items-center justify-center gap-3">
-        <p className="text-mini font-medium text-muted-foreground">
-          {allStepsDone && !ready ? "Crunching your score…" : "This only takes a few seconds"}
-        </p>
+        {allStepsDone && !ready && (
+          <p className="text-mini font-medium text-muted-foreground">Scoring…</p>
+        )}
         <button
           type="button"
           onClick={onDone}

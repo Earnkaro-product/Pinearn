@@ -13,11 +13,14 @@ import { AppSheet } from "@/components/app-sheet";
 
 export type SyncStatus = "idle" | "running" | "success" | "error";
 
+// Four steps, four labels. Each row used to carry a second explanatory line
+// ("Pulling board names & covers"), which doubled the height of a list nobody
+// reads twice — the spinner on the active row is the information.
 const STEPS = [
-  { key: "connect", label: "Connecting to Pinterest", hint: "Verifying your linked account" },
-  { key: "boards", label: "Fetching your boards", hint: "Pulling board names & covers" },
-  { key: "pins", label: "Importing pins", hint: "Downloading titles, images & links" },
-  { key: "finalize", label: "Finalising your store", hint: "Organising into collections" },
+  { key: "connect", label: "Connecting to Pinterest" },
+  { key: "boards", label: "Fetching your boards" },
+  { key: "pins", label: "Importing pins" },
+  { key: "finalize", label: "Finalising your store" },
 ] as const;
 
 export function PinterestSyncModal({
@@ -111,10 +114,10 @@ export function PinterestSyncModal({
               </h3>
               <p className="mt-0.5 text-xs text-muted-foreground">
                 {status === "error"
-                  ? "We couldn't finish the import. You can safely retry."
+                  ? "Safe to retry."
                   : status === "success"
-                    ? "Fresh boards and pins are live in your store."
-                    : "Hang tight — this usually takes a few seconds."}
+                    ? "Boards and pins are live in your store."
+                    : "Takes a few seconds."}
               </p>
             </div>
           </div>
@@ -142,14 +145,10 @@ export function PinterestSyncModal({
             style={{ width: `${progressPct}%` }}
           />
         </div>
+        {/* "Step 2 of 4" was a third read-out of the same fact, next to the
+            percentage and above a list that spins on the active row. */}
         <div className="mt-1.5 flex items-center justify-between text-micro font-medium uppercase tracking-wide text-muted-foreground">
-          <span>
-            {status === "success"
-              ? "Complete"
-              : status === "error"
-                ? "Paused"
-                : `Step ${Math.min(activeStep + 1, STEPS.length)} of ${STEPS.length}`}
-          </span>
+          <span>{status === "success" ? "Complete" : status === "error" ? "Paused" : ""}</span>
           <span>{Math.round(progressPct)}%</span>
         </div>
 
@@ -175,7 +174,7 @@ export function PinterestSyncModal({
               {error ?? "Something went wrong while syncing."}
             </p>
             <p className="mt-1 text-mini text-destructive/80">
-              Any boards already imported were saved — retrying will only fetch what's missing.
+              Whatever landed was saved — a retry only fetches the rest.
             </p>
           </div>
         ) : (
@@ -202,15 +201,12 @@ export function PinterestSyncModal({
                       i + 1
                     )}
                   </div>
-                  <div className="min-w-0 flex-1">
-                    <div
-                      className={`text-sm font-medium ${
-                        state === "pending" ? "text-muted-foreground" : "text-foreground"
-                      }`}
-                    >
-                      {s.label}
-                    </div>
-                    <div className="text-mini text-muted-foreground">{s.hint}</div>
+                  <div
+                    className={`min-w-0 flex-1 pt-0.5 text-sm font-medium ${
+                      state === "pending" ? "text-muted-foreground" : "text-foreground"
+                    }`}
+                  >
+                    {s.label}
                   </div>
                 </li>
               );

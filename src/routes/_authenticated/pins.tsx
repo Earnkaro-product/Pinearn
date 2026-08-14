@@ -275,7 +275,6 @@ function PinsPage() {
   return (
     <AppShell
       title="Pins"
-      subtitle="Browse pins by collection, then match each one to affiliate products."
       backButton
       backTo="/dashboard"
       actions={
@@ -285,14 +284,14 @@ function PinsPage() {
             disabled
             className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-gradient-primary px-5 py-2.5 text-sm font-medium text-primary-foreground shadow-glow opacity-50"
           >
-            <Plus className="h-4 w-4" /> Attach Products
+            <Plus className="h-4 w-4" /> Attach products
           </button>
         ) : (
           <Link
             to="/pins/attach"
             className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-gradient-primary px-5 py-2.5 text-sm font-medium text-primary-foreground shadow-glow"
           >
-            <Plus className="h-4 w-4" /> Attach Products
+            <Plus className="h-4 w-4" /> Attach products
           </Link>
         ))
       }
@@ -475,15 +474,15 @@ function EmptyPins({ canCreate }: { canCreate: boolean }) {
       <h3 className="mt-4 font-display text-xl font-semibold">No pins here</h3>
       <p className="mx-auto mt-2 max-w-md text-sm text-muted-foreground">
         {canCreate
-          ? "Create a pin and attach one of your affiliate products to start earning."
-          : "Add a storefront and product first, then come back to create pins."}
+          ? "Attach a product to a pin and start earning."
+          : "Add a storefront and a product first."}
       </p>
       {canCreate && (
         <Link
           to="/pins/attach"
           className="mt-6 inline-flex items-center gap-2 rounded-full bg-gradient-primary px-6 py-3.5 text-base font-semibold text-primary-foreground shadow-glow"
         >
-          <Plus className="h-5 w-5" /> Attach Products
+          <Plus className="h-5 w-5" /> Attach products
         </Link>
       )}
     </div>
@@ -1064,7 +1063,7 @@ export function PinDetailDialog({
                       that from a glitch into the app visibly still working. */}
                   {isRefining && suggestions.length > 0 && (
                     <p className="mt-1 text-xs font-medium text-muted-foreground/70">
-                      Checking each match against your pin…
+                      Checking each match…
                     </p>
                   )}
                 </div>
@@ -1233,10 +1232,9 @@ export function PinDetailDialog({
                 style={{ paddingBottom: "max(1.25rem, env(safe-area-inset-bottom))" }}
               >
                 <div className="mx-auto mb-4 h-1.5 w-10 rounded-full bg-border" />
+                {/* The two inputs below — a paste field and a collection
+                    picker — are the sentence this used to spell out. */}
                 <h3 className="font-display text-lg font-bold">Add products</h3>
-                <p className="mt-0.5 text-xs text-muted-foreground">
-                  Paste an affiliate link, or pick a product from your collection.
-                </p>
 
                 {/* Paste a link */}
                 <div className="mt-4 flex items-center gap-2">

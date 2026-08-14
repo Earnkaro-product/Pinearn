@@ -66,12 +66,11 @@ export function FixEditSheet({
 
   return (
     <Sheet onClose={onClose} labelledBy="edit-sheet-title">
+      {/* No subtitle: the counter next to each label turns green in the band,
+          which teaches the rule faster than a sentence about it. */}
       <h3 id="edit-sheet-title" className="font-display text-lg font-bold">
-        Edit before applying
+        Edit the copy
       </h3>
-      <p className="mt-0.5 text-xs text-muted-foreground">
-        Make it sound like you. The counter turns green when it fits Pinterest's sweet spot.
-      </p>
       <div className="mt-4 space-y-4">
         {fields.map((f, i) => {
           const v = values[f.key];
@@ -133,7 +132,7 @@ export function FixEditSheet({
           }}
           className="min-h-[48px] flex-[1.5] rounded-2xl bg-gradient-primary text-sm font-bold text-primary-foreground shadow-glow transition disabled:opacity-50"
         >
-          Save changes
+          Save
         </button>
       </div>
     </Sheet>
@@ -181,8 +180,7 @@ export function ApproveAllSheet({
             Apply {cards.length} {unitLabel} at once?
           </h3>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            This rewrites titles &amp; descriptions on your live {unitLabel}. You can review and
-            undo everything on the next screen.
+            Rewrites them live. Undo anything on the next screen.
           </p>
         </div>
       </div>
@@ -204,7 +202,7 @@ export function ApproveAllSheet({
                 <p className="mt-0.5 line-clamp-2 text-sm font-semibold">{c.fields[0].value}</p>
               ) : (
                 <p className="mt-0.5 text-sm font-medium italic text-muted-foreground/60">
-                  Will be written when you confirm
+                  Written on confirm
                 </p>
               )}
             </div>
@@ -234,8 +232,7 @@ export function ApproveAllSheet({
             </p>
             {trimmed && (
               <p className="mt-0.5 text-mini font-semibold leading-snug text-amber-800">
-                Covers the first {covered} of {cards.length} — the rest stay queued until your
-                weekly refill.
+                First {covered} of {cards.length} — the rest stay queued.
               </p>
             )}
           </div>
@@ -248,9 +245,7 @@ export function ApproveAllSheet({
               −{covered.toLocaleString()}
             </p>
             <p className="mt-0.5 text-micro font-semibold tabular-nums text-muted-foreground">
-              {balance - covered === 0
-                ? "empties your wallet"
-                : `${(balance - covered).toLocaleString()} coins left`}
+              {(balance - covered).toLocaleString()} left
             </p>
           </div>
         </div>
@@ -273,14 +268,9 @@ export function ApproveAllSheet({
           }}
           className="min-h-[48px] flex-[1.5] rounded-2xl bg-gradient-primary text-sm font-bold text-primary-foreground shadow-glow disabled:opacity-50"
         >
-          {affordable ? (
-            <>
-              Apply {covered} {covered === 1 ? "fix" : "fixes"}
-              {showCost && <span className="font-semibold opacity-85"> · {covered} coins</span>}
-            </>
-          ) : (
-            "Out of coins this week"
-          )}
+          {/* The cost block directly above already prices this tap, so the
+              button only needs to say what it does. */}
+          {affordable ? `Apply ${covered} ${covered === 1 ? "fix" : "fixes"}` : "Out of coins"}
         </button>
       </div>
     </Sheet>
@@ -305,30 +295,25 @@ export function GuideSheet({
 }) {
   return (
     <Sheet onClose={onClose} labelledBy="guide-title">
-      <div className="flex items-start gap-3">
+      <div className="flex items-center gap-3">
         <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary">
           <Sparkles className="h-5 w-5" />
         </div>
-        <div>
-          <h3 id="guide-title" className="font-display text-lg font-bold">
-            {title}
-          </h3>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            What counts as good — and how to fix it fast.
-          </p>
-        </div>
+        <h3 id="guide-title" className="font-display text-lg font-bold leading-tight">
+          {title}
+        </h3>
       </div>
 
       <div className="mt-4 rounded-2xl bg-emerald-500/[0.06] p-3.5 ring-1 ring-emerald-500/15">
         <p className="flex items-center gap-1.5 text-mini font-bold uppercase tracking-wide text-emerald-700">
-          <CheckCircle2 className="h-3.5 w-3.5" /> What passes the check
+          <CheckCircle2 className="h-3.5 w-3.5" /> Passes when
         </p>
         <p className="mt-1 text-body leading-relaxed text-foreground/80">{criteria}</p>
       </div>
 
       <div className="mt-4">
         <p className="text-mini font-bold uppercase tracking-wide text-muted-foreground">
-          How to use this screen
+          Driving this screen
         </p>
         <ol className="mt-2 space-y-2.5">
           {steps.map((s, i) => (
@@ -372,7 +357,7 @@ export function OptimizedState({
         <CheckCircle2 className="mx-auto h-12 w-12 text-emerald-500" />
         <h2 className="mt-3 font-display text-xl font-bold">Nothing here yet</h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Import or create some {unitLabel} and we'll rewrite every title and description.
+          Add some {unitLabel} and we'll rewrite them.
         </p>
         <button
           onClick={onBack}
@@ -394,7 +379,6 @@ export function DoneState({
   gained,
   approvedCount,
   skippedCount,
-  total,
   appliedCards,
   coinsSpent,
   onRevertOne,
@@ -410,7 +394,6 @@ export function DoneState({
   gained: number;
   approvedCount: number;
   skippedCount: number;
-  total: number;
   appliedCards: BaseFixCard[];
   // Coins this run cost. Omitted by flows that don't charge.
   coinsSpent?: number;
@@ -445,25 +428,32 @@ export function DoneState({
             ? `${approvedCount} ${approvedCount === 1 ? "fix" : "fixes"} applied`
             : "All reviewed"}
         </h2>
+        {/* Three stacked sentences became one line of chips: the score, the
+            split, the coins. The headline already said how many landed, so
+            "N applied · N skipped · N reviewed" only had to carry what the
+            headline didn't. */}
         <p className="mt-1 text-sm text-muted-foreground">
-          {scoreLabel} is now{" "}
+          {scoreLabel}{" "}
           <span className="font-bold text-foreground">
             {pointsLabel(points)}/{maxPoints} pts
           </span>
           {gained > 0 && (
-            <span className="font-bold text-emerald-600"> (+{pointsLabel(gained)})</span>
+            <span className="font-bold text-emerald-600"> +{pointsLabel(gained)}</span>
           )}
-          {busy ? " — saving…" : ""}
         </p>
-        <p className="mt-0.5 text-mini text-muted-foreground">
-          {approvedCount} applied · {skippedCount} skipped · {total} reviewed
-        </p>
-        {coinsSpent != null && coinsSpent > 0 && (
-          <p className="mt-1.5 inline-flex items-center gap-1.5 rounded-full bg-amber-500/10 px-2.5 py-1 text-mini font-bold text-amber-800 ring-1 ring-inset ring-amber-500/20">
-            <Coins className="h-3 w-3" /> {coinsSpent} {coinsSpent === 1 ? "coin" : "coins"} spent
-            {/* Undo refunds them, so say so where the undo lives. */}
-            <span className="font-semibold opacity-75">· undo refunds</span>
-          </p>
+        {(skippedCount > 0 || (coinsSpent ?? 0) > 0) && (
+          <div className="mt-2 flex flex-wrap items-center justify-center gap-1.5 text-mini font-semibold">
+            {skippedCount > 0 && (
+              <span className="rounded-full bg-surface-2 px-2.5 py-1 text-muted-foreground">
+                {skippedCount} skipped
+              </span>
+            )}
+            {coinsSpent != null && coinsSpent > 0 && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2.5 py-1 font-bold text-amber-800 ring-1 ring-inset ring-amber-500/20">
+                <Coins className="h-3 w-3" /> {coinsSpent} · undo refunds
+              </span>
+            )}
+          </div>
         )}
 
         <button
@@ -471,7 +461,7 @@ export function DoneState({
           disabled={busy}
           className="mt-5 inline-flex min-h-[52px] w-full items-center justify-center gap-1.5 rounded-2xl bg-gradient-primary px-5 text-sm font-bold text-primary-foreground shadow-glow transition disabled:opacity-70"
         >
-          {busy ? "Saving…" : "See your new Boost Score"} <ArrowRight className="h-4 w-4" />
+          {busy ? "Saving…" : "See your score"} <ArrowRight className="h-4 w-4" />
         </button>
 
         {snapshot.length > 0 && (
@@ -480,9 +470,7 @@ export function DoneState({
               onClick={() => setShowReview((v) => !v)}
               className="mt-2.5 text-xs font-semibold text-muted-foreground underline-offset-2 hover:underline"
             >
-              {showReview
-                ? "Hide changes"
-                : `Review ${snapshot.length} ${snapshot.length === 1 ? "change" : "changes"}`}
+              {showReview ? "Hide" : `Review ${snapshot.length}`}
             </button>
             <AnimatePresence>
               {showReview && (
@@ -530,7 +518,7 @@ export function DoneState({
                     disabled={busy}
                     className="inline-flex min-h-[44px] w-full items-center justify-center gap-1.5 rounded-2xl border border-border text-xs font-semibold text-muted-foreground transition hover:text-foreground disabled:opacity-50"
                   >
-                    <RotateCcw className="h-3.5 w-3.5" /> Undo all changes
+                    <RotateCcw className="h-3.5 w-3.5" /> Undo all
                   </button>
                 </motion.div>
               )}
@@ -571,7 +559,7 @@ export function IssueChips({ issues }: { issues: string[] }) {
   if (issues.length === 0) {
     return (
       <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-micro font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-500/20">
-        <CheckCircle2 className="h-2.5 w-2.5" /> Already passing — checking for a stronger keyword
+        <CheckCircle2 className="h-2.5 w-2.5" /> Already passing
       </span>
     );
   }
@@ -678,7 +666,7 @@ function TypingDots() {
   );
 }
 
-/** One field's Without AI → AI suggested comparison. The current value is
+/** One field's Now → AI comparison. The current value is
  * demoted and struck through; the AI suggestion is the bright, primary-accented
  * payoff carrying a live SEO-fit chip.
  *
@@ -704,11 +692,10 @@ export function FieldDiff({
         {heading}
       </p>
 
-      {/* Without AI — demoted. */}
+      {/* What they have — demoted. One word, not two: the pairing with
+          "AI" below already says which side is which. */}
       <div className="px-3.5 py-2.5">
-        <p className="text-micro font-bold uppercase tracking-wide text-muted-foreground/60">
-          Without AI
-        </p>
+        <p className="text-micro font-bold uppercase tracking-wide text-muted-foreground/60">Now</p>
         <p
           className={`mt-0.5 text-sm ${
             now
@@ -723,7 +710,7 @@ export function FieldDiff({
       {/* AI suggested — the payoff. */}
       <div className="bg-primary/[0.05] px-3.5 py-3">
         <div className="flex items-center justify-between">
-          <p className="text-micro font-bold uppercase tracking-wide text-primary">AI suggested</p>
+          <p className="text-micro font-bold uppercase tracking-wide text-primary">AI</p>
           {loading ? (
             <span className="inline-flex h-5 items-center gap-1 rounded-full bg-primary/10 px-2">
               <TypingDots />
@@ -782,8 +769,8 @@ export function KeywordProof({
       {gain <= 0 && (
         <p className="mt-1.5 rounded-xl bg-amber-500/10 px-2 py-1 text-micro font-semibold leading-snug text-amber-700">
           {gain === 0
-            ? "Scores the same as what you have — skip unless you prefer the wording."
-            : "Your current copy scores higher. Best to skip this one."}
+            ? "Same score as yours — skip unless you prefer it."
+            : "Yours scores higher — skip."}
         </p>
       )}
 
@@ -791,7 +778,7 @@ export function KeywordProof({
         {kw.primary}
         {primaryStats?.volume != null && (
           <span className="ml-1.5 text-mini font-semibold text-muted-foreground tabular-nums">
-            {primaryStats.volume}/100 search interest
+            {primaryStats.volume}/100 interest
             {primaryStats.rising && <span className="text-emerald-600"> · rising</span>}
           </span>
         )}
@@ -812,8 +799,8 @@ export function KeywordProof({
 
       <p className="mt-1.5 text-micro text-muted-foreground/70">
         {kw.hasTrendData
-          ? `Live Pinterest Trends · ${kw.country}${kw.asOf ? ` · week of ${kw.asOf}` : ""}`
-          : "From this pin's own details — no live trend data available"}
+          ? `Pinterest Trends · ${kw.country}${kw.asOf ? ` · ${kw.asOf}` : ""}`
+          : "No live trend data"}
       </p>
     </div>
   );
@@ -828,9 +815,9 @@ export function KeywordProof({
 // because the model reads the image while it writes. A stage listed here that
 // no longer happens is a small lie told during every single wait.
 const GENERATION_STAGES = [
-  { label: "Checking live Pinterest trends", ms: 7000 },
-  { label: "Picking keywords worth ranking for", ms: 4000 },
-  { label: "Reading your pin and writing the copy", ms: 999_999 },
+  { label: "Checking Pinterest trends", ms: 7000 },
+  { label: "Picking keywords", ms: 4000 },
+  { label: "Writing your copy", ms: 999_999 },
 ] as const;
 
 /** Shown while the pipeline runs: a progress sweep plus the current stage,

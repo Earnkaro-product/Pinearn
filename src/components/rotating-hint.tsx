@@ -83,32 +83,32 @@ export function EducationalLoader({
 // Contextual tip sets. Kept here so the copy lives in one place and every
 // loading state pulls from a consistent, on-brand voice — a mix of "what's
 // happening right now" and "what you can do next".
+// Contextual tip sets, one clause each. These swap every 3.2s, so a hint has
+// about that long to be read — a sentence with a clause and a caveat in it
+// changes before it lands.
 export const HINTS = {
   // While reverse-image search is finding products for a pin.
   matching: [
-    "Scanning your pin for products people can actually buy…",
-    "We only match retailers that pay commission — so every match can earn.",
-    "Tip: no perfect match? Paste your own affiliate link above.",
-    "You'll earn a commission on every click that turns into a sale.",
-    "Prices and stock are pulled live from each retailer.",
+    "Scanning your pin for buyable products…",
+    "Only retailers that pay commission are matched.",
+    "No good match? Paste your own link above.",
+    "Prices and stock come live from each retailer.",
   ],
   // While the board's pins are being loaded before the swipe deck.
   boardPins: [
-    "Gathering every pin in this board that still needs a product…",
-    "You'll review each pin: Skip, Approve, or Approve all at once.",
-    "Approving attaches the matched product and makes the pin shoppable.",
-    "In a hurry? “Approve all” matches every remaining pin instantly.",
+    "Gathering the pins that still need a product…",
+    "Approve, skip, or approve them all at once.",
+    "Approving makes the pin shoppable.",
   ],
   // While “Approve all” bulk-matches remaining pins.
   approveAll: [
-    "Matching a product to every remaining pin…",
-    "Each pin becomes a live, shoppable link in your storefront.",
-    "Pins we can't match are left for you to tag manually later.",
+    "Matching a product to every pin left…",
+    "Each one becomes a live link in your store.",
+    "Anything we can't match stays untouched.",
   ],
   // While the create-pin visual search runs.
   createScan: [
-    "Reading your image to find matching products…",
-    "Pick the ones that fit, or paste your own link.",
-    "Once live, this pin points shoppers straight to the product.",
+    "Reading your image for matching products…",
+    "Pick what fits, or paste your own link.",
   ],
 } as const;

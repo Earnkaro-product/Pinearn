@@ -1,23 +1,14 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { useEffect, useRef, useState } from "react";
-import { motion } from "framer-motion";
-import { useScrollMorph } from "@/hooks/use-scroll-morph";
-import { Loader2, Sparkles, Wand2, Link2, Plus, Store, ArrowRight } from "lucide-react";
+import { useState } from "react";
+import { Loader2, Link2, Plus, Store, ArrowRight } from "lucide-react";
 import { toast } from "sonner";
-import {
-  SuggestionCard,
-  ProgressiveSuggestionCard,
-  SuggestionCardSkeleton,
-  realProductPrice,
-} from "@/components/suggestion-card";
-import { EducationalLoader, HINTS } from "@/components/rotating-hint";
+import { SuggestionCard, realProductPrice } from "@/components/suggestion-card";
 import { AppShell } from "@/components/app-shell";
 import { supabase } from "@/integrations/supabase/client";
 import { hostBrand } from "@/lib/brands";
-import { type CkResult, type RawVisualMatch } from "@/lib/pinterest.functions";
-import { useVisualSearch } from "@/hooks/use-visual-search";
+import { fetchLinkPreviews } from "@/lib/link-preview.functions";
 import { getFriendlyMessage } from "@/lib/friendly-error";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -52,11 +43,6 @@ function AttachToCollectionPage() {
   const { id } = Route.useParams();
   const navigate = useNavigate();
   const qc = useQueryClient();
-  // Scroll-linked morph: the big cover preview shrinks into a small pinned
-  // thumbnail as the results scroll down, and grows back on scroll up. This
-  // page scrolls the window (no internal scroll container), so no ref is
-  // passed. heroMinHeight keeps it a thumbnail rather than vanishing.
-  const morph = useScrollMorph(undefined, { heroMinHeight: 76 });
 
   const { data: collection, isLoading } = useQuery({
     queryKey: ["collection", id],
@@ -93,99 +79,8 @@ function AttachToCollectionPage() {
   });
 
   const imageUrl = collection?.cover_image_url ?? "";
-
-  // Streamed in two stages — see useVisualSearch. Detection names the products
-  // in ~6s and each one's matches arrive on their own, so this list starts
-  // filling long before the slowest search is done.
-  const {
-    matches: suggestions,
-    tabs,
-    isDetecting,
-    isLoading: aiLoading,
-    refetch: refetchAI,
-  } = useVisualSearch({
-    imageUrl,
-    title: collection?.name ?? "",
-    enabled: !!imageUrl,
-  });
-  // One silhouette row per product still being searched, so the grid grows
-  // into its results instead of appearing all at once at the end.
-  const pendingCardCount = Math.min(6, tabs.filter((t) => t.loading).length * 3);
-
-  // Progressive rendering: `suggestions` paints immediately (image/title/
-  // source, no CK wait); each card resolves price/stock independently via
-  // ProgressiveSuggestionCard. `confirmedByLink` records each match's
-  // outcome the instant it settles, keyed by link (not index — matches
-  // resolve out of order). A confirmed-available suggestion is
-  // auto-attached the moment it settles, same as before, just per-match
-  // instead of a blind loop over unconfirmed raw matches.
-  const [confirmedByLink, setConfirmedByLink] = useState<Map<string, CkResult>>(new Map());
-  const [attachedLinks, setAttachedLinks] = useState<Set<string>>(new Set());
   const [manualUrl, setManualUrl] = useState("");
-  const mountedRef = useRef(true);
-  // Guards against double-attaching the same suggestion — plain ref (not
-  // state) since it only needs to block a duplicate call, never render.
-  const attachingLinksRef = useRef<Set<string>>(new Set());
-
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-    };
-  }, []);
-
-  // Reset attach tracking when a fresh IMAGE is searched. Keyed on the image
-  // rather than on the results: results now stream in per detected product,
-  // and resetting on every arrival would clear what the user just attached.
-  useEffect(() => {
-    setConfirmedByLink(new Map());
-    setAttachedLinks(new Set());
-    attachingLinksRef.current = new Set();
-  }, [imageUrl]);
-
-  const attachSuggestion = async (s: RawVisualMatch) => {
-    if (attachingLinksRef.current.has(s.link) || attachedLinks.has(s.link)) return;
-    if (!collection) return;
-    attachingLinksRef.current.add(s.link);
-    try {
-      const { data: userRes } = await supabase.auth.getUser();
-      const userId = userRes.user?.id;
-      if (!userId) throw new Error("Not signed in");
-      const { error } = await supabase.from("storefront_products").insert({
-        user_id: userId,
-        storefront_id: collection.storefront_id,
-        collection_id: collection.id,
-        title: s.title,
-        affiliate_url: s.link,
-        image_url: s.thumbnail ?? collection.cover_image_url,
-      });
-      if (error) throw error;
-      if (!mountedRef.current) return;
-      setAttachedLinks((prev) => new Set(prev).add(s.link));
-      qc.invalidateQueries({ queryKey: ["collection-products", id] });
-    } catch (e) {
-      toast.error(getFriendlyMessage(e));
-    } finally {
-      attachingLinksRef.current.delete(s.link);
-    }
-  };
-
-  const handleSuggestionSettled = (link: string, details: CkResult) => {
-    setConfirmedByLink((prev) => {
-      if (prev.has(link)) return prev;
-      const next = new Map(prev);
-      next.set(link, details);
-      return next;
-    });
-    // Every match that resolved with a usable price (live CK figure or the
-    // Lens fallback, in stock or not) is auto-attached — there's no
-    // "unavailable" card to hold back anymore. Only a match with no price at
-    // all (`details === null`) is skipped, since there'd be nothing to show.
-    if (details) {
-      const s = suggestions.find((m) => m.link === link);
-      if (s) void attachSuggestion(s);
-    }
-  };
+  const runFetchLinkPreviews = useServerFn(fetchLinkPreviews);
 
   const addManual = useMutation({
     mutationFn: async () => {
@@ -200,6 +95,18 @@ function AttachToCollectionPage() {
       const { data: userRes } = await supabase.auth.getUser();
       const userId = userRes.user?.id;
       if (!userId) throw new Error("Not signed in");
+
+      // The link's og:image, best-effort — gives the product card a real
+      // picture and, when the collection has no cover yet, becomes the
+      // cover (a skipped upload defaults to the first product's picture).
+      let previewImage: string | null = null;
+      try {
+        const res = await runFetchLinkPreviews({ data: { urls: [url] } });
+        previewImage = res.images[0] ?? null;
+      } catch {
+        /* previews are a bonus — add the product regardless */
+      }
+
       let hostname = "New product";
       try {
         hostname = new URL(url).hostname.replace(/^www\./, "");
@@ -213,12 +120,22 @@ function AttachToCollectionPage() {
         collection_id: collection.id,
         title,
         affiliate_url: url,
-        image_url: imageUrl || null,
+        image_url: previewImage ?? imageUrl ?? null,
       });
       if (error) throw error;
+
+      if (!collection.cover_image_url && previewImage) {
+        const { error: coverErr } = await supabase
+          .from("collections")
+          .update({ cover_image_url: previewImage })
+          .eq("id", collection.id);
+        if (coverErr) throw coverErr;
+      }
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["collection-products", id] });
+      qc.invalidateQueries({ queryKey: ["collection", id] });
+      qc.invalidateQueries({ queryKey: ["collections"] });
       setManualUrl("");
       toast.success("Product added to collection");
     },
@@ -240,25 +157,6 @@ function AttachToCollectionPage() {
             <Skeleton className="mt-1.5 h-11 w-full rounded-xl" />
             <Skeleton className="mt-2 h-9 w-full rounded-xl" />
           </div>
-
-          {/* Recommendation grid placeholder */}
-          <div>
-            <Skeleton className="h-4 w-40" />
-            <div className="mt-3 grid grid-cols-2 gap-2.5 sm:grid-cols-3">
-              {Array.from({ length: 3 }).map((_, i) => (
-                <div
-                  key={i}
-                  className="overflow-hidden rounded-xl border border-border bg-surface-2/40"
-                >
-                  <Skeleton className="aspect-square w-full rounded-none" />
-                  <div className="space-y-1.5 p-2.5">
-                    <Skeleton className="h-2 w-1/3" />
-                    <Skeleton className="h-2.5 w-4/5" />
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
         </div>
       </AppShell>
     );
@@ -277,44 +175,20 @@ function AttachToCollectionPage() {
   return (
     <AppShell
       title={collection.name}
-      subtitle="Attach products to this collection"
+      subtitle="Attach products"
       backButton
       backTo="/storefront"
       hideBottomNav
     >
       <div className="mx-auto max-w-2xl space-y-6 pb-32">
-        {/* Visual scan preview — sticks to the top and shrinks into a compact
-            pinned thumbnail as the results scroll down, expanding back on
-            scroll up. */}
+        {/* Collection cover */}
         {imageUrl ? (
-          <motion.div
-            style={{ height: morph.heroHeight }}
-            className="sticky top-16 z-20 overflow-hidden rounded-2xl border border-border bg-surface-2/40 shadow-sm"
-          >
-            <div className="relative mx-auto h-full w-full">
-              <img src={imageUrl} alt="" className="absolute inset-0 h-full w-full object-cover" />
-              {aiLoading && suggestions.length === 0 && (
-                <>
-                  <span className="pointer-events-none absolute inset-x-0 top-0 h-24 animate-scan bg-gradient-to-b from-primary/60 via-primary/20 to-transparent" />
-                  <span className="pointer-events-none absolute inset-0 ring-2 ring-inset ring-primary/50" />
-                </>
-              )}
-              <div className="absolute left-2 top-2 inline-flex items-center gap-1 rounded-full bg-black/60 px-2 py-0.5 text-micro font-semibold text-white backdrop-blur">
-                {aiLoading && suggestions.length === 0 ? (
-                  <>
-                    <Loader2 className="h-3 w-3 animate-spin" /> Visual search…
-                  </>
-                ) : (
-                  <>
-                    <Sparkles className="h-3 w-3" /> {suggestions.length} matches
-                  </>
-                )}
-              </div>
-            </div>
-          </motion.div>
+          <div className="overflow-hidden rounded-2xl border border-border bg-surface-2/40 shadow-sm">
+            <img src={imageUrl} alt="" className="max-h-72 w-full object-cover" />
+          </div>
         ) : (
           <div className="rounded-2xl border border-dashed border-border bg-surface-2/40 p-6 text-center text-xs text-muted-foreground">
-            Add a cover photo to this collection to run visual search.
+            No cover yet — the first product you add sets it.
           </div>
         )}
 
@@ -329,6 +203,12 @@ function AttachToCollectionPage() {
               type="url"
               value={manualUrl}
               onChange={(e) => setManualUrl(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  if (manualUrl.trim() && !addManual.isPending) addManual.mutate();
+                }
+              }}
               placeholder="Paste an affiliate link…"
               className="w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground/60"
             />
@@ -344,60 +224,12 @@ function AttachToCollectionPage() {
             ) : (
               <Plus className="h-4 w-4" />
             )}
-            Add product
+            Add link
           </button>
         </div>
 
-        {/* Our Recommendation */}
-        <div>
-          <div className="flex items-center justify-between">
-            <h5 className="flex items-center gap-1.5 text-sm font-semibold">
-              <Wand2 className="h-4 w-4 text-primary" />
-              Our Recommendation
-            </h5>
-            <div className="flex items-center gap-2">
-              {suggestions.length > 0 && (
-                <span className="rounded-full bg-primary/10 px-2 py-0.5 text-micro font-semibold text-primary">
-                  {attachedLinks.size} attached
-                </span>
-              )}
-              <button
-                onClick={() => refetchAI()}
-                disabled={aiLoading || !imageUrl}
-                className="rounded-full bg-surface-2 px-2.5 py-1 text-micro font-semibold text-muted-foreground hover:text-foreground disabled:opacity-50"
-              >
-                {aiLoading ? "Scanning…" : "Retry"}
-              </button>
-            </div>
-          </div>
-          {isDetecting ? (
-            <div className="mt-3">
-              <EducationalLoader label="Finding products in this image…" hints={HINTS.matching} />
-            </div>
-          ) : suggestions.length === 0 && !aiLoading ? (
-            <p className="mt-3 rounded-xl border border-dashed border-border bg-surface-2/40 p-4 text-center text-xs text-muted-foreground">
-              No matching products found.
-            </p>
-          ) : (
-            <div className="mt-3 grid grid-cols-2 gap-2.5 sm:grid-cols-3">
-              {suggestions.map((s) => (
-                <ProgressiveSuggestionCard
-                  key={s.link}
-                  match={s}
-                  selected={attachedLinks.has(s.link)}
-                  onToggle={() => void attachSuggestion(s)}
-                  onSettled={handleSuggestionSettled}
-                />
-              ))}
-              {Array.from({ length: pendingCardCount }).map((_, i) => (
-                <SuggestionCardSkeleton key={`skeleton-${i}`} />
-              ))}
-            </div>
-          )}
-        </div>
-
         {/* Already in this collection */}
-        {products.length > 0 && (
+        {products.length > 0 ? (
           <div>
             <h5 className="flex items-center gap-1.5 text-sm font-semibold">
               <Store className="h-4 w-4 text-primary" />
@@ -420,6 +252,10 @@ function AttachToCollectionPage() {
               ))}
             </div>
           </div>
+        ) : (
+          <p className="rounded-xl border border-dashed border-border bg-surface-2/40 p-4 text-center text-xs text-muted-foreground">
+            No products yet — paste a link above to add the first one.
+          </p>
         )}
       </div>
 

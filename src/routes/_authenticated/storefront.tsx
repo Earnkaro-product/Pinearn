@@ -1,4 +1,4 @@
-import { createFileRoute, Link, useNavigate as useRouterNavigate } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { AppShell } from "@/components/app-shell";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
@@ -26,22 +26,30 @@ import {
   Twitter,
   GripVertical,
   X,
+  Link2,
+  ClipboardPaste,
 } from "lucide-react";
 import { Reorder, motion } from "framer-motion";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
 import { takeDownCollection } from "@/lib/pinterest.functions";
+import { fetchLinkPreviews } from "@/lib/link-preview.functions";
 import { syncPinterestAccount } from "@/lib/pinterest-sync.functions";
 import { usePinterestSync } from "@/hooks/use-pinterest-sync";
 import { PinterestSyncModal } from "@/components/pinterest-sync-modal";
 import { SuggestionCard, realProductPrice } from "@/components/suggestion-card";
+import {
+  CollectionAddFlow,
+  AddFromCollectionButton,
+  type PickableProduct,
+} from "@/components/collection-picker";
 import { hostBrand } from "@/lib/brands";
 
 const DEFAULT_BACKGROUND =
   "https://images.unsplash.com/photo-1519681393784-d120267933ba?w=1600&q=80&auto=format&fit=crop";
 
-type StorefrontSearch = { collection?: string; edit?: 1 };
+type StorefrontSearch = { collection?: string; edit?: 1; new?: 1 };
 
 export const Route = createFileRoute("/_authenticated/storefront")({
   component: StorefrontPage,
@@ -50,6 +58,11 @@ export const Route = createFileRoute("/_authenticated/storefront")({
     // The Health Score "Complete Profile" action deep-links here to fill the
     // bio/website — auto-opens the edit-store dialog.
     edit: search.edit === 1 || search.edit === "1" ? 1 : undefined,
+    // The dashboard's "New collection" quick action deep-links here. Collection
+    // creation has no route of its own — it is a dialog on this page — so the
+    // link opens the page with the dialog already up rather than landing the
+    // creator on the storefront to hunt for the button.
+    new: search.new === 1 || search.new === "1" ? 1 : undefined,
   }),
 });
 
@@ -122,7 +135,6 @@ function StorefrontPage() {
   const qc = useQueryClient();
   const search = Route.useSearch();
   const navigate = Route.useNavigate();
-  const routerNavigate = useRouterNavigate();
   const [tab, setTab] = useState<"collections" | "boards">("collections");
   const [reorderOpen, setReorderOpen] = useState(false);
   const [showNewCollection, setShowNewCollection] = useState(false);
@@ -144,6 +156,16 @@ function StorefrontPage() {
   useEffect(() => {
     if (search.edit) setShowEditStore(true);
   }, [search.edit]);
+
+  // Deep-linked from the dashboard's "New collection" quick action. The param
+  // is cleared as it opens so a back-navigation or refresh doesn't reopen a
+  // dialog the creator already dismissed.
+  useEffect(() => {
+    if (!search.new) return;
+    setTab("collections");
+    setShowNewCollection(true);
+    void navigate({ search: (s) => ({ ...s, new: undefined }), replace: true });
+  }, [search.new, navigate]);
 
   // The unified reconcile — same call the connect flow and the auto-sync use, so
   // "Sync boards & pins" here can't drift from what happens elsewhere.
@@ -212,6 +234,24 @@ function StorefrontPage() {
     },
   });
 
+  // Products attached to collections directly (pasted links, monetized
+  // pins). Link-only collections have no pins at all, so both the grid
+  // filter and the card cover/count need these.
+  const { data: storefrontProducts = [] } = useQuery({
+    queryKey: ["storefront-products", storefront?.id],
+    enabled: !!storefront,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("storefront_products")
+        .select("id,collection_id,image_url")
+        .eq("storefront_id", storefront!.id)
+        .not("collection_id", "is", null)
+        .order("created_at", { ascending: true });
+      if (error) throw error;
+      return data as { id: string; collection_id: string | null; image_url: string | null }[];
+    },
+  });
+
   const { data: boards = [] } = useQuery({
     queryKey: ["boards", storefront?.id],
     enabled: !!storefront,
@@ -274,11 +314,43 @@ function StorefrontPage() {
     runImport.mutate();
   };
 
+  const runFetchLinkPreviews = useServerFn(fetchLinkPreviews);
   const createCollection = useMutation({
-    mutationFn: async (p: { name: string; coverFile: File | null }) => {
+    mutationFn: async (p: {
+      name: string;
+      coverFile: File | null;
+      links: string[];
+      products: PickableProduct[];
+      linkImages?: (string | null)[];
+    }) => {
       const { data: userRes } = await supabase.auth.getUser();
       let coverUrl: string | null = null;
       if (p.coverFile) coverUrl = await uploadCover(p.coverFile, "collections");
+
+      // Each link's og:image, best-effort — the products get their own
+      // pictures, and with no uploaded cover the first product's picture
+      // becomes the collection cover. The dialog already fetched previews to
+      // show the default cover, so reuse them instead of fetching twice.
+      let linkImages: (string | null)[] = p.links.map(() => null);
+      if (p.links.length > 0) {
+        if (p.linkImages && p.linkImages.length === p.links.length) {
+          linkImages = p.linkImages;
+        } else {
+          try {
+            const res = await runFetchLinkPreviews({ data: { urls: p.links } });
+            linkImages = res.images;
+          } catch {
+            /* previews are a bonus — create the collection regardless */
+          }
+        }
+      }
+      if (!coverUrl) {
+        coverUrl =
+          linkImages.find((img): img is string => !!img) ??
+          p.products.find((pr) => pr.image_url)?.image_url ??
+          null;
+      }
+
       const topPos =
         collections.length > 0 ? Math.min(...collections.map((c) => c.position)) - 1 : 0;
       const { data: inserted, error } = await supabase
@@ -295,16 +367,50 @@ function StorefrontPage() {
         .select("id")
         .single();
       if (error) throw error;
+
+      const linkRows = p.links.map((url, i) => {
+        let hostname = "New product";
+        try {
+          hostname = new URL(url).hostname.replace(/^www\./, "");
+        } catch {
+          /* keep default */
+        }
+        return {
+          user_id: userRes.user!.id,
+          storefront_id: storefront!.id,
+          collection_id: inserted.id,
+          title: `${p.name} — ${hostname}`,
+          affiliate_url: url,
+          image_url: linkImages[i] ?? coverUrl,
+        };
+      });
+      // Products picked from existing collections are COPIED — a product row
+      // belongs to exactly one collection, so re-pointing it would silently
+      // pull it out of the collection it lives in.
+      const copiedRows = p.products.map((pr) => ({
+        user_id: userRes.user!.id,
+        storefront_id: storefront!.id,
+        collection_id: inserted.id,
+        title: pr.title,
+        affiliate_url: pr.affiliate_url,
+        image_url: pr.image_url,
+        price_cents: pr.price_cents,
+        commission_pct: pr.commission_pct,
+      }));
+      const rows = [...linkRows, ...copiedRows];
+      if (rows.length > 0) {
+        const { error: prodErr } = await supabase.from("storefront_products").insert(rows);
+        if (prodErr) throw prodErr;
+      }
       return inserted;
     },
-    onSuccess: (created) => {
+    onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["collections", storefront?.id] });
+      qc.invalidateQueries({ queryKey: ["storefront-products"] });
+      qc.invalidateQueries({ queryKey: ["collection-products"] });
+      qc.invalidateQueries({ queryKey: ["all-products"] });
       setShowNewCollection(false);
-      toast.success("Collection created — attaching products");
-      routerNavigate({
-        to: "/collections/$id/attach",
-        params: { id: created.id },
-      });
+      toast.success("Collection created");
     },
     onError: (e: Error) => toast.error(e.message),
   });
@@ -488,9 +594,26 @@ function StorefrontPage() {
   // this is the one true signal, not just "has a product_id" (a pin can have
   // a product picked mid-edit without ever having gone live).
   const pinsWithProduct = useMemo(() => pins.filter((p) => p.status === "live"), [pins]);
+  const productsByCollection = useMemo(() => {
+    const map = new Map<string, { id: string; image_url: string | null }[]>();
+    for (const p of storefrontProducts) {
+      if (!p.collection_id) continue;
+      const arr = map.get(p.collection_id) ?? [];
+      arr.push(p);
+      map.set(p.collection_id, arr);
+    }
+    return map;
+  }, [storefrontProducts]);
+  // A collection with directly-attached products (the new-collection dialog
+  // creates these from pasted links) belongs in the storefront too — it has
+  // no pins at all, so the live-pin signal alone would hide it forever.
   const storefrontCollections = useMemo(
-    () => collections.filter((c) => pinsWithProduct.some((p) => p.collection_id === c.id)),
-    [collections, pinsWithProduct],
+    () =>
+      collections.filter(
+        (c) =>
+          pinsWithProduct.some((p) => p.collection_id === c.id) || productsByCollection.has(c.id),
+      ),
+    [collections, pinsWithProduct, productsByCollection],
   );
   const storefrontCollectionIds = useMemo(
     () => new Set(storefrontCollections.map((c) => c.id)),
@@ -796,8 +919,8 @@ function StorefrontPage() {
               <h4 className="mt-4 font-display text-base font-semibold">No collections yet</h4>
               <p className="mx-auto mt-2 max-w-xs text-sm text-muted-foreground">
                 {collections.length === 0
-                  ? "Sync your Pinterest boards or create a collection to start."
-                  : "Attach a product to a pin and its collection will appear here automatically."}
+                  ? "Sync your boards, or create one."
+                  : "Attach a product to a pin and its collection lands here."}
               </p>
               {collections.length === 0 ? (
                 <button
@@ -825,13 +948,17 @@ function StorefrontPage() {
             <div className="grid grid-cols-2 gap-4">
               {storefrontCollections.map((c) => {
                 const cPins = pinsWithProduct.filter((p) => p.collection_id === c.id);
+                const cProducts = productsByCollection.get(c.id) ?? [];
                 const coverUrl =
-                  c.cover_image_url ?? cPins.find((p) => p.image_url)?.image_url ?? null;
+                  c.cover_image_url ??
+                  cPins.find((p) => p.image_url)?.image_url ??
+                  cProducts.find((p) => p.image_url)?.image_url ??
+                  null;
                 return (
                   <CollectionCard
                     key={c.id}
                     name={c.name}
-                    count={cPins.length}
+                    count={cPins.length + cProducts.length}
                     countLabel="product"
                     coverUrl={coverUrl}
                     coverColor={c.cover_color}
@@ -1318,10 +1445,12 @@ function CollectionCard({
       >
         <ImageIcon className="h-3.5 w-3.5" />
       </button>
+      {/* Always visible (not hover-gated) — hover never fires on touch
+          screens, and delete must be reachable there. */}
       <button
         onClick={onRemove}
-        aria-label="Remove from storefront"
-        className="absolute left-2 top-2 grid h-8 w-8 place-items-center rounded-full bg-black/50 text-white opacity-0 backdrop-blur transition group-hover:opacity-100"
+        aria-label="Delete collection"
+        className="absolute left-2 top-2 grid h-8 w-8 place-items-center rounded-full bg-black/50 text-white backdrop-blur transition hover:bg-black/70"
       >
         <Trash2 className="h-3.5 w-3.5" />
       </button>
@@ -1400,62 +1529,347 @@ function NewCollectionDialog({
   pending,
 }: {
   onCancel: () => void;
-  onCreate: (v: { name: string; coverFile: File | null }) => void;
+  onCreate: (v: {
+    name: string;
+    coverFile: File | null;
+    links: string[];
+    products: PickableProduct[];
+    linkImages?: (string | null)[];
+  }) => void;
   pending: boolean;
 }) {
+  // Two steps: the Add-products screen first — the same sheet the pin flow
+  // uses (paste links OR pick from a collection) — then name + cover, where
+  // the first product's picture is the default cover.
+  const [step, setStep] = useState<"products" | "details">("products");
   const [name, setName] = useState("");
   const [coverFile, setCoverFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
+  const [links, setLinks] = useState<string[]>([]);
+  const [linkInput, setLinkInput] = useState("");
+  const [linkError, setLinkError] = useState<string | null>(null);
+  const [showCollection, setShowCollection] = useState(false);
+  // Pick order preserved (array, not Set) — the first added product's image
+  // becomes the cover when none was uploaded.
+  const [picked, setPicked] = useState<string[]>([]);
+  // og:images for the pasted links, fetched on entering the details step so
+  // the default cover can be shown; null = still loading. Passed along to
+  // onCreate so the mutation doesn't fetch them a second time.
+  const [linkImages, setLinkImages] = useState<(string | null)[] | null>(null);
+  const runPreviews = useServerFn(fetchLinkPreviews);
+  // Guards against an older fetch resolving after a newer one when the user
+  // bounces between the steps editing links.
+  const previewReq = useRef(0);
+
+  const goToDetails = () => {
+    setStep("details");
+    const reqId = ++previewReq.current;
+    if (links.length === 0) {
+      setLinkImages([]);
+      return;
+    }
+    setLinkImages(null);
+    const snapshot = [...links];
+    // The server fn caps at 10 URLs — links beyond that just get no preview.
+    runPreviews({ data: { urls: snapshot.slice(0, 10) } })
+      .then((r) => {
+        if (previewReq.current !== reqId) return;
+        setLinkImages(snapshot.map((_, i) => r.images[i] ?? null));
+      })
+      .catch(() => {
+        if (previewReq.current !== reqId) return;
+        setLinkImages(snapshot.map(() => null));
+      });
+  };
+
+  const { data: allProducts = [] } = useQuery({
+    queryKey: ["all-products"],
+    queryFn: async () => {
+      const { data: userRes } = await supabase.auth.getUser();
+      const userId = userRes.user?.id;
+      if (!userId) return [];
+      const { data } = await supabase
+        .from("storefront_products")
+        .select("id,title,image_url,affiliate_url,price_cents,commission_pct,collection_id")
+        .eq("user_id", userId);
+      return (data ?? []) as PickableProduct[];
+    },
+  });
+
+  const togglePicked = (id: string) =>
+    setPicked((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  const pickedProducts = picked
+    .map((id) => allProducts.find((p) => p.id === id))
+    .filter((p): p is PickableProduct => !!p);
+
+  // Default cover = the first product's picture, matching what the create
+  // mutation falls back to when nothing is uploaded: first link og:image,
+  // then first picked product with an image.
+  const defaultCover =
+    linkImages?.find((img): img is string => !!img) ??
+    pickedProducts.find((p) => p.image_url)?.image_url ??
+    null;
+  const coverLoading = links.length > 0 && linkImages === null;
+
+  const addLink = () => {
+    const url = linkInput.trim();
+    if (!url) {
+      setLinkError("Paste a product link first");
+      return;
+    }
+    try {
+      new URL(url);
+    } catch {
+      setLinkError("That doesn't look like a valid URL");
+      return;
+    }
+    const normalize = (u: string) => u.trim().replace(/\/+$/, "").toLowerCase();
+    if (links.some((l) => normalize(l) === normalize(url))) {
+      setLinkError("Already added");
+      return;
+    }
+    setLinkError(null);
+    setLinks((prev) => [...prev, url]);
+    setLinkInput("");
+  };
+
+  const pasteFromClipboard = async () => {
+    try {
+      const t = await navigator.clipboard.readText();
+      if (t) {
+        setLinkInput(t.trim());
+        setLinkError(null);
+      }
+    } catch {
+      toast.error("Clipboard access blocked — paste with ⌘/Ctrl+V");
+    }
+  };
+
   return (
     <ModalShell onClose={onCancel}>
-      <div className="w-full max-w-md rounded-2xl border border-border bg-surface p-6 shadow-elevate">
-        <h3 className="font-display text-lg font-semibold">New collection</h3>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Group your products the way you'd group them on Pinterest.
-        </p>
-        <label className="mt-4 block cursor-pointer">
-          <div className="relative grid aspect-video w-full place-items-center overflow-hidden rounded-xl border border-dashed border-border bg-surface-2 text-muted-foreground">
-            {preview ? (
-              <FadeImage src={preview} className="absolute inset-0 h-full w-full object-cover" />
-            ) : (
-              <span className="flex items-center gap-2 text-xs">
-                <Camera className="h-4 w-4" /> Upload cover&nbsp;
-              </span>
+      <div className="max-h-[85vh] w-full max-w-md overflow-y-auto rounded-2xl border border-border bg-surface p-6 shadow-elevate">
+        {step === "details" ? (
+          <>
+            <h3 className="font-display text-lg font-semibold">Name your collection</h3>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Group your products the way you'd group them on Pinterest.
+            </p>
+            <label className="mt-4 block cursor-pointer">
+              <div className="relative grid aspect-video w-full place-items-center overflow-hidden rounded-xl border border-dashed border-border bg-surface-2 text-muted-foreground">
+                {preview ?? defaultCover ? (
+                  <FadeImage
+                    src={(preview ?? defaultCover)!}
+                    className="absolute inset-0 h-full w-full object-cover"
+                  />
+                ) : coverLoading ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <span className="flex items-center gap-2 text-xs">
+                    <Camera className="h-4 w-4" /> Upload cover (optional)&nbsp;
+                  </span>
+                )}
+              </div>
+              <input
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0] ?? null;
+                  setCoverFile(f);
+                  setPreview(f ? URL.createObjectURL(f) : null);
+                }}
+              />
+            </label>
+            {!preview && (
+              <p className="mt-1.5 text-mini text-muted-foreground">
+                {defaultCover
+                  ? "Using the first product's picture"
+                  : "Optional — the first product's picture is used"}
+              </p>
             )}
-          </div>
-          <input
-            type="file"
-            accept="image/*"
-            className="hidden"
-            onChange={(e) => {
-              const f = e.target.files?.[0] ?? null;
-              setCoverFile(f);
-              setPreview(f ? URL.createObjectURL(f) : null);
-            }}
-          />
-        </label>
-        <input
-          autoFocus
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="e.g. Fall capsule wardrobe"
-          className="mt-3 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"
-        />
-        <div className="mt-5 flex justify-end gap-2">
-          <button
-            onClick={onCancel}
-            className="rounded-lg px-4 py-2 text-sm text-muted-foreground hover:text-foreground"
-          >
-            Cancel
-          </button>
-          <button
-            disabled={!name.trim() || pending}
-            onClick={() => onCreate({ name: name.trim(), coverFile })}
-            className="inline-flex items-center gap-2 rounded-lg bg-gradient-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-glow disabled:opacity-60"
-          >
-            {pending && <Loader2 className="h-4 w-4 animate-spin" />} Create
-          </button>
-        </div>
+            <input
+              autoFocus
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. Fall capsule wardrobe"
+              className="mt-3 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"
+            />
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                onClick={() => setStep("products")}
+                className="rounded-lg px-4 py-2 text-sm text-muted-foreground hover:text-foreground"
+              >
+                Back
+              </button>
+              <button
+                disabled={!name.trim() || pending}
+                onClick={() =>
+                  onCreate({
+                    name: name.trim(),
+                    coverFile,
+                    links,
+                    products: pickedProducts,
+                    linkImages: linkImages ?? undefined,
+                  })
+                }
+                className="inline-flex items-center gap-2 rounded-lg bg-gradient-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-glow disabled:opacity-60"
+              >
+                {pending && <Loader2 className="h-4 w-4 animate-spin" />} Create collection
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <h3 className="font-display text-lg font-bold">New collection</h3>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              Add products first — paste an affiliate link, or pick from an existing collection.
+            </p>
+
+            {/* Paste a link — identical to the pin flow's Add-more sheet:
+                link input plus the green paste-from-clipboard square. */}
+            <div className="mt-4 flex items-center gap-2">
+              <div
+                className={`flex flex-1 items-center gap-2 rounded-2xl border bg-background px-3 py-3 ${
+                  linkError ? "border-rose-400" : "border-input"
+                }`}
+              >
+                <Link2 className="h-4 w-4 shrink-0 text-primary" />
+                <input
+                  autoFocus
+                  type="url"
+                  value={linkInput}
+                  onChange={(e) => {
+                    setLinkInput(e.target.value);
+                    if (linkError) setLinkError(null);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      addLink();
+                    }
+                  }}
+                  placeholder="Paste a product link"
+                  className="w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground/60"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => void pasteFromClipboard()}
+                aria-label="Paste from clipboard"
+                className="grid h-[46px] w-[46px] shrink-0 place-items-center rounded-2xl bg-emerald-500 text-white shadow-sm transition active:scale-95"
+              >
+                <ClipboardPaste className="h-5 w-5" />
+              </button>
+            </div>
+            {linkError && <p className="mt-1.5 text-xs text-rose-500">{linkError}</p>}
+            {/* Only appears once there's a link to add. */}
+            {linkInput.trim() && (
+              <button
+                type="button"
+                onClick={addLink}
+                className="mt-2.5 inline-flex w-full items-center justify-center gap-1.5 rounded-2xl bg-gradient-primary px-4 py-3 text-sm font-bold text-primary-foreground shadow-glow transition active:scale-[0.98]"
+              >
+                <Plus className="h-4 w-4" /> Add link
+              </button>
+            )}
+
+            {/* divider */}
+            <div className="my-4 flex items-center gap-3 text-mini font-semibold uppercase tracking-wide text-muted-foreground/70">
+              <span className="h-px flex-1 bg-border" /> or{" "}
+              <span className="h-px flex-1 bg-border" />
+            </div>
+
+            {/* Add from collection — full-screen: a Collections grid,
+                then that collection's products. */}
+            <AddFromCollectionButton onClick={() => setShowCollection(true)} />
+
+            {showCollection && (
+              <CollectionAddFlow
+                products={allProducts}
+                pickedIds={new Set(picked)}
+                onTogglePicked={togglePicked}
+                onExit={() => setShowCollection(false)}
+              />
+            )}
+
+            {/* Everything added so far — pasted links and picked products. */}
+            {links.length + pickedProducts.length > 0 && (
+              <div className="mt-5">
+                <p className="mb-2 text-xs font-semibold text-muted-foreground">
+                  {links.length + pickedProducts.length} added
+                </p>
+                <div className="flex max-h-[34vh] flex-col gap-2 overflow-y-auto">
+                  {links.map((url) => (
+                    <div
+                      key={url}
+                      className="flex items-center gap-2 rounded-lg border border-border bg-surface-2/60 px-2.5 py-2"
+                    >
+                      <Link2 className="h-3.5 w-3.5 shrink-0 text-primary" />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-xs font-semibold">{hostBrand(url)}</p>
+                        <p className="truncate text-micro text-muted-foreground">{url}</p>
+                      </div>
+                      <button
+                        type="button"
+                        aria-label="Remove link"
+                        onClick={() => setLinks((prev) => prev.filter((l) => l !== url))}
+                        className="shrink-0 text-muted-foreground transition hover:text-foreground"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                  {pickedProducts.map((p) => (
+                    <div
+                      key={p.id}
+                      className="flex items-center gap-2 rounded-lg border border-border bg-surface-2/60 px-2.5 py-2"
+                    >
+                      {p.image_url ? (
+                        <img
+                          src={p.image_url}
+                          alt=""
+                          className="h-8 w-8 shrink-0 rounded object-cover"
+                        />
+                      ) : (
+                        <ImageIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-xs font-semibold">{p.title}</p>
+                        <p className="truncate text-micro text-muted-foreground">
+                          {hostBrand(p.affiliate_url)}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        aria-label="Remove product"
+                        onClick={() => togglePicked(p.id)}
+                        className="shrink-0 text-muted-foreground transition hover:text-foreground"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                onClick={onCancel}
+                className="rounded-lg px-4 py-2 text-sm text-muted-foreground hover:text-foreground"
+              >
+                Cancel
+              </button>
+              <button
+                disabled={links.length === 0 && pickedProducts.length === 0}
+                onClick={goToDetails}
+                className="inline-flex items-center gap-2 rounded-lg bg-gradient-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-glow disabled:opacity-60"
+              >
+                Next
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </ModalShell>
   );

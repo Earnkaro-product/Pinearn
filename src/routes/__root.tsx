@@ -7,7 +7,7 @@ import {
   HeadContent,
   Scripts,
 } from "@tanstack/react-router";
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import "@fontsource/outfit/400.css";
 import "@fontsource/outfit/500.css";
@@ -25,6 +25,7 @@ import { reportLovableError } from "../lib/lovable-error-reporting";
 import { supabase } from "@/integrations/supabase/client";
 import { Toaster } from "sonner";
 import { MonetizationFloater } from "@/components/monetization-floater";
+import { applyTheme, readTheme, type Theme } from "@/lib/theme";
 
 function NotFoundComponent() {
   return (
@@ -158,6 +159,17 @@ function RootComponent() {
   const { queryClient } = Route.useRouteContext();
   const router = useRouter();
 
+  // The saved theme, applied once on boot — Settings persisted the choice but
+  // only ever toggled the class while that page was mounted, so dark mode
+  // reverted to light on the next reload. Kept in state as well so the toast
+  // layer follows the app instead of staying stuck on light.
+  const [theme, setTheme] = useState<Theme>("light");
+  useEffect(() => {
+    const saved = readTheme();
+    setTheme(saved);
+    applyTheme(saved);
+  }, []);
+
   useEffect(() => {
     const { data: sub } = supabase.auth.onAuthStateChange((event) => {
       if (event !== "SIGNED_IN" && event !== "SIGNED_OUT" && event !== "USER_UPDATED") return;
@@ -175,7 +187,7 @@ function RootComponent() {
       <MotionConfig reducedMotion="user">
         <Outlet />
         <MonetizationFloater />
-        <Toaster theme="light" position="top-right" richColors closeButton duration={2500} />
+        <Toaster theme={theme} position="top-right" richColors closeButton duration={2500} />
       </MotionConfig>
     </QueryClientProvider>
   );

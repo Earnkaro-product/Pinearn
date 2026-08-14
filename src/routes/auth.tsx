@@ -258,16 +258,13 @@ function AuthPage() {
               {step === "phone" ? "Welcome to ShopMyPin" : "Enter the code"}
             </h1>
             <p className="mt-1.5 text-sm text-muted-foreground">
-              {step === "phone"
-                ? "Sign in or create your account with just your phone — it takes seconds."
-                : `We sent a code to ${phone}`}
+              {step === "phone" ? "Sign in with your phone." : `We sent a code to ${phone}`}
             </p>
 
             {step === "phone" ? (
               <form onSubmit={sendCode} className="mt-5">
-                <label className="mb-2 block text-base font-medium text-foreground">
-                  Phone Number
-                </label>
+                {/* The field is a flag, a dial code and a number pad — a label
+                    saying "Phone Number" over it is the same word twice. */}
                 <div className="flex items-stretch gap-2.5">
                   <div className="relative">
                     <button
@@ -314,7 +311,8 @@ function AuthPage() {
                       onChange={(e) =>
                         setLocalPhone(e.target.value.replace(/\D/g, "").slice(0, 10))
                       }
-                      placeholder="Enter phone number"
+                      aria-label="Phone number"
+                      placeholder="Phone number"
                       className="min-w-0 flex-1 bg-transparent py-2.5 text-lead outline-none placeholder:text-muted-foreground"
                     />
                   </div>

@@ -133,12 +133,7 @@ function BoostPinsPage() {
     [report],
   );
   return (
-    <AppShell
-      title="Boost Pins"
-      subtitle="One score. Everything holding your reach back."
-      backButton
-      backTo="/dashboard"
-    >
+    <AppShell title="Pinterest SEO" backButton backTo="/dashboard">
       <div className="mx-auto max-w-2xl">
         <AnimatePresence mode="wait">
           {analyzing ? (
@@ -168,29 +163,37 @@ function BoostPinsPage() {
                   aria-hidden
                   className="pointer-events-none absolute -top-28 left-1/2 h-72 w-72 -translate-x-1/2 rounded-full bg-primary/10 blur-3xl"
                 />
-                {/* Quiet, icon-only recheck — kept out of the main composition. */}
-                <button
-                  type="button"
-                  onClick={() => refetch()}
-                  aria-label="Recheck score"
-                  className="absolute right-3 top-3 z-10 grid h-9 w-9 place-items-center rounded-full text-muted-foreground/60 transition hover:bg-surface-2 hover:text-primary"
-                >
-                  <RefreshCw className={`h-4 w-4 ${isFetching ? "animate-spin" : ""}`} />
-                </button>
+                {/* Quiet, icon-only controls — the scoring explainer and the
+                    recheck, kept out of the main composition. A full-width
+                    "How your score works" row used to sit under the hero;
+                    as an icon it costs no line of text. */}
+                <div className="absolute right-3 top-3 z-10 flex items-center gap-0.5">
+                  <button
+                    type="button"
+                    onClick={() => setScoringSheet(true)}
+                    aria-label="How your score works"
+                    className="grid h-9 w-9 place-items-center rounded-full text-muted-foreground/60 transition hover:bg-surface-2 hover:text-primary"
+                  >
+                    <Info className="h-4 w-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => refetch()}
+                    aria-label="Recheck score"
+                    className="grid h-9 w-9 place-items-center rounded-full text-muted-foreground/60 transition hover:bg-surface-2 hover:text-primary"
+                  >
+                    <RefreshCw className={`h-4 w-4 ${isFetching ? "animate-spin" : ""}`} />
+                  </button>
+                </div>
 
                 <div className="relative flex flex-col items-center text-center">
                   <ScoreRing score={report.overall} from={animateFrom} />
                 </div>
               </div>
 
-              <HowScoringTrigger onOpen={() => setScoringSheet(true)} />
-
               {/* ---- One prioritized plan (grid + list merged) ---- */}
-              <div className="mt-6">
-                <div className="mb-3 flex items-baseline justify-between">
-                  <h2 className="font-display text-lg font-semibold">Your boost plan</h2>
-                  <span className="text-mini text-muted-foreground">Biggest wins first</span>
-                </div>
+              <div className="mt-5">
+                <h2 className="mb-3 font-display text-lg font-semibold">Biggest wins first</h2>
                 <div className="grid gap-2.5">
                   {ranked.map((s, i) => (
                     <BoostRow key={s.key} sub={s} rank={i} onFix={() => setBriefingKey(s.key)} />
@@ -408,10 +411,9 @@ function FixBriefing({
                     destination is the motivating number, so show it — and in the
                     same unit as the plan row that was just tapped. */}
               <p className="mt-0.5 flex items-center gap-1.5 text-xs font-bold">
-                <span className={tone.text}>{pointsLabel(nowPts)} pts</span>
+                <span className={tone.text}>{pointsLabel(nowPts)}</span>
                 <ArrowRight className="h-3 w-3 text-muted-foreground/50" />
                 <span className="text-emerald-600">{maxPts} pts</span>
-                <span className="font-medium text-muted-foreground">possible</span>
               </p>
             </div>
           </div>
@@ -438,7 +440,7 @@ function FixBriefing({
             {sub.failing}
           </span>
           <span className="pb-1 text-sm font-semibold text-muted-foreground">
-            {sub.unit} need attention
+            {sub.unit} to fix
           </span>
         </motion.div>
 
@@ -510,7 +512,10 @@ function FixBriefing({
           ))}
         </motion.div>
 
-        <motion.div variants={item} className="mt-6 flex flex-col gap-1.5">
+        {/* One way out is enough — the header's X already dismisses the sheet,
+            so a "Maybe later" button under the CTA was a second word for the
+            same gesture. */}
+        <motion.div variants={item} className="mt-6">
           <button
             type="button"
             onClick={onStart}
@@ -523,13 +528,6 @@ function FixBriefing({
               className="animate-sheen pointer-events-none absolute inset-y-0 w-1/3 bg-gradient-to-r from-transparent via-white/25 to-transparent"
             />
             <Sparkles className="h-4 w-4" /> Start fixing <ArrowRight className="h-4 w-4" />
-          </button>
-          <button
-            type="button"
-            onClick={onClose}
-            className="min-h-[44px] w-full text-xs font-semibold text-muted-foreground transition hover:text-foreground"
-          >
-            Maybe later
           </button>
         </motion.div>
       </motion.div>
@@ -813,14 +811,6 @@ function PinterestProfileSheet({
               </motion.div>
             );
           })}
-
-          {/* The read-only rule, five words, once. When disconnected the head
-              line and the footer's one CTA already say the whole story. */}
-          {connected && (
-            <p className="pt-1 text-center text-micro font-medium text-muted-foreground/70">
-              Fixes open on Pinterest, then recheck
-            </p>
-          )}
         </div>
 
         {/* ---- Fixed foot: the round trip's second half ---- */}
@@ -911,7 +901,7 @@ function ScoreRing({ score, from }: { score: number; from?: number | null }) {
           <AnimatedNumber value={score} from={from ?? 0} duration={1.4} />
         </span>
         <span className="mt-2 text-xs font-semibold tracking-wide text-muted-foreground">
-          / 100 pts
+          / 100
         </span>
       </div>
     </div>
@@ -996,23 +986,6 @@ const SCORING_ORDER: SubScoreKey[] = ["pinSeo", "boardStructure", "freshness", "
 // apart from a 40-pt one at the 10px height the bar is drawn at.
 const WEIGHT_COLORS = ["bg-rose-500", "bg-violet-400", "bg-amber-400", "bg-sky-400"];
 
-/** The row under the hero. Says nothing itself — its whole job is opening the
- * sheet, so a creator who wants the rules can get all of them at once instead
- * of an accordion that pushes their plan off the screen. */
-function HowScoringTrigger({ onOpen }: { onOpen: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onOpen}
-      className="mt-3 flex w-full items-center gap-2 rounded-xl border border-border bg-surface px-3 py-2.5 text-left transition hover:bg-surface-2/60 active:scale-[0.995]"
-    >
-      <Info className="h-4 w-4 shrink-0 text-muted-foreground" />
-      <span className="flex-1 text-xs font-semibold">How your score works</span>
-      <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/60" />
-    </button>
-  );
-}
-
 /**
  * The scoring model, end to end: what the 100 pts are, how they're split, how
  * each slice is earned, and what moves it.
@@ -1045,9 +1018,9 @@ function HowScoringSheet({
               <h2 id="scoring-title" className="font-display text-xl font-bold leading-tight">
                 How your score works
               </h2>
-              <p className="mt-1 text-mini leading-relaxed text-muted-foreground">
-                Your Boost Score is 100 pts, split across four areas of Pinterest SEO. You hold{" "}
-                <span className="font-bold text-foreground">{report.overall} pts</span> right now.
+              <p className="mt-1 text-mini font-semibold text-muted-foreground">
+                <span className="font-bold text-foreground">{report.overall}</span> of 100 pts, over
+                four areas
               </p>
             </div>
             <button
@@ -1108,10 +1081,7 @@ function HowScoringSheet({
                     </p>
                     <p className={`mt-0.5 text-mini font-bold tabular-nums ${tone.text}`}>
                       {pointsLabel(nowPts)}
-                      <span className="font-semibold text-muted-foreground">
-                        {" "}
-                        of {maxPts} pts earned
-                      </span>
+                      <span className="font-semibold text-muted-foreground">/{maxPts} pts</span>
                     </p>
                   </div>
                   <SeoInsightButton label={SUB_SCORE_LABELS[k]} onClick={() => onExplain(k)} />
@@ -1124,20 +1094,19 @@ function HowScoringSheet({
           })}
 
           {/* The one rule that isn't per-area, and the one thing people get
-              wrong: the pts are a share, not a checklist you complete. */}
+              wrong: the pts are a share, not a checklist you complete. Two
+              paragraphs of reassurance became two lines — the rule, then the
+              safety net. */}
           <div className="rounded-2xl bg-surface-2/60 p-3.5 ring-1 ring-inset ring-border/60">
             <p className="text-mini font-bold uppercase tracking-[0.12em] text-muted-foreground">
               How pts are earned
             </p>
             <p className="mt-1.5 text-mini leading-relaxed text-foreground/80">
-              Each area gives you its pts in proportion to how much of it passes. Half your pins
-              passing Pin SEO banks half of its {maxPointsFor("pinSeo")} pts — you never need
-              everything perfect to move the number.
+              Each area pays out its pts in proportion to what passes — half your pins passing banks
+              half of Pin SEO's {maxPointsFor("pinSeo")} pts.
             </p>
-            <p className="mt-2 text-mini leading-relaxed text-foreground/80">
-              Nothing is scored on a schedule and nothing is deducted for trying. Every fix is
-              undoable, and the score is recalculated from your live Pinterest data each time you
-              recheck.
+            <p className="mt-1.5 text-mini leading-relaxed text-foreground/80">
+              Nothing is deducted for trying, and every fix is undoable.
             </p>
           </div>
         </div>
@@ -1171,10 +1140,9 @@ function EmptyState() {
       <div className="mx-auto grid h-16 w-16 place-items-center rounded-2xl bg-primary/10 text-primary">
         <Rocket className="h-8 w-8" />
       </div>
-      <h2 className="mt-4 font-display text-2xl font-bold">Your Boost Score starts here</h2>
+      <h2 className="mt-4 font-display text-2xl font-bold">Your score starts here</h2>
       <p className="mx-auto mt-1.5 max-w-sm text-sm text-muted-foreground">
-        Once you have pins and boards, we'll score your Pinterest SEO and show you exactly what to
-        fix. Add your first pin to begin.
+        Add pins and we'll score your Pinterest SEO.
       </p>
       <div className="mt-6 flex flex-col justify-center gap-2.5 sm:flex-row">
         <Link
@@ -1182,13 +1150,13 @@ function EmptyState() {
           search={{ board: undefined }}
           className="inline-flex items-center justify-center gap-1.5 rounded-full bg-gradient-primary px-5 py-3 text-sm font-bold text-primary-foreground shadow-glow"
         >
-          <ImagePlus className="h-4 w-4" /> Create your first pin
+          <ImagePlus className="h-4 w-4" /> Create a pin
         </Link>
         <Link
           to="/pins/attach"
           className="inline-flex items-center justify-center gap-1.5 rounded-full border border-border bg-surface px-5 py-3 text-sm font-semibold text-foreground transition hover:bg-surface-2"
         >
-          <Link2 className="h-4 w-4" /> Import from Pinterest
+          <Link2 className="h-4 w-4" /> Import pins
         </Link>
       </div>
     </motion.div>

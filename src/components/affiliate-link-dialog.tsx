@@ -199,7 +199,7 @@ export function AffiliateLinkDialog() {
                     autoFocus
                     value={url}
                     onChange={(e) => setUrl(e.target.value)}
-                    placeholder="Paste any product link here"
+                    placeholder="Paste a product link"
                     className="min-w-0 flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
                   />
                   <button

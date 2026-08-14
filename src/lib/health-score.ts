@@ -232,11 +232,10 @@ export function pointsLabel(points: number): string {
 // explainer so the heuristics are auditable rather than a black box. Built
 // from the exported constants so copy and logic can't drift apart.
 export const SCORE_CRITERIA: Record<SubScoreKey, string> = {
-  pinSeo: `A pin passes when its title is ${PIN_TITLE_MIN}–${PIN_TITLE_MAX} characters, its description ${PIN_DESC_MIN}–${PIN_DESC_MAX}, and neither is generic ("IMG_1234", "Pin 3"…).`,
-  boardStructure:
-    "A board passes when its name is specific (not a placeholder) and it has a description.",
-  profile: `Four checks read from your Pinterest profile — an About bio, a profile photo, a website URL and a connected account — each worth a quarter of the ${maxPointsFor("profile")} pts. You fix these on Pinterest; ShopMyPin points you at them.`,
-  freshness: `A board passes when it has a pin from the last ${FRESH_DAYS} days.`,
+  pinSeo: `Title ${PIN_TITLE_MIN}–${PIN_TITLE_MAX} characters, description ${PIN_DESC_MIN}–${PIN_DESC_MAX}, neither generic ("IMG_1234").`,
+  boardStructure: "A specific name — not a placeholder — plus a description.",
+  profile: `Bio, photo, website and a connected account. A quarter of the ${maxPointsFor("profile")} pts each, all fixed on Pinterest.`,
+  freshness: `A pin on the board in the last ${FRESH_DAYS} days.`,
 };
 
 // Named after the fields as Pinterest labels them, so the sheet's rows and the

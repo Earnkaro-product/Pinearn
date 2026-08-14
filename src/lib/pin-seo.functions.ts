@@ -231,6 +231,90 @@ export async function getPinContext(
   };
 }
 
+/** Context for a pin that does not exist yet.
+ *
+ * The create wizard asks for copy at step 2, before anything is written to the
+ * database, so `getPinContext`'s reads — which all hang off a `pins` row — have
+ * nothing to hang off. This assembles the same shape from what the wizard has
+ * in hand (the uploaded image, whatever the creator has typed, the board they
+ * picked) plus the board-level reads that don't need a pin: the board name,
+ * its existing pin titles, and the creator's niche. Those three are what stop
+ * a new pin's copy from reading like it belongs to nobody's board.
+ *
+ * The two fields with no pre-publish equivalent degrade honestly: `product` is
+ * null because products are attached at step 3, and `rejectedSuggestions` is
+ * empty because a pin with no id has no history. `variant` stands in for the
+ * history count so a "Regenerate" tap rotates to the next angle.
+ */
+async function getDraftContext(
+  supabase: Supabase,
+  userId: string,
+  input: {
+    imageUrl: string;
+    title: string;
+    description: string;
+    collectionId: string | null;
+    variant: number;
+  },
+): Promise<PinContext> {
+  const [boardRes, siblingsRes, storefrontRes, currencyRes] = await Promise.all([
+    input.collectionId
+      ? supabase
+          .from("collections")
+          .select("id, name")
+          .eq("id", input.collectionId)
+          .eq("user_id", userId)
+          .maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
+    input.collectionId
+      ? supabase
+          .from("pins")
+          .select("title")
+          .or(
+            `collection_id.eq.${input.collectionId},origin_collection_id.eq.${input.collectionId}`,
+          )
+          .order("created_at", { ascending: false })
+          .limit(10)
+      : Promise.resolve({ data: [], error: null }),
+    supabase.from("storefronts").select("name, description").eq("user_id", userId).maybeSingle(),
+    // Which market's Trends data to read. The deck takes this from the pin's
+    // tagged product; nothing is tagged yet here, so the creator's own catalogue
+    // is the next best signal for where they sell.
+    supabase
+      .from("storefront_products")
+      .select("currency")
+      .eq("user_id", userId)
+      .not("currency", "is", null)
+      .limit(1)
+      .maybeSingle(),
+  ]);
+  for (const res of [boardRes, siblingsRes, storefrontRes, currencyRes]) {
+    if (res.error) throw new Error(res.error.message);
+  }
+
+  const storefront = storefrontRes.data;
+
+  return {
+    // A synthetic id: nothing persists against it, and the one place the id is
+    // read (the copy stage's failure logging) only needs something stable.
+    pin: {
+      id: `draft:${input.imageUrl}`,
+      title: input.title,
+      description: input.description,
+      imageUrl: input.imageUrl,
+    },
+    board: boardRes.data ? { id: boardRes.data.id, name: boardRes.data.name } : null,
+    siblingPinTitles: (siblingsRes.data ?? []).map((p) => p.title).filter((t) => t.trim() !== ""),
+    niche: storefront
+      ? [storefront.name, storefront.description].filter(Boolean).join(" — ") || null
+      : null,
+    product: null,
+    currency: currencyRes.data?.currency ?? null,
+    rejectedSuggestions: [],
+    priorSuggestionCount: input.variant,
+  };
+}
+
 /* ---------------- Stage 2: subject ---------------- */
 
 /** What the pin is about, from metadata alone. Pure and instant, so there's no
@@ -576,6 +660,103 @@ function summarizePlan(plan: KeywordPlan): KeywordSummary {
   };
 }
 
+/* ---------------- Pipeline core ---------------- */
+
+/** Stages 2-6: subject → trends → plan → copy → score.
+ *
+ * Split out of `runSuggestionPipeline` because the create-pin wizard needs
+ * exactly these stages and structurally cannot have the two either side of
+ * them: there is no pin row yet, so stage 1 has nothing to read and the
+ * persist has no `pin_id` to satisfy its foreign key. Everything that decides
+ * what the copy SAYS lives in here, so the draft path is not a cheaper
+ * imitation of the deck's pipeline — it is the same code with the two
+ * database-bound ends removed.
+ *
+ * `angleSeed` is what `pickAngle` hashes to choose a framing: the deck passes
+ * the pin id, the draft path passes the image URL, so re-drafting the same
+ * image is stable while different images spread across the five angles.
+ */
+async function runCopyPipeline(
+  supabase: Supabase,
+  ctx: PinContext,
+  angleSeed: string,
+  stages: PipelineStage[],
+) {
+  // Country-wide trending needs only the market, so it starts here and is
+  // awaited inside the trends stage. `fetchTrendingNow` never rejects.
+  const trendingNowPromise = fetchTrendingNow(supabase, resolveTrendCountry(ctx.currency));
+
+  /* 2 — subject */
+  const subject = await timed(stages, "subject", async () => {
+    const s = runSubjectStage(ctx);
+    return {
+      value: s,
+      detail: s.seedTerms.length > 0 ? `seeds: ${s.seedTerms.join(", ")}` : "no usable metadata",
+    };
+  });
+
+  /* 3 — trends */
+  const trends = await timed(stages, "trends", async () => {
+    const r = await runTrendsStage(supabase, subject, ctx, trendingNowPromise);
+    return { value: r, detail: r.detail };
+  });
+
+  /* 4 — plan */
+  const plan = await timed(stages, "plan", async () => {
+    const p = buildPlan(subject, trends, ctx);
+    return {
+      value: p,
+      detail: `primary="${p.primary}" +${p.secondary.length} supporting +${p.longTail.length} long-tail, ${p.discarded.length} off-topic dropped`,
+    };
+  });
+
+  // Salting the angle with the prior-suggestion count both spreads the five
+  // framings across a batch (different seeds hash apart) and guarantees a
+  // regenerate-after-reject tries the next framing, not the same one again.
+  const angle = pickAngle(angleSeed, ctx.priorSuggestionCount);
+  const context: PinSuggestionContext = {
+    pin: ctx.pin,
+    board: ctx.board,
+    siblingPinTitles: ctx.siblingPinTitles,
+    niche: ctx.niche,
+    product: ctx.product,
+    rejectedSuggestions: ctx.rejectedSuggestions,
+    angle,
+    subject,
+    plan,
+  };
+
+  /* 5 — copy: the one paid call */
+  const copy = await timed(stages, "copy", async () => {
+    const r = await runCopyStage(context);
+    return {
+      value: r,
+      detail: `${r.detail} (${r.attempts} attempt${r.attempts === 1 ? "" : "s"}, image ${r.sawImage ? "read" : "not read"})`,
+    };
+  });
+
+  /* 6 — score */
+  const score = scoreSuggestion(copy.candidate, plan);
+  // Baseline: what the pin scores as it stands today, judged against the very
+  // same plan, so the two numbers are comparable.
+  const currentScore = scoreSuggestion(
+    { title: ctx.pin.title, description: ctx.pin.description },
+    plan,
+  );
+
+  return {
+    subject,
+    trends,
+    plan,
+    angle,
+    copy,
+    score,
+    currentScore,
+    summary: summarizePlan(plan),
+    status: (copy.issues.length > 0 ? "needs_review" : "pending") as SuggestSeoResult["status"],
+  };
+}
+
 /* ---------------- The pipeline ---------------- */
 
 async function runSuggestionPipeline(
@@ -645,70 +826,15 @@ async function runSuggestionPipeline(
     detail: "loaded",
   }));
 
-  // Country-wide trending needs only the market, so it starts here and is
-  // awaited inside the trends stage. `fetchTrendingNow` never rejects.
-  const trendingNowPromise = fetchTrendingNow(supabase, resolveTrendCountry(ctx.currency));
-
-  /* 2 — subject */
-  const subject = await timed(stages, "subject", async () => {
-    const s = runSubjectStage(ctx);
-    return {
-      value: s,
-      detail: s.seedTerms.length > 0 ? `seeds: ${s.seedTerms.join(", ")}` : "no usable metadata",
-    };
-  });
-
-  /* 3 — trends */
-  const trends = await timed(stages, "trends", async () => {
-    const r = await runTrendsStage(supabase, subject, ctx, trendingNowPromise);
-    return { value: r, detail: r.detail };
-  });
-
-  /* 4 — plan */
-  const plan = await timed(stages, "plan", async () => {
-    const p = buildPlan(subject, trends, ctx);
-    return {
-      value: p,
-      detail: `primary="${p.primary}" +${p.secondary.length} supporting +${p.longTail.length} long-tail, ${p.discarded.length} off-topic dropped`,
-    };
-  });
-
-  // Salting the angle with the prior-suggestion count both spreads the five
-  // framings across a batch (different pin ids hash apart) and guarantees a
-  // regenerate-after-reject tries the next framing, not the same one again.
-  const angle = pickAngle(pinId, ctx.priorSuggestionCount);
-  const context: PinSuggestionContext = {
-    pin: ctx.pin,
-    board: ctx.board,
-    siblingPinTitles: ctx.siblingPinTitles,
-    niche: ctx.niche,
-    product: ctx.product,
-    rejectedSuggestions: ctx.rejectedSuggestions,
-    angle,
-    subject,
-    plan,
-  };
-
-  /* 5 — copy: the one paid call */
-  const copy = await timed(stages, "copy", async () => {
-    const r = await runCopyStage(context);
-    return {
-      value: r,
-      detail: `${r.detail} (${r.attempts} attempt${r.attempts === 1 ? "" : "s"}, image ${r.sawImage ? "read" : "not read"})`,
-    };
-  });
-
-  /* 6 — score + persist */
-  const score = scoreSuggestion(copy.candidate, plan);
-  // Baseline: what the pin scores as it stands today, judged against the very
-  // same plan, so the two numbers are comparable.
-  const currentScore = scoreSuggestion(
-    { title: ctx.pin.title, description: ctx.pin.description },
-    plan,
+  /* 2-6 — subject, trends, plan, copy, score */
+  const { plan, angle, copy, score, currentScore, summary, status, trends } = await runCopyPipeline(
+    supabase,
+    ctx,
+    pinId,
+    stages,
   );
-  const status: SuggestSeoResult["status"] = copy.issues.length > 0 ? "needs_review" : "pending";
-  const summary = summarizePlan(plan);
 
+  /* 7 — persist */
   const suggestionId = await timed(stages, "persist", async () => ({
     value: await insertSuggestion(
       supabase,
@@ -773,6 +899,103 @@ export const suggestPinSeo = createServerFn({ method: "POST" })
   .handler(async ({ context, data }) => {
     const { supabase, userId } = context;
     return runSuggestionPipeline(supabase, userId, data.pinId, { force: data.force });
+  });
+
+/** What a draft run returns. Deliberately a near-subset of `SuggestSeoResult`
+ * rather than its own shape — the two paths run the same stages, so the fields
+ * that survive without a pin row keep their exact names and meanings. Gone:
+ * `pinId`/`suggestionId`/`reused`, all three of which only exist because the
+ * deck persists and de-duplicates. */
+export type DraftSeoResult = {
+  title: string;
+  description: string;
+  angle_used: SeoAngle | null;
+  status: "pending" | "needs_review";
+  seoScore: number;
+  seoBreakdown: ReturnType<typeof scoreSuggestion>["breakdown"] | null;
+  /** The same score applied to whatever the creator has typed so far, so the UI
+   * can decline to push a rewrite that is worse than their own words. */
+  currentScore: number;
+  keywords: KeywordSummary | null;
+  sawImage: boolean;
+  imageSubject: string | null;
+  keywordsFitImage: boolean;
+  issues: string[];
+  stages: PipelineStage[];
+};
+
+/** POST — real SEO copy for a pin that hasn't been created yet.
+ *
+ * Same six stages as `suggestPinSeo`, minus the two that need a `pins` row:
+ * there is no 24h dedup (nothing to dedup against) and no persist (no id to
+ * write). The client is expected to call this on demand, not on every
+ * keystroke — it costs one model call, exactly like the deck.
+ */
+export const draftPinSeo = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .validator(
+    (d: {
+      imageUrl: string;
+      title?: string;
+      description?: string;
+      collectionId?: string;
+      variant?: number;
+    }) =>
+      z
+        .object({
+          imageUrl: z.string().url(),
+          title: z.string().max(500).optional(),
+          description: z.string().max(2000).optional(),
+          collectionId: z.string().uuid().optional(),
+          // Rotates the angle on a regenerate. Capped so a client cannot drive
+          // an unbounded value into the angle hash.
+          variant: z.number().int().min(0).max(50).optional(),
+        })
+        .parse(d),
+  )
+  .handler(async ({ context, data }): Promise<DraftSeoResult> => {
+    const { supabase, userId } = context;
+    const stages: PipelineStage[] = [];
+    const startedAt = Date.now();
+
+    const ctx = await timed(stages, "context", async () => ({
+      value: await getDraftContext(supabase, userId, {
+        imageUrl: data.imageUrl,
+        title: data.title ?? "",
+        description: data.description ?? "",
+        collectionId: data.collectionId ?? null,
+        variant: data.variant ?? 0,
+      }),
+      detail: "draft",
+    }));
+
+    const { plan, angle, copy, score, currentScore, summary, status, trends } =
+      await runCopyPipeline(supabase, ctx, data.imageUrl, stages);
+
+    logNet("pin_seo.draft", {
+      status,
+      score: score.total,
+      primary: plan.primary,
+      trendTerms: trends.terms.length,
+      sawImage: copy.sawImage,
+      durationMs: Date.now() - startedAt,
+    });
+
+    return {
+      title: copy.candidate.title,
+      description: copy.candidate.description,
+      angle_used: angle,
+      status,
+      seoScore: score.total,
+      seoBreakdown: score.breakdown,
+      currentScore: currentScore.total,
+      keywords: summary,
+      sawImage: copy.sawImage,
+      imageSubject: observedSubjectOf(copy.candidate),
+      keywordsFitImage: copy.candidate.fitsKeywords !== false,
+      issues: copy.issues,
+      stages,
+    };
   });
 
 /** POST — record the creator's decision on a suggestion.

@@ -1,5 +1,5 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -16,13 +16,14 @@ import {
   ArrowRight,
   Grip,
   Image as ImageIcon,
+  Search,
 } from "lucide-react";
 import { AnimatePresence, motion, Reorder } from "framer-motion";
 import { useScrollMorph } from "@/hooks/use-scroll-morph";
 import { PinScanOverlay } from "@/components/pin-scan-overlay";
 import { useScanPhase } from "@/hooks/use-scan-phase";
 import { CollectionAddFlow, AddFromCollectionButton } from "@/components/collection-picker";
-import { suggestPinTitle, suggestPinDescription } from "@/lib/health-score";
+import { draftPinSeo, type DraftSeoResult } from "@/lib/pin-seo.functions";
 import { toast } from "sonner";
 import {
   SuggestionCard,
@@ -36,7 +37,12 @@ import { AppShell } from "@/components/app-shell";
 import { supabase } from "@/integrations/supabase/client";
 import { hostBrand, estimateCommissionPct } from "@/lib/brands";
 import { getFriendlyMessage } from "@/lib/friendly-error";
-import { createPinterestPin, type CkResult, type RawVisualMatch } from "@/lib/pinterest.functions";
+import {
+  createPinterestBoard,
+  createPinterestPin,
+  type CkResult,
+  type RawVisualMatch,
+} from "@/lib/pinterest.functions";
 import {
   CATEGORY_PILLS,
   TagTab,
@@ -47,6 +53,11 @@ import {
 } from "./pins";
 
 type PinterestBoard = { id: string; name: string };
+
+// Cover thumbnails + pin count per board (collection id) — what turns the
+// board picker from a bare <select> into the same cover-collage cards the
+// collection picker uses.
+type BoardMeta = Record<string, { covers: string[]; count: number }>;
 
 export const Route = createFileRoute("/_authenticated/pins_/create")({
   // The Health Score "Add Fresh Pins" action deep-links here pre-filtered to
@@ -63,6 +74,14 @@ const STEP_LABELS: Record<Step, string> = {
   1: "Upload image",
   2: "Add details",
   3: "Pick products",
+  4: "Publish",
+};
+
+// One-word versions that fit under the stepper dots.
+const STEP_SHORT_LABELS: Record<Step, string> = {
+  1: "Image",
+  2: "Details",
+  3: "Products",
   4: "Publish",
 };
 
@@ -112,6 +131,30 @@ function CreatePinWizard() {
     const linked = boardFromSearch && boards.find((b) => b.id === boardFromSearch);
     setBoardId(linked ? linked.id : boards[0].id);
   }, [boards, boardId, boardFromSearch]);
+
+  // Up to three recent pin images per board for its cover collage, plus the
+  // board's total pin count — purely presentational, so one cheap query.
+  const { data: boardMeta = {} } = useQuery({
+    queryKey: ["board-pin-covers"],
+    queryFn: async () => {
+      const { data: userRes } = await supabase.auth.getUser();
+      const userId = userRes.user?.id;
+      if (!userId) return {} as BoardMeta;
+      const { data } = await supabase
+        .from("pins")
+        .select("collection_id,image_url,created_at")
+        .eq("user_id", userId)
+        .order("created_at", { ascending: false });
+      const meta: BoardMeta = {};
+      for (const p of data ?? []) {
+        if (!p.collection_id) continue;
+        const m = (meta[p.collection_id] ??= { covers: [], count: 0 });
+        m.count++;
+        if (p.image_url && m.covers.length < 3) m.covers.push(p.image_url);
+      }
+      return meta;
+    },
+  });
 
   const { data: storefronts = [] } = useQuery({
     queryKey: ["storefronts"],
@@ -262,27 +305,38 @@ function CreatePinWizard() {
         }}
       />
 
-      {/* Stepper */}
-      <div className="mx-auto mb-6 flex max-w-2xl items-center gap-2">
+      {/* Stepper — labelled dots so each step is named, not just numbered. */}
+      <div className="mx-auto mb-6 flex max-w-2xl items-start gap-2">
         {([1, 2, 3, 4] as Step[]).map((n, i) => {
           const done = step > n;
           const active = step === n;
           return (
-            <div key={n} className="flex flex-1 items-center gap-2">
-              <div
-                className={`grid h-8 w-8 shrink-0 place-items-center rounded-full text-xs font-bold ring-2 transition ${
-                  done
-                    ? "bg-primary text-primary-foreground ring-primary"
-                    : active
-                      ? "bg-primary/10 text-primary ring-primary"
-                      : "bg-surface-2 text-muted-foreground ring-border"
-                }`}
-              >
-                {done ? <Check className="h-4 w-4" /> : n}
+            <div key={n} className={`flex items-start gap-2 ${i < 3 ? "flex-1" : ""}`}>
+              <div className="flex flex-col items-center gap-1">
+                <div
+                  className={`grid h-8 w-8 shrink-0 place-items-center rounded-full text-xs font-bold ring-2 transition ${
+                    done
+                      ? "bg-primary text-primary-foreground ring-primary"
+                      : active
+                        ? "bg-primary/10 text-primary ring-primary"
+                        : "bg-surface-2 text-muted-foreground ring-border"
+                  }`}
+                >
+                  {done ? <Check className="h-4 w-4" /> : n}
+                </div>
+                <span
+                  className={`text-mini font-semibold ${
+                    active ? "text-primary" : done ? "text-foreground" : "text-muted-foreground"
+                  }`}
+                >
+                  {STEP_SHORT_LABELS[n]}
+                </span>
               </div>
               {i < 3 && (
                 <div
-                  className={`h-0.5 flex-1 rounded transition ${done ? "bg-primary" : "bg-border"}`}
+                  className={`mt-[15px] h-0.5 flex-1 rounded transition ${
+                    done ? "bg-primary" : "bg-border"
+                  }`}
                 />
               )}
             </div>
@@ -312,6 +366,7 @@ function CreatePinWizard() {
             boards={boards}
             boardId={boardId}
             setBoardId={setBoardId}
+            boardMeta={boardMeta}
           />
         )}
         {step === 3 && (
@@ -342,6 +397,7 @@ function CreatePinWizard() {
             boards={boards}
             boardId={boardId}
             setBoardId={setBoardId}
+            boardMeta={boardMeta}
           />
         )}
       </div>
@@ -353,11 +409,11 @@ function CreatePinWizard() {
           className="fixed inset-x-0 bottom-0 z-40 border-t border-border/60 bg-background/95 px-5 py-3 backdrop-blur-xl"
           style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}
         >
-          <div className="mx-auto flex max-w-2xl items-center justify-end gap-3">
+          <div className="mx-auto flex max-w-2xl items-center gap-3">
             {step < 4 ? (
               <button
                 onClick={next}
-                className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground shadow-glow transition active:scale-[0.98]"
+                className="inline-flex w-full items-center justify-center gap-1.5 rounded-2xl bg-gradient-primary px-4 py-3.5 text-sm font-bold text-primary-foreground shadow-glow transition active:scale-[0.98]"
               >
                 Next <ChevronRight className="h-4 w-4" />
               </button>
@@ -365,7 +421,7 @@ function CreatePinWizard() {
               <button
                 onClick={() => publish.mutate()}
                 disabled={publish.isPending || !boardId}
-                className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground shadow-glow transition active:scale-[0.98] disabled:opacity-70"
+                className="inline-flex w-full items-center justify-center gap-1.5 rounded-2xl bg-gradient-primary px-4 py-3.5 text-sm font-bold text-primary-foreground shadow-glow transition active:scale-[0.98] disabled:opacity-70"
               >
                 {publish.isPending ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -457,6 +513,7 @@ function StepDetails({
   boards,
   boardId,
   setBoardId,
+  boardMeta,
 }: {
   imageUrl: string;
   title: string;
@@ -469,6 +526,7 @@ function StepDetails({
   boards: PinterestBoard[];
   boardId: string;
   setBoardId: (id: string) => void;
+  boardMeta: BoardMeta;
 }) {
   const [imgLoaded, setImgLoaded] = useState(false);
   const descInputRef = useRef<HTMLTextAreaElement>(null);
@@ -477,31 +535,58 @@ function StepDetails({
   const [titleUsed, setTitleUsed] = useState(false);
   const [descUsed, setDescUsed] = useState(false);
 
-  // Reuse the same heuristic rewrite the Boost flow uses. A synthetic pin
-  // (seeded by the image URL for stable suffix rotation) feeds the helpers;
-  // with no board context they fall back to their generic anchors.
-  const pinLike = useMemo(
-    () => ({
-      id: imageUrl || "new-pin",
-      title,
-      description,
-      image_url: imageUrl || null,
-      collection_id: null,
-      created_at: "",
-    }),
-    [imageUrl, title, description],
-  );
-  const titleSuggestion = useMemo(() => suggestPinTitle(pinLike, null), [pinLike]);
-  const descSuggestion = useMemo(() => suggestPinDescription(pinLike, null), [pinLike]);
+  // The real SEO pipeline — the same six stages the Boost deck runs (subject →
+  // Pinterest Trends → keyword plan → one vision call → score), just without
+  // the pin row that doesn't exist yet. What it replaced was a rotation of four
+  // canned suffixes over the literal anchor "Trending Picks", which is why
+  // every new pin used to be offered the same copy.
+  //
+  // `variant` bumps on Regenerate and rotates the writing angle, so a second
+  // ask is a genuinely different framing rather than the same roll again.
+  const [variant, setVariant] = useState(0);
+  const runDraft = useServerFn(draftPinSeo);
+
+  // Keyed on the image, board and variant only. Title and description are sent
+  // as context but deliberately kept OUT of the key: this costs a model call,
+  // and re-running it on every keystroke would bill the creator for typing.
+  const draft = useQuery({
+    queryKey: ["pin-seo-draft", imageUrl, boardId, variant],
+    queryFn: () =>
+      runDraft({
+        data: {
+          imageUrl,
+          title: title.trim() || undefined,
+          description: description.trim() || undefined,
+          collectionId: boardId || undefined,
+          variant,
+        },
+      }),
+    enabled: !!imageUrl,
+    staleTime: Infinity,
+    retry: false,
+    refetchOnWindowFocus: false,
+  });
+
+  const titleSuggestion = draft.data?.title ?? "";
+  const descSuggestion = draft.data?.description ?? "";
+
+  // Switching board re-runs the SEO draft (boardId is in the query key) with
+  // the new board's context — un-dismiss the suggestion cards so the re-
+  // targeted copy is actually offered, even if an earlier one was accepted.
+  useEffect(() => {
+    setTitleUsed(false);
+    setDescUsed(false);
+  }, [boardId]);
 
   // Only offer a suggestion when it actually improves on what's typed.
-  const showTitleSug = !titleUsed && titleSuggestion.trim() !== title.trim();
-  const showDescSug = !descUsed && descSuggestion.trim() !== description.trim();
+  const showTitleSug = !titleUsed && !!titleSuggestion && titleSuggestion.trim() !== title.trim();
+  const showDescSug = !descUsed && !!descSuggestion && descSuggestion.trim() !== description.trim();
 
   return (
-    <div className="space-y-5">
-      <h2 className="font-display text-xl font-bold">Pin details</h2>
-      <div className="flex gap-4">
+    <div className="space-y-6">
+      {/* Hero — the pin being described stays visible on every screen size,
+          with the live SEO-draft status beside it. */}
+      <div className="flex items-start gap-4">
         {imageUrl && (
           <img
             key={imageUrl}
@@ -509,100 +594,521 @@ function StepDetails({
             alt=""
             loading="lazy"
             onLoad={() => setImgLoaded(true)}
-            className={`hidden h-40 w-32 shrink-0 rounded-2xl object-cover opacity-0 ring-1 ring-border transition-opacity duration-300 sm:block ${
+            className={`h-28 w-[5.5rem] shrink-0 rounded-2xl object-cover opacity-0 shadow-sm ring-1 ring-border transition-opacity duration-300 ${
               imgLoaded ? "opacity-100" : ""
             }`}
           />
         )}
-        <div className="flex-1 space-y-4">
-          <div>
-            <Field label="Title" hint={`${title.length}/100`}>
-              <input
-                ref={titleInputRef}
-                value={title}
-                onChange={(e) => {
-                  setTitle(e.target.value.slice(0, 100));
-                  if (titleError) setTitleError(null);
+        <div className="min-w-0 flex-1">
+          <h2 className="font-display text-xl font-bold">Pin details</h2>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            A keyword-rich title and description help Pinterest show your pin to more people.
+          </p>
+          {imageUrl && (
+            <div className="mt-2.5">
+              <SeoDraftStatus
+                query={draft}
+                onRegenerate={() => {
+                  setVariant((v) => v + 1);
                   setTitleUsed(false);
-                }}
-                placeholder="Add a catchy title"
-                className="w-full rounded-xl border border-border bg-background px-4 py-3 text-sm outline-none focus:border-primary"
-              />
-            </Field>
-            {titleError && (
-              <p className="mt-1 text-xs font-medium text-destructive">{titleError}</p>
-            )}
-            {showTitleSug && (
-              <AiSuggestion
-                text={titleSuggestion}
-                onUse={() => {
-                  setTitle(titleSuggestion.slice(0, 100));
-                  setTitleError(null);
-                  setTitleUsed(true);
-                  titleInputRef.current?.focus();
-                }}
-              />
-            )}
-          </div>
-          <div>
-            <Field label="Description" hint={`${description.length}/500`}>
-              <textarea
-                ref={descInputRef}
-                value={description}
-                onChange={(e) => {
-                  setDescription(e.target.value.slice(0, 500));
                   setDescUsed(false);
                 }}
-                placeholder="Tell people about your pin"
-                rows={4}
-                className="w-full resize-none rounded-xl border border-border bg-background px-4 py-3 text-sm outline-none focus:border-primary"
               />
-            </Field>
-            {showDescSug && (
-              <AiSuggestion
-                text={descSuggestion}
-                onUse={() => {
-                  setDescription(descSuggestion.slice(0, 500));
-                  setDescUsed(true);
-                  descInputRef.current?.focus();
-                }}
-              />
-            )}
-          </div>
-
-          {/* Pick the Pinterest board here, alongside the details — the
-              review step shows the same picker, pre-filled with this choice. */}
-          <div>
-            <Field label="Pinterest board">
-              {boards.length === 0 ? (
-                <div className="space-y-2 rounded-xl border border-dashed border-border bg-surface-2/40 p-3">
-                  <p className="text-xs text-muted-foreground">
-                    No synced boards yet — sync your Pinterest boards from Storefront first.
-                  </p>
-                  <Link
-                    to="/storefront"
-                    className="inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline"
-                  >
-                    Go to Storefront <ChevronRight className="h-3 w-3" />
-                  </Link>
-                </div>
-              ) : (
-                <select
-                  value={boardId}
-                  onChange={(e) => setBoardId(e.target.value)}
-                  className="w-full rounded-xl border border-border bg-background px-4 py-3 text-sm outline-none focus:border-primary"
-                >
-                  {boards.map((b) => (
-                    <option key={b.id} value={b.id}>
-                      {b.name}
-                    </option>
-                  ))}
-                </select>
-              )}
-            </Field>
-          </div>
+            </div>
+          )}
         </div>
       </div>
+
+      {/* Board FIRST — the SEO draft targets the chosen board's keywords, so
+          picking it before the copy keeps title/description aligned with it.
+          The review step shows the same picker, pre-filled with this choice. */}
+      <BoardPicker boards={boards} boardId={boardId} setBoardId={setBoardId} meta={boardMeta} />
+
+      <div>
+        <Field label="Title" hint={`${title.length}/100`}>
+          <input
+            ref={titleInputRef}
+            value={title}
+            onChange={(e) => {
+              setTitle(e.target.value.slice(0, 100));
+              if (titleError) setTitleError(null);
+              setTitleUsed(false);
+            }}
+            placeholder="Add a catchy title"
+            className={`w-full rounded-2xl border bg-background px-4 py-3.5 text-sm shadow-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20 ${
+              titleError ? "border-destructive" : "border-border"
+            }`}
+          />
+        </Field>
+        {titleError && <p className="mt-1 text-xs font-medium text-destructive">{titleError}</p>}
+        {showTitleSug && (
+          <AiSuggestion
+            text={titleSuggestion}
+            onUse={() => {
+              setTitle(titleSuggestion.slice(0, 100));
+              setTitleError(null);
+              setTitleUsed(true);
+              titleInputRef.current?.focus();
+            }}
+          />
+        )}
+      </div>
+
+      <div>
+        <Field label="Description" hint={`${description.length}/500`}>
+          <textarea
+            ref={descInputRef}
+            value={description}
+            onChange={(e) => {
+              setDescription(e.target.value.slice(0, 500));
+              setDescUsed(false);
+            }}
+            placeholder="Tell people about your pin"
+            rows={4}
+            className="w-full resize-none rounded-2xl border border-border bg-background px-4 py-3.5 text-sm shadow-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20"
+          />
+        </Field>
+        {showDescSug && (
+          <AiSuggestion
+            text={descSuggestion}
+            onUse={() => {
+              setDescription(descSuggestion.slice(0, 500));
+              setDescUsed(true);
+              descInputRef.current?.focus();
+            }}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Visual Pinterest-board picker — every board as a cover-collage card (the
+ * same look as the collection picker's grid) instead of a bare <select>, with
+ * a "New board" action that creates a real board on Pinterest and selects it.
+ * Used by both the details step and the review step so the choice looks the
+ * same wherever it's made.
+ */
+function BoardPicker({
+  boards,
+  boardId,
+  setBoardId,
+  meta,
+  allowChange = true,
+}: {
+  boards: PinterestBoard[];
+  boardId: string;
+  setBoardId: (id: string) => void;
+  meta: BoardMeta;
+  allowChange?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const selected = boards.find((b) => b.id === boardId) ?? null;
+  const selectedCover = selected ? (meta[selected.id]?.covers[0] ?? null) : null;
+  const selectedCount = selected ? (meta[selected.id]?.count ?? 0) : 0;
+
+  return (
+    <div>
+      <div className="mb-2 flex items-center justify-between">
+        <span className="text-sm font-medium">Pinterest board</span>
+      </div>
+
+      {selected ? (
+        /* Board already chosen — just show it, with one obvious way out. */
+        <div className="flex items-center gap-3 rounded-2xl border border-border bg-surface p-2.5 shadow-sm">
+          <div className="h-14 w-14 shrink-0 overflow-hidden rounded-xl bg-surface-2 ring-1 ring-border/60">
+            {selectedCover ? (
+              <img
+                src={selectedCover}
+                alt=""
+                loading="lazy"
+                className="h-full w-full object-cover"
+              />
+            ) : (
+              <div className="grid h-full w-full place-items-center text-muted-foreground/40">
+                <ImageIcon className="h-5 w-5" />
+              </div>
+            )}
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm font-semibold">{selected.name}</p>
+            <p className="text-mini text-muted-foreground">
+              {selectedCount} pin{selectedCount === 1 ? "" : "s"} · your pin publishes here
+            </p>
+          </div>
+          {allowChange && (
+            <button
+              type="button"
+              onClick={() => setOpen(true)}
+              className="shrink-0 rounded-full border border-border px-3.5 py-2 text-xs font-bold text-primary transition hover:bg-primary/10 active:scale-[0.97]"
+            >
+              Change
+            </button>
+          )}
+        </div>
+      ) : (
+        <>
+          <button
+            type="button"
+            onClick={() => setOpen(true)}
+            className="flex w-full items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-border bg-surface-2/40 px-4 py-4 text-sm font-semibold text-primary transition hover:border-primary hover:bg-primary/5"
+          >
+            <Plus className="h-4 w-4" /> Choose or create a board
+          </button>
+          {boards.length === 0 && (
+            <div className="mt-2 space-y-1.5 px-0.5">
+              <p className="text-xs text-muted-foreground">
+                You can also sync your existing Pinterest boards from Storefront.
+              </p>
+              <Link
+                to="/storefront"
+                className="inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline"
+              >
+                Go to Storefront <ChevronRight className="h-3 w-3" />
+              </Link>
+            </div>
+          )}
+        </>
+      )}
+
+      <AnimatePresence>
+        {open && (
+          <BoardPickerSheet
+            boards={boards}
+            boardId={boardId}
+            meta={meta}
+            onPick={(id) => {
+              setBoardId(id);
+              setOpen(false);
+            }}
+            onClose={() => setOpen(false)}
+          />
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+/** The "change board" box — search, every board as a cover-collage card, and
+ * New board as the first tile. Picking (or creating) a board closes it. */
+function BoardPickerSheet({
+  boards,
+  boardId,
+  meta,
+  onPick,
+  onClose,
+}: {
+  boards: PinterestBoard[];
+  boardId: string;
+  meta: BoardMeta;
+  onPick: (id: string) => void;
+  onClose: () => void;
+}) {
+  const qc = useQueryClient();
+  const [creating, setCreating] = useState(false);
+  const [name, setName] = useState("");
+  const [query, setQuery] = useState("");
+  const runCreateBoard = useServerFn(createPinterestBoard);
+
+  const q = query.trim().toLowerCase();
+  const visibleBoards = q ? boards.filter((b) => b.name.toLowerCase().includes(q)) : boards;
+
+  const createBoard = useMutation({
+    mutationFn: async () => {
+      const trimmed = name.trim();
+      if (!trimmed) throw new Error("Give the board a name first");
+      return runCreateBoard({ data: { name: trimmed } });
+    },
+    onSuccess: (b) => {
+      qc.invalidateQueries({ queryKey: ["pinterest-boards"] });
+      qc.invalidateQueries({ queryKey: ["board-pin-covers"] });
+      toast.success(`Board "${b.name}" created on Pinterest`);
+      onPick(b.id);
+    },
+    onError: (e: Error) => toast.error(getFriendlyMessage(e)),
+  });
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.2 }}
+      className="fixed inset-0 z-[55] flex items-end justify-center bg-background/60 backdrop-blur-sm sm:items-center sm:p-4"
+      onClick={onClose}
+    >
+      <motion.div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Choose a board"
+        onClick={(e) => e.stopPropagation()}
+        initial={{ y: 40, opacity: 0.6 }}
+        animate={{ y: 0, opacity: 1 }}
+        exit={{ y: 40, opacity: 0 }}
+        transition={{ type: "spring", stiffness: 380, damping: 34 }}
+        className="flex max-h-[85vh] w-full max-w-2xl flex-col rounded-t-3xl border border-border bg-surface p-5 shadow-elevate sm:rounded-3xl"
+        style={{ paddingBottom: "max(1.25rem, env(safe-area-inset-bottom))" }}
+      >
+        <div className="mx-auto mb-4 h-1.5 w-10 shrink-0 rounded-full bg-border" />
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h3 className="font-display text-lg font-bold">Choose a board</h3>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              Your pin will be published to this Pinterest board.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-muted-foreground transition hover:bg-surface-2 hover:text-foreground"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="mt-4 flex items-center gap-2 rounded-2xl border border-border bg-background px-3 py-2.5 shadow-sm transition focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/20">
+          <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search your boards"
+            className="w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground/60"
+          />
+          {query && (
+            <button
+              type="button"
+              onClick={() => setQuery("")}
+              aria-label="Clear search"
+              className="grid h-6 w-6 shrink-0 place-items-center rounded-full text-muted-foreground transition hover:bg-surface-2 hover:text-foreground"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
+        </div>
+
+        {creating && (
+          <div className="mt-3 rounded-2xl border border-border bg-background p-3.5 shadow-sm">
+            <label className="text-mini font-semibold uppercase tracking-wide text-muted-foreground">
+              Board name
+            </label>
+            <input
+              autoFocus
+              value={name}
+              onChange={(e) => setName(e.target.value.slice(0, 50))}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && name.trim() && !createBoard.isPending)
+                  createBoard.mutate();
+              }}
+              placeholder="e.g. Diwali outfit ideas"
+              className="mt-1.5 w-full rounded-xl border border-input bg-background px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-ring"
+            />
+            <p className="mt-1.5 text-mini text-muted-foreground">
+              Creates a real board on your Pinterest account.
+            </p>
+            <div className="mt-2.5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setCreating(false);
+                  setName("");
+                }}
+                className="rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground hover:text-foreground"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={!name.trim() || createBoard.isPending}
+                onClick={() => createBoard.mutate()}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-gradient-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-glow disabled:opacity-60"
+              >
+                {createBoard.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                Create board
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div className="-mx-1 mt-4 min-h-0 flex-1 overflow-y-auto px-1 pb-1">
+          <div className="grid grid-cols-3 gap-2.5 sm:grid-cols-4">
+            <NewBoardTile
+              onClick={() => {
+                setCreating(true);
+                // Searched for a board that doesn't exist → that search is
+                // almost certainly the name they want, so start the form with it.
+                if (q && visibleBoards.length === 0) setName(query.trim());
+              }}
+            />
+            {visibleBoards.map((b) => (
+              <BoardCard
+                key={b.id}
+                board={b}
+                covers={meta[b.id]?.covers ?? []}
+                count={meta[b.id]?.count ?? 0}
+                selected={b.id === boardId}
+                onSelect={() => onPick(b.id)}
+              />
+            ))}
+          </div>
+
+          {q && visibleBoards.length === 0 && boards.length > 0 && (
+            <p className="mt-2.5 text-xs text-muted-foreground">
+              No boards match "<span className="font-semibold">{query.trim()}</span>" — tap{" "}
+              <span className="font-semibold text-primary">New board</span> to create it.
+            </p>
+          )}
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+/** The grid's first tile — same footprint as a board card, opens the
+ * create-board form. */
+function NewBoardTile({ onClick }: { onClick: () => void }) {
+  return (
+    <button type="button" onClick={onClick} className="group text-left">
+      <div className="grid aspect-[4/3] place-items-center rounded-2xl border-2 border-dashed border-border bg-surface-2/40 transition group-hover:border-primary group-hover:bg-primary/5">
+        <div className="grid h-9 w-9 place-items-center rounded-full bg-primary/10 text-primary transition group-hover:bg-primary group-hover:text-primary-foreground">
+          <Plus className="h-5 w-5" />
+        </div>
+      </div>
+      <div className="px-0.5 pt-1.5">
+        <p className="truncate text-xs font-semibold text-primary">New board</p>
+        <p className="text-mini text-muted-foreground">On Pinterest</p>
+      </div>
+    </button>
+  );
+}
+
+/** One board as a Pinterest-style cover collage (one big + two small pin
+ * images) with its name and pin count — selected = primary ring + check. */
+function BoardCard({
+  board,
+  covers,
+  count,
+  selected,
+  onSelect,
+}: {
+  board: PinterestBoard;
+  covers: string[];
+  count: number;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const cells = [covers[0] ?? null, covers[1] ?? null, covers[2] ?? null];
+  return (
+    <button type="button" onClick={onSelect} aria-pressed={selected} className="group text-left">
+      <div
+        className={`relative grid aspect-[4/3] grid-cols-3 grid-rows-2 gap-0.5 overflow-hidden rounded-2xl bg-surface transition ${
+          selected
+            ? "ring-2 ring-primary"
+            : "ring-1 ring-border/60 group-hover:shadow-elevate group-hover:ring-primary/40"
+        }`}
+      >
+        <div className="relative col-span-2 row-span-2 overflow-hidden bg-surface-2">
+          {cells[0] ? (
+            <img src={cells[0]} alt="" loading="lazy" className="h-full w-full object-cover" />
+          ) : (
+            <div className="grid h-full w-full place-items-center text-muted-foreground/40">
+              <ImageIcon className="h-5 w-5" />
+            </div>
+          )}
+        </div>
+        {cells.slice(1).map((src, i) => (
+          <div key={i} className="relative overflow-hidden bg-surface-2">
+            {src ? (
+              <img src={src} alt="" loading="lazy" className="h-full w-full object-cover" />
+            ) : (
+              <div className="grid h-full w-full place-items-center text-muted-foreground/30">
+                <ImageIcon className="h-3.5 w-3.5" />
+              </div>
+            )}
+          </div>
+        ))}
+        {selected && (
+          <span className="absolute right-1.5 top-1.5 grid h-6 w-6 place-items-center rounded-full bg-primary text-primary-foreground shadow-sm">
+            <Check className="h-3.5 w-3.5" strokeWidth={3} />
+          </span>
+        )}
+      </div>
+      <div className="px-0.5 pt-1.5">
+        <p className={`truncate text-xs font-semibold ${selected ? "text-primary" : ""}`}>
+          {board.name}
+        </p>
+        <p className="text-mini text-muted-foreground">
+          {count} pin{count === 1 ? "" : "s"}
+        </p>
+      </div>
+    </button>
+  );
+}
+
+/** The draft run's own state: what it's doing, what it targeted, how to ask
+ * again. This exists because the copy below it is no longer free or instant —
+ * it is a real keyword-planned model call, and a creator who can't see that is
+ * left staring at two empty fields wondering if the app is broken. Showing the
+ * keyword it aimed at is the same evidence the Boost deck gives before asking
+ * anyone to accept a rewrite. */
+function SeoDraftStatus({
+  query,
+  onRegenerate,
+}: {
+  query: UseQueryResult<DraftSeoResult>;
+  onRegenerate: () => void;
+}) {
+  if (query.isPending) {
+    return (
+      <div className="flex items-center gap-2 rounded-xl border border-primary/25 bg-primary/5 px-3 py-2.5">
+        <Loader2 className="h-4 w-4 shrink-0 animate-spin text-primary" />
+        <p className="text-xs font-medium text-foreground/80">
+          Writing SEO copy from your image and Pinterest Trends…
+        </p>
+      </div>
+    );
+  }
+
+  if (query.isError) {
+    return (
+      <div className="flex items-center gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2.5">
+        <p className="min-w-0 flex-1 text-xs font-medium text-amber-700">
+          Couldn't write SEO copy. You can still write your own.
+        </p>
+        <button
+          type="button"
+          onClick={onRegenerate}
+          className="shrink-0 rounded-lg bg-amber-600 px-2.5 py-1 text-xs font-semibold text-white transition hover:opacity-90"
+        >
+          Try again
+        </button>
+      </div>
+    );
+  }
+
+  const kw = query.data?.keywords;
+  return (
+    <div className="flex items-center gap-2 rounded-xl border border-border bg-surface px-3 py-2.5">
+      <Sparkles className="h-4 w-4 shrink-0 text-primary" />
+      <p className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+        {kw?.primary ? (
+          <>
+            Targeting <span className="font-semibold text-foreground">{kw.primary}</span>
+            {kw.secondary.length > 0 && ` +${kw.secondary.length} supporting`}
+            {kw.hasTrendData && ` · live ${kw.country} trends`}
+          </>
+        ) : (
+          "SEO copy ready"
+        )}
+      </p>
+      <button
+        type="button"
+        onClick={onRegenerate}
+        className="shrink-0 rounded-lg border border-border px-2.5 py-1 text-xs font-semibold text-muted-foreground transition hover:text-foreground"
+      >
+        Regenerate
+      </button>
     </div>
   );
 }
@@ -1422,6 +1928,7 @@ function StepReview({
   boards,
   boardId,
   setBoardId,
+  boardMeta,
 }: {
   imageUrl: string;
   title: string;
@@ -1431,40 +1938,20 @@ function StepReview({
   boards: PinterestBoard[];
   boardId: string;
   setBoardId: (id: string) => void;
+  boardMeta: BoardMeta;
 }) {
   const [imgLoaded, setImgLoaded] = useState(false);
   return (
     <div className="space-y-5">
       <h2 className="font-display text-xl font-bold">Ready to publish</h2>
 
-      <div>
-        <label className="mb-1.5 block text-sm font-medium">Pinterest board</label>
-        {boards.length === 0 ? (
-          <div className="space-y-2 rounded-xl border border-dashed border-border bg-surface-2/40 p-3">
-            <p className="text-xs text-muted-foreground">
-              No synced boards yet — sync your Pinterest boards from Storefront first.
-            </p>
-            <Link
-              to="/storefront"
-              className="inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline"
-            >
-              Go to Storefront <ChevronRight className="h-3 w-3" />
-            </Link>
-          </div>
-        ) : (
-          <select
-            value={boardId}
-            onChange={(e) => setBoardId(e.target.value)}
-            className="w-full rounded-xl border border-border bg-background px-4 py-3 text-sm outline-none focus:border-primary"
-          >
-            {boards.map((b) => (
-              <option key={b.id} value={b.id}>
-                {b.name}
-              </option>
-            ))}
-          </select>
-        )}
-      </div>
+      <BoardPicker
+        boards={boards}
+        boardId={boardId}
+        setBoardId={setBoardId}
+        meta={boardMeta}
+        allowChange={false}
+      />
 
       <div className="overflow-hidden rounded-3xl border border-border bg-surface">
         {imageUrl && (
