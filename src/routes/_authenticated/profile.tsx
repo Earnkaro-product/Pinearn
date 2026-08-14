@@ -254,7 +254,7 @@ function ProfilePage() {
                 ) : (
                   <Save className="h-4 w-4" />
                 )}
-                Save changes
+                Save
               </button>
             </div>
           )}
@@ -263,19 +263,13 @@ function ProfilePage() {
         {/* Account panel */}
         <Card>
           <CardHeader title="Account" />
+          {/* No "Pinterest" row here — the badge under the avatar and the
+              username field above are already two statements of the same
+              connection state; a third made the page read as a form and a
+              report of that form. */}
           <ul className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
             <Row k="Pins created" v={fmt(pinCount ?? 0)} />
             <Row k="Storefronts" v={fmt(storefrontCount ?? 0)} />
-            <Row
-              k="Pinterest"
-              v={
-                connected ? (
-                  <span className="text-accent">@{pinterestUsername || "connected"}</span>
-                ) : (
-                  <span className="text-muted-foreground">Not connected</span>
-                )
-              }
-            />
             <Row k="Plan" v="Creator (Free)" />
           </ul>
         </Card>

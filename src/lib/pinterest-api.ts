@@ -305,6 +305,21 @@ export async function listBoards(accessToken: string): Promise<PinterestBoard[]>
   return boards;
 }
 
+export async function createBoard(
+  accessToken: string,
+  input: { name: string; description?: string },
+): Promise<PinterestBoard> {
+  const data = await pinterestFetch(accessToken, "/boards", {
+    method: "POST",
+    body: JSON.stringify({
+      name: input.name,
+      description: input.description || undefined,
+      privacy: "PUBLIC",
+    }),
+  });
+  return toBoard(data);
+}
+
 /**
  * One board by id.
  *

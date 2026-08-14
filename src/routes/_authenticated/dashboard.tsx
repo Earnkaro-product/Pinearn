@@ -1,29 +1,42 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { AppShell } from "@/components/app-shell";
 import { NewUserCta } from "@/components/new-user-cta";
 import { ContinueMonetizing } from "@/components/continue-monetizing";
 import { BrandsSection } from "@/components/brand-card";
 import { BEST_SELLING_BRANDS } from "@/lib/brands";
-import { openAffiliateLinkDialog } from "@/components/affiliate-link-dialog";
+import {
+  openAffiliateLinkDialog,
+  ShareSheet,
+  CollectionPicker,
+  copyToClipboard,
+  type CreatedProduct,
+} from "@/components/affiliate-link-dialog";
 import { supabase } from "@/integrations/supabase/client";
 import { getPinterestAnalytics } from "@/lib/pinterest.functions";
+import { getFriendlyMessage } from "@/lib/friendly-error";
 import { GRADIENTS } from "./pins";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
+import { toast } from "sonner";
 import {
   MousePointerClick,
   Coins,
   Rocket,
   ImagePlus,
+  FolderPlus,
   Link2,
   Link as LinkIcon,
   Store,
   Plus,
   ArrowRight,
+  ChevronLeft,
+  Clipboard,
   Eye,
+  Loader2,
   Sparkles,
+  X,
 } from "lucide-react";
 
 export const Route = createFileRoute("/_authenticated/dashboard")({
@@ -155,7 +168,9 @@ function FeatureCarousel() {
 
 function Dashboard() {
   return (
-    <AppShell title="Dashboard" subtitle="Your monetization at a glance." greetingName>
+    // `greetingName` renders "Hi, {name}" in place of the title block, so the
+    // subtitle this used to pass was never on screen.
+    <AppShell title="Dashboard" greetingName>
       <NewUserCta />
 
       {/* Feature carousel */}
@@ -167,10 +182,19 @@ function Dashboard() {
       {/* Quick actions */}
       <div className="mt-8">
         <h2 className="mb-4 font-display text-lg font-semibold">Quick actions</h2>
-        <div className="grid grid-cols-3 gap-3 sm:gap-4">
+        {/* 2×2. Collection creation has no route of its own — it's a dialog on
+            the storefront — so this deep-links with ?new=1, which that page
+            reads to open the dialog on arrival. */}
+        <div className="grid grid-cols-2 gap-3 sm:gap-4">
           <QuickAction to="/pins/attach" icon={Link2} label="Attach" />
           <QuickAction to="/pins/create" icon={Plus} label="Create pin" />
           <QuickAction to="/boost" icon={Rocket} label="Pinterest SEO" />
+          <QuickAction
+            to="/storefront"
+            search={{ new: 1 }}
+            icon={FolderPlus}
+            label="New collection"
+          />
         </div>
       </div>
 
@@ -180,38 +204,222 @@ function Dashboard() {
       {/* Boards with unmonetized pins → bulk swipe-approval CTA */}
       <MonetizeBoards />
 
+      {/* Affiliate link maker — same banner card as the brand detail page's
+          "Create Your Affiliate Link Now". */}
+      <AffiliateLinkMaker />
+
       {/* Best selling brands */}
       <BrandsSection brands={BEST_SELLING_BRANDS} />
-
-      {/* Affiliate link maker — moved out of Quick actions (Health Score took
-          its slot) down to the very bottom of the dashboard. */}
-      <AffiliateLinkMaker />
     </AppShell>
   );
 }
 
 function AffiliateLinkMaker() {
+  const [url, setUrl] = useState("");
+  const [urlError, setUrlError] = useState<string | null>(null);
+  const [createdProduct, setCreatedProduct] = useState<CreatedProduct | null>(null);
+  const [pickingCollection, setPickingCollection] = useState(false);
+  const urlInputRef = useRef<HTMLInputElement>(null);
+  const qc = useQueryClient();
+  const navigate = useNavigate();
+
+  const create = useMutation({
+    mutationFn: async () => {
+      const link = url.trim();
+      if (!link) throw new Error("Paste a product link first");
+      try {
+        new URL(link);
+      } catch {
+        throw new Error("That doesn't look like a valid URL");
+      }
+      const { data: userRes } = await supabase.auth.getUser();
+      const userId = userRes.user?.id;
+      if (!userId) throw new Error("Not signed in");
+
+      const { data: sf, error: sfErr } = await supabase
+        .from("storefronts")
+        .select("id")
+        .eq("user_id", userId)
+        .order("is_default", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (sfErr) throw sfErr;
+      if (!sf) throw new Error("Your storefront isn't ready yet.");
+
+      let hostname = "New product";
+      try {
+        hostname = new URL(link).hostname.replace(/^www\./, "");
+      } catch {
+        /* keep */
+      }
+
+      const { data: inserted, error } = await supabase
+        .from("storefront_products")
+        .insert({
+          user_id: userId,
+          storefront_id: sf.id,
+          title: hostname,
+          affiliate_url: link,
+        })
+        .select("id,affiliate_url,storefront_id")
+        .single();
+      if (error) throw error;
+      return inserted as CreatedProduct;
+    },
+    onSuccess: (inserted) => {
+      qc.invalidateQueries({ queryKey: ["all-products"] });
+      qc.invalidateQueries({ queryKey: ["storefront-products"] });
+      toast.success("Affiliate link created");
+      setCreatedProduct(inserted);
+      setUrl("");
+      setUrlError(null);
+    },
+    onError: (e: Error) => {
+      toast.error(getFriendlyMessage(e));
+      if (
+        e.message === "Paste a product link first" ||
+        e.message === "That doesn't look like a valid URL"
+      ) {
+        setUrlError(e.message);
+        urlInputRef.current?.focus();
+      }
+    },
+  });
+
+  async function pasteFromClipboard() {
+    try {
+      const t = await navigator.clipboard.readText();
+      if (t) setUrl(t.trim());
+    } catch {
+      toast.error("Clipboard access blocked");
+    }
+  }
+
+  async function copyLink() {
+    if (!createdProduct) return;
+    const ok = await copyToClipboard(createdProduct.affiliate_url);
+    if (ok) toast.success("Link copied");
+    else toast.error("Could not copy link");
+  }
+
+  function resetLinkFlow() {
+    setCreatedProduct(null);
+    setPickingCollection(false);
+    setUrl("");
+  }
+
   return (
-    <div className="mt-8 flex items-center gap-3.5 rounded-3xl border border-border bg-surface p-5 shadow-sm sm:gap-4">
-      <div className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-primary/10 text-primary sm:h-14 sm:w-14">
-        <LinkIcon className="h-6 w-6" />
+    <>
+      <h2 className="mt-8 mb-4 font-display text-lg font-semibold">Create affiliate link</h2>
+      <div className="overflow-hidden rounded-2xl bg-primary text-primary-foreground shadow-elevate">
+        <div className="p-4">
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              create.mutate();
+            }}
+          >
+            <div className="flex items-center gap-2 rounded-full bg-surface pl-4 pr-1.5 py-1.5">
+              <input
+                ref={urlInputRef}
+                value={url}
+                onChange={(e) => {
+                  setUrl(e.target.value);
+                  setUrlError(null);
+                }}
+                placeholder="Paste a product link"
+                className="min-w-0 flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
+              />
+              <button
+                type="button"
+                onClick={pasteFromClipboard}
+                className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-muted-foreground transition hover:bg-surface-2"
+                aria-label="Paste"
+              >
+                <Clipboard className="h-4 w-4" />
+              </button>
+            </div>
+            {urlError && <p className="mt-1.5 px-1 text-xs text-destructive">{urlError}</p>}
+            <button
+              type="submit"
+              disabled={create.isPending || !url.trim()}
+              className="mt-3 flex w-full items-center justify-center gap-2 rounded-full bg-surface px-4 py-3 text-sm font-semibold text-foreground shadow-sm transition disabled:opacity-60"
+            >
+              {/* The heading above says "Create affiliate link" — the button
+                  under the input doesn't need to say it a second time. */}
+              {create.isPending ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" /> Creating…
+                </>
+              ) : (
+                "Create link"
+              )}
+            </button>
+          </form>
+        </div>
       </div>
-      <div className="min-w-0 flex-1">
-        <h2 className="font-display text-base font-bold leading-tight sm:text-lg">
-          Make an affiliate link
-        </h2>
-        <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground sm:text-sm">
-          Paste any product URL, get a trackable link instantly.
-        </p>
-      </div>
-      <button
-        type="button"
-        onClick={openAffiliateLinkDialog}
-        className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-glow transition hover:opacity-90"
-      >
-        Create <ArrowRight className="h-4 w-4" />
-      </button>
-    </div>
+
+      {/* Post-generation share sheet — same bottom-sheet/modal shell as the
+          brand detail page's link flow. */}
+      {createdProduct && (
+        <div
+          className="fixed inset-0 z-[100] flex items-end justify-center bg-black/50 px-4 pb-6 pt-24 backdrop-blur-sm sm:items-center sm:pb-4"
+          onClick={resetLinkFlow}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-md overflow-hidden rounded-3xl border border-border bg-surface shadow-elevate"
+          >
+            <div className="flex items-center justify-between px-6 pt-5">
+              <div className="flex items-center gap-2 text-primary">
+                {pickingCollection ? (
+                  <button
+                    onClick={() => setPickingCollection(false)}
+                    className="flex items-center gap-1 text-xs font-semibold uppercase tracking-widest"
+                    aria-label="Back"
+                  >
+                    <ChevronLeft className="h-4 w-4" /> Back
+                  </button>
+                ) : (
+                  <>
+                    <LinkIcon className="h-4 w-4" />
+                    <span className="text-xs font-semibold uppercase tracking-widest">
+                      Affiliate
+                    </span>
+                  </>
+                )}
+              </div>
+              <button
+                onClick={resetLinkFlow}
+                className="grid h-8 w-8 place-items-center rounded-full bg-surface-2 text-foreground transition hover:bg-surface"
+                aria-label="Close"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="px-6 pb-6 pt-3">
+              {pickingCollection ? (
+                <CollectionPicker
+                  product={createdProduct}
+                  onDone={(collectionId) => {
+                    resetLinkFlow();
+                    navigate({ to: "/storefront", search: { collection: collectionId } as never });
+                  }}
+                />
+              ) : (
+                <ShareSheet
+                  link={createdProduct.affiliate_url}
+                  onCopy={copyLink}
+                  onAddToStorefront={() => setPickingCollection(true)}
+                  onCreateAnother={resetLinkFlow}
+                />
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -307,11 +515,11 @@ function MonetizePins() {
     <div className="mt-8">
       <div className="mb-4 flex items-end justify-between gap-3">
         <div className="min-w-0">
-          <h2 className="font-display text-lg font-semibold">Turn your pins into income</h2>
+          <h2 className="font-display text-lg font-semibold">Turn pins into income</h2>
           <p className="mt-0.5 text-xs text-muted-foreground">
             {isLoading
               ? "Loading…"
-              : `${pins.length} pin${pins.length === 1 ? "" : "s"} getting views with nothing to sell yet`}
+              : `${pins.length} pin${pins.length === 1 ? "" : "s"} with views, nothing to sell`}
           </p>
         </div>
         <Link
@@ -377,12 +585,10 @@ function MonetizePins() {
               <span className="grid h-9 w-9 place-items-center rounded-full bg-surface text-primary shadow-sm">
                 <ArrowRight className="h-4 w-4" />
               </span>
+              {/* The section header already carries a "View all" link, so the
+                  tail card only needs the number it adds. */}
               <span className="px-1 text-xs font-semibold leading-tight">
-                View all
-                <br />
-                <span className="font-normal text-muted-foreground">
-                  {pins.length - VISIBLE_COUNT} more
-                </span>
+                {pins.length - VISIBLE_COUNT} more
               </span>
             </Link>
           )}
@@ -471,11 +677,11 @@ function MonetizeBoards() {
     <div className="mt-8">
       <div className="mb-4 flex items-end justify-between gap-3">
         <div className="min-w-0">
-          <h2 className="font-display text-lg font-semibold">Monetise your boards in one go</h2>
+          <h2 className="font-display text-lg font-semibold">Monetise a whole board</h2>
           <p className="mt-0.5 text-xs text-muted-foreground">
             {isLoading
               ? "Loading…"
-              : `${boards.length} board${boards.length === 1 ? "" : "s"} with pins ready to sell`}
+              : `${boards.length} board${boards.length === 1 ? "" : "s"} ready`}
           </p>
         </div>
         <Link
@@ -570,11 +776,7 @@ function MonetizeBoards() {
                 <ArrowRight className="h-4 w-4" />
               </span>
               <span className="px-1 text-xs font-semibold leading-tight">
-                View all
-                <br />
-                <span className="font-normal text-muted-foreground">
-                  {boards.length - VISIBLE_COUNT} more
-                </span>
+                {boards.length - VISIBLE_COUNT} more
               </span>
             </Link>
           )}
@@ -598,11 +800,11 @@ function QuickAction({
   label: string;
 }) {
   const className =
-    "group flex flex-col items-center gap-2.5 rounded-2xl border border-border bg-surface p-4 text-center transition hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-elevate sm:flex-row sm:items-center sm:gap-3 sm:text-left sm:p-5";
+    "group flex items-center gap-2.5 rounded-2xl border border-border bg-surface px-3 py-2.5 text-left transition hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-elevate sm:gap-3 sm:px-4 sm:py-3";
   const inner = (
     <>
-      <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary transition group-hover:bg-primary group-hover:text-primary-foreground">
-        <Icon className="h-5 w-5" />
+      <div className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary transition group-hover:bg-primary group-hover:text-primary-foreground sm:h-9 sm:w-9">
+        <Icon className="h-4 w-4" />
       </div>
       <span className="text-xs font-semibold leading-snug sm:text-sm">{label}</span>
     </>

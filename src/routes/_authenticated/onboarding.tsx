@@ -11,7 +11,6 @@ import {
   ShieldCheck,
   Lock,
   Layers,
-  Image as ImageIcon,
   Sparkles,
   User,
 } from "lucide-react";
@@ -217,13 +216,12 @@ function OnboardingPage() {
             <PinterestIcon className="h-9 w-9" />
           </div>
         </div>
+        {/* One wait, one sentence. The heading, a paragraph and a spinner
+            caption were three ways of saying "please hold". */}
         <h2 className="font-display text-2xl font-semibold">Syncing your Pinterest…</h2>
-        <p className="mt-2 max-w-xs text-sm text-muted-foreground">
-          Importing your boards & pins and building your storefront. Hang tight.
-        </p>
-        <div className="mt-6 flex items-center gap-2 text-xs text-muted-foreground">
+        <div className="mt-4 flex items-center gap-2 text-sm text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin text-primary" />
-          Preparing your dashboard
+          Importing your boards and pins
         </div>
       </div>
     );
@@ -284,15 +282,15 @@ function OnboardingPage() {
                 <h1 className="font-display text-2xl font-semibold leading-tight">
                   What's your name?
                 </h1>
-                <p className="text-sm text-muted-foreground">
-                  We'll use this on your storefront and profile.
-                </p>
+                <p className="text-sm text-muted-foreground">Shown on your storefront.</p>
               </div>
             </div>
+            {/* No "Your name" label — the heading two lines up already asked
+                the question, and the placeholder shows the shape of an answer. */}
             <form onSubmit={saveName} className="mt-6">
-              <label className="mb-2 block text-base font-medium">Your name</label>
               <input
                 type="text"
+                aria-label="Your name"
                 autoFocus
                 value={name}
                 onChange={(e) => setName(e.target.value)}
@@ -320,38 +318,26 @@ function OnboardingPage() {
                 <h1 className="font-display text-xl font-semibold leading-tight">
                   Connect Pinterest to continue
                 </h1>
-                <p className="text-xs text-muted-foreground">
-                  ShopMyPin runs on your Pins — link your Pinterest to unlock everything.
-                </p>
+                <p className="text-xs text-muted-foreground">ShopMyPin runs on your Pins.</p>
               </div>
             </div>
 
+            {/* Three promises, one line each. Four sentences of copy in front of
+                a button the creator has no way around was reading, not
+                deciding — the only one that changes a mind is the security one,
+                so it leads. */}
             <ul className="mt-5 space-y-2.5 text-sm">
-              <li className="flex items-start gap-2.5">
-                <ShieldCheck className="mt-0.5 h-4 w-4 text-accent" />
-                <span className="text-muted-foreground">
-                  Secure OAuth — we never see your password.
-                </span>
+              <li className="flex items-center gap-2.5">
+                <ShieldCheck className="h-4 w-4 shrink-0 text-accent" />
+                <span className="text-muted-foreground">Secure OAuth — no password shared.</span>
               </li>
-              <li className="flex items-start gap-2.5">
-                <Layers className="mt-0.5 h-4 w-4 text-accent" />
-                <span className="text-muted-foreground">
-                  All your <span className="text-foreground font-medium">boards</span> become
-                  collections in your store.
-                </span>
+              <li className="flex items-center gap-2.5">
+                <Layers className="h-4 w-4 shrink-0 text-accent" />
+                <span className="text-muted-foreground">Boards become collections.</span>
               </li>
-              <li className="flex items-start gap-2.5">
-                <ImageIcon className="mt-0.5 h-4 w-4 text-accent" />
-                <span className="text-muted-foreground">
-                  Every <span className="text-foreground font-medium">pin</span> is imported with
-                  title, image & link.
-                </span>
-              </li>
-              <li className="flex items-start gap-2.5">
-                <Sparkles className="mt-0.5 h-4 w-4 text-accent" />
-                <span className="text-muted-foreground">
-                  Attribute clicks & earnings back to each pin automatically.
-                </span>
+              <li className="flex items-center gap-2.5">
+                <Sparkles className="h-4 w-4 shrink-0 text-accent" />
+                <span className="text-muted-foreground">Clicks and earnings tracked per pin.</span>
               </li>
             </ul>
 
@@ -390,9 +376,8 @@ function OnboardingPage() {
               </button>
             )}
 
-            <p className="mt-4 text-center text-mini text-muted-foreground">
-              This step can't be skipped — ShopMyPin builds your storefront from your Pinterest.
-            </p>
+            {/* The "Required" pill in the header already says this step can't
+                be skipped; repeating it under the button was a third telling. */}
           </div>
         )}
       </div>

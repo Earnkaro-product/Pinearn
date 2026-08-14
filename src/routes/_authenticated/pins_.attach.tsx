@@ -196,13 +196,7 @@ function AttachPage() {
   };
 
   return (
-    <AppShell
-      title="Select pin"
-      subtitle="Pick a pin to attach products to."
-      backButton
-      backTo="/pins"
-      hideBottomNav
-    >
+    <AppShell title="Select pin" backButton backTo="/pins" hideBottomNav>
       {dialogPin && (
         <PinDetailDialog
           pin={dialogPin}
@@ -256,10 +250,8 @@ function AttachPage() {
                 <span className="grid h-10 w-10 place-items-center rounded-full bg-primary/10 text-primary">
                   <MousePointerClick className="h-5 w-5" />
                 </span>
-                <span className="text-sm font-semibold">Select pin from board</span>
-                <span className="text-xs text-muted-foreground">
-                  Pick one pin and attach products to it.
-                </span>
+                <span className="text-sm font-semibold">Pick one pin</span>
+                <span className="text-xs text-muted-foreground">Attach products yourself</span>
               </button>
               {activeBoard.collection.id !== "__unassigned__" && (
                 <button
@@ -274,10 +266,8 @@ function AttachPage() {
                   <span className="grid h-10 w-10 place-items-center rounded-full bg-gradient-primary text-primary-foreground shadow-glow">
                     <Sparkles className="h-5 w-5" />
                   </span>
-                  <span className="text-sm font-semibold">Monetise full board</span>
-                  <span className="text-xs text-muted-foreground">
-                    Swipe through AI-recommended products for every unmonetised pin.
-                  </span>
+                  <span className="text-sm font-semibold">Monetise the board</span>
+                  <span className="text-xs text-muted-foreground">AI matches, you swipe</span>
                 </button>
               )}
             </div>

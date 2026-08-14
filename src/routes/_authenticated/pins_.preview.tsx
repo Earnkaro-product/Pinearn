@@ -187,14 +187,7 @@ function PinPreviewPage() {
   }
 
   return (
-    <AppShell
-      title="Preview"
-      subtitle="Choose where this pin should live, then push it live."
-      backButton
-      backTo="/pins/attach"
-      backSearch={{ pinId }}
-      hideBottomNav
-    >
+    <AppShell title="Preview" backButton backTo="/pins/attach" backSearch={{ pinId }} hideBottomNav>
       {pinLoading || !pin ? (
         <div className="mx-auto max-w-xs pb-24 md:pb-8">
           <div className="overflow-hidden rounded-2xl border border-border bg-surface shadow-sm">
@@ -284,7 +277,7 @@ function PinPreviewPage() {
         >
           {selectedProducts.length + stash.aiPicks.length === 0 && (
             <p className="mx-auto max-w-2xl pb-1.5 text-center text-mini text-muted-foreground">
-              Attach at least one product to go live.
+              Attach a product to go live.
             </p>
           )}
           <div className="mx-auto flex max-w-2xl">

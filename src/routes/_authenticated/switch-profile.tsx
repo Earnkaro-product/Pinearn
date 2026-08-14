@@ -108,9 +108,7 @@ function SwitchProfilePage() {
               <div className="font-display text-lg font-semibold leading-tight">
                 Pinterest profiles
               </div>
-              <div className="text-xs text-muted-foreground">
-                Switch which Pinterest account powers your storefront.
-              </div>
+              <div className="text-xs text-muted-foreground">Which one powers your storefront</div>
             </div>
           </div>
 
@@ -189,13 +187,8 @@ function SwitchProfilePage() {
             </button>
           </form>
         </div>
-
-        <button
-          onClick={() => navigate({ to: "/dashboard" })}
-          className="w-full rounded-2xl border border-border bg-surface p-3 text-sm font-medium hover:bg-surface-2"
-        >
-          Back to dashboard
-        </button>
+        {/* No "Back to dashboard" button — the app bar's back arrow goes there,
+            and a second one at the bottom of a one-card page is just a word. */}
       </div>
     </AppShell>
   );

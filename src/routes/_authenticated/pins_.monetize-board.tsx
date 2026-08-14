@@ -776,7 +776,6 @@ function MonetizeBoardPage() {
       ) : done ? (
         bgRunning ? (
           <BoardApproving
-            boardName={boardName}
             covers={candidates.map((c) => c.imageUrl).filter(Boolean) as string[]}
             matched={job!.matched}
             total={job!.total}
@@ -1898,13 +1897,11 @@ function formatEta(seconds: number): string {
 // and a clear nudge that the user can head home rather than wait here — the
 // job finishes on its own and they'll be notified.
 function BoardApproving({
-  boardName,
   covers,
   matched,
   total,
   onBack,
 }: {
-  boardName: string;
   covers: string[];
   matched: number;
   total: number;
@@ -2000,13 +1997,12 @@ function BoardApproving({
         <h2 className="mt-4 font-display text-[26px] font-extrabold leading-tight tracking-tight">
           {allMatched ? "Almost there — publishing" : "Sit back, we're on it"}
         </h2>
+        {/* The chip above already counts the pins and the heading already says
+            what's happening, so this only has to answer "how long, and do I
+            have to sit here" — which is what the buttons below act on. */}
         <p className="mx-auto mt-2 max-w-[17rem] text-lead leading-snug text-muted-foreground">
-          Monetising {total} pin{total === 1 ? "" : "s"} in{" "}
-          {boardName ? `“${boardName}”` : "your board"}.
-        </p>
-        <p className="mx-auto mt-3 max-w-[16rem] text-body leading-relaxed text-muted-foreground/80">
-          {allMatched ? "Wrapping up" : formatEta(remainingEta)} left — no need to wait here, we'll
-          notify you the moment every pin is live.
+          {allMatched ? "Wrapping up" : `${formatEta(remainingEta)} left`} — leave if you like,
+          we'll notify you.
         </p>
 
         {/* Primary: go home. Secondary: stay on the board. */}

@@ -7,6 +7,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { startPinterestOAuth, disconnectPinterest } from "@/lib/pinterest-oauth.functions";
+import { applyTheme } from "@/lib/theme";
 import {
   Bell,
   Moon,
@@ -80,10 +81,9 @@ function SettingsPage() {
     const next = { ...prefs, ...patch };
     setPrefs(next);
     localStorage.setItem("pinearn.prefs", JSON.stringify(next));
-    if (patch.theme) {
-      document.documentElement.classList.toggle("dark", patch.theme === "dark");
-    }
-    toast.success("Preferences saved");
+    // Shared with the root, which re-applies this on every boot.
+    if (patch.theme) applyTheme(patch.theme);
+    toast.success("Saved");
   }
 
   async function togglePinterest() {
@@ -152,11 +152,7 @@ function SettingsPage() {
                 ? `Connected${pinterestUsername ? ` · @${pinterestUsername}` : ""}`
                 : "Not connected"
             }
-            sub={
-              connected
-                ? "Boards and pins sync automatically."
-                : "Connect to sync your boards & pins."
-            }
+            sub={connected ? "Syncs automatically" : "Sync your boards and pins"}
           >
             <button
               onClick={togglePinterest}
@@ -198,9 +194,10 @@ function SettingsPage() {
 
         <Section title="Appearance">
           <Toggle
+            // No sub-line: a switch labelled "Dark mode" doesn't need a sentence
+            // explaining what dark mode is for.
             icon={prefs.theme === "dark" ? Moon : Sun}
             label="Dark mode"
-            sub="Reduce eye strain in low light"
             checked={prefs.theme === "dark"}
             onChange={(v) => update({ theme: v ? "dark" : "light" })}
           />

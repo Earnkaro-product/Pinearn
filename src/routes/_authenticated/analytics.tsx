@@ -548,12 +548,7 @@ function Analytics() {
   const activeProduct = PRODUCT_DEFS.find((p) => p.id === activeProductId) ?? null;
 
   return (
-    <AppShell
-      title="Analytics"
-      subtitle="Traffic, conversions, and earnings."
-      backButton
-      backTo="/dashboard"
-    >
+    <AppShell title="Analytics" backButton backTo="/dashboard">
       {/* Connection health first: every number below is only as fresh as the
           last sync, and a dead connection silently zeroes all of them. */}
       <div className="mb-4">
@@ -594,8 +589,8 @@ function Analytics() {
         </button>
         <p className="mt-2 text-center text-xs text-muted-foreground">
           {walletBuckets.confirmed > 0
-            ? `₹${fmtINR(walletBuckets.confirmed)} confirmed and ready to withdraw`
-            : "No confirmed earnings to withdraw yet"}
+            ? `₹${fmtINR(walletBuckets.confirmed)} ready`
+            : "Nothing confirmed yet"}
         </p>
 
         <button
