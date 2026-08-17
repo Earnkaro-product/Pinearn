@@ -1,4 +1,4 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { z } from "zod";
 import { supabase } from "@/integrations/supabase/client";
@@ -7,11 +7,14 @@ import { getFriendlyMessage } from "@/lib/friendly-error";
 import {
   CheckCircle2,
   ArrowRight,
+  Ban,
+  BarChart3,
+  Eye,
   Loader2,
+  PencilLine,
   ShieldCheck,
   Lock,
   Layers,
-  Sparkles,
   User,
 } from "lucide-react";
 import { useServerFn } from "@tanstack/react-start";
@@ -37,6 +40,55 @@ function PinterestIcon({ className = "h-4 w-4" }: { className?: string }) {
     </svg>
   );
 }
+
+/* ============================================================================
+   The permission disclosure.
+
+   This screen is the ONLY place a creator is told, in their own language, what
+   granting access actually means — Pinterest's own consent screen lists raw
+   scopes ("Create, update or delete your public Pins") without saying why an app
+   wants them, and an unexplained delete permission is exactly what makes someone
+   abandon a connect flow.
+
+   Each row below maps to a scope in `SCOPES` in src/lib/pinterest-api.ts. THAT
+   CONSTANT IS THE SOURCE OF TRUTH: if a scope is added there, add a row here in
+   the same commit. A disclosure that under-states what the app requests is worse
+   than no disclosure, and it is the first thing an API access review checks.
+
+   The "never" list is not marketing. Every line is enforced in code, and the
+   file that enforces it is named so a reviewer — or the next engineer — can
+   check the claim instead of trusting it.
+   ========================================================================== */
+
+const ACCESS_ITEMS = [
+  {
+    icon: Eye,
+    // boards:read + pins:read
+    title: "Your public boards and Pins",
+    why: "To match products to them.",
+  },
+  {
+    icon: BarChart3,
+    // user_accounts:read
+    title: "Your profile and Pin stats",
+    why: "To show impressions, clicks and earnings.",
+  },
+  {
+    icon: PencilLine,
+    // boards:write + pins:write
+    title: "Publish and edit Pins",
+    why: "Only when you tap it here.",
+  },
+] as const;
+
+/* The "never" list carries no explanatory sub-line on purpose: each title is
+   already the whole claim, and a second sentence under it was re-stating the
+   title in longer words. */
+const NEVER_ITEMS = [
+  "Secret and protected boards",
+  "Pins you saved from other people",
+  "Posting or messaging as you",
+] as const;
 
 /**
  * Has this creator actually told us their name?
@@ -263,7 +315,7 @@ function OnboardingPage() {
           background: `radial-gradient(ellipse 80% 50% at 50% -20%, oklch(0.72 0.16 45 / 0.12), transparent), radial-gradient(ellipse 60% 40% at 80% 80%, oklch(0.55 0.23 25 / 0.08), transparent)`,
         }}
       />
-      <div className="mx-auto w-full max-w-md px-4 pt-8 sm:max-w-lg">
+      <div className="mx-auto w-full max-w-md px-4 pb-8 pt-8 sm:max-w-lg">
         <div className="mb-6 flex items-center gap-2">
           <img src="/shopmypin-logo.png" alt="" draggable={false} className="h-8 w-8" />
           <span className="font-display text-lg font-semibold">ShopMyPin</span>
@@ -309,75 +361,123 @@ function OnboardingPage() {
             </form>
           </div>
         ) : (
-          <div className="rounded-2xl border border-border bg-surface/85 p-6 shadow-elevate backdrop-blur-xl">
-            <div className="flex items-center gap-3">
-              <div className="grid h-11 w-11 place-items-center rounded-2xl bg-primary text-primary-foreground shadow-glow">
-                <PinterestIcon className="h-5 w-5" />
-              </div>
-              <div>
-                <h1 className="font-display text-xl font-semibold leading-tight">
-                  Connect Pinterest to continue
-                </h1>
-                <p className="text-xs text-muted-foreground">ShopMyPin runs on your Pins.</p>
+          <div className="overflow-hidden rounded-3xl border border-border bg-surface/85 shadow-elevate backdrop-blur-xl">
+            <div className="border-b border-border/70 p-6 pb-5">
+              <div className="flex items-center gap-3.5">
+                <div className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-primary text-primary-foreground shadow-glow">
+                  <PinterestIcon className="h-6 w-6" />
+                </div>
+                <div className="min-w-0">
+                  <h1 className="font-display text-xl font-semibold leading-tight">
+                    Connect your Pinterest
+                  </h1>
+                  <p className="mt-0.5 text-sm text-muted-foreground">
+                    Exactly what this gives us.
+                  </p>
+                </div>
               </div>
             </div>
 
-            {/* Three promises, one line each. Four sentences of copy in front of
-                a button the creator has no way around was reading, not
-                deciding — the only one that changes a mind is the security one,
-                so it leads. */}
-            <ul className="mt-5 space-y-2.5 text-sm">
-              <li className="flex items-center gap-2.5">
-                <ShieldCheck className="h-4 w-4 shrink-0 text-accent" />
-                <span className="text-muted-foreground">Secure OAuth — no password shared.</span>
-              </li>
-              <li className="flex items-center gap-2.5">
-                <Layers className="h-4 w-4 shrink-0 text-accent" />
-                <span className="text-muted-foreground">Boards become collections.</span>
-              </li>
-              <li className="flex items-center gap-2.5">
-                <Sparkles className="h-4 w-4 shrink-0 text-accent" />
-                <span className="text-muted-foreground">Clicks and earnings tracked per pin.</span>
-              </li>
-            </ul>
+            {/* WHAT WE ACCESS. Pinterest's own consent screen lists the raw
+                permissions with no reason attached, so "delete your public Pins"
+                arrives cold. Naming the reason next to each one is the whole
+                point of this section. */}
+            <div className="p-6 pb-5">
+              <h2 className="text-mini font-semibold uppercase tracking-wider text-muted-foreground">
+                What ShopMyPin can access
+              </h2>
+              <ul className="mt-3.5 space-y-3.5">
+                {ACCESS_ITEMS.map((item) => (
+                  <li key={item.title} className="flex gap-3">
+                    <span className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary">
+                      <item.icon className="h-4 w-4" />
+                    </span>
+                    <span className="min-w-0">
+                      <span className="block text-sm font-medium leading-snug">{item.title}</span>
+                      <span className="mt-0.5 block text-sm leading-snug text-muted-foreground">
+                        {item.why}
+                      </span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
 
-            <button
-              onClick={authorizePinterest}
-              disabled={authorizing || phase !== "authorize"}
-              className="mt-6 flex w-full items-center justify-center gap-2 rounded-2xl bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground shadow-glow transition hover:opacity-95 disabled:opacity-60"
-            >
-              {authorizing ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : phase !== "authorize" ? (
-                <CheckCircle2 className="h-4 w-4" />
-              ) : (
-                <PinterestIcon />
-              )}
-              {phase === "authorize"
-                ? authorizing
-                  ? "Opening Pinterest…"
-                  : "Continue with Pinterest"
-                : "Pinterest connected"}
-              {phase === "authorize" && !authorizing && <ArrowRight className="h-4 w-4" />}
-            </button>
+            {/* WHAT WE NEVER TOUCH. The reassurance that actually decides it —
+                and every line is enforced in code, not just promised. */}
+            <div className="mx-6 mb-5 rounded-2xl border border-border bg-surface-2/70 p-4">
+              <h2 className="flex items-center gap-1.5 text-mini font-semibold uppercase tracking-wider text-muted-foreground">
+                <Ban className="h-3.5 w-3.5" /> What we never touch
+              </h2>
+              <ul className="mt-2.5 space-y-2">
+                {NEVER_ITEMS.map((item) => (
+                  <li key={item} className="flex items-center gap-2.5">
+                    <ShieldCheck className="h-4 w-4 shrink-0 text-accent" />
+                    <span className="text-sm leading-snug">{item}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
 
-            {phase !== "authorize" && (
+            <div className="px-6 pb-6">
+              {/* The specifics — third-party matching providers, token storage,
+                  retention, revocation — live in the two documents rather than on
+                  this screen. One line, both links. */}
+              <p className="text-sm text-muted-foreground">
+                More detail in our{" "}
+                <Link
+                  to="/privacy"
+                  target="_blank"
+                  className="font-medium text-foreground underline decoration-border underline-offset-2 hover:decoration-foreground"
+                >
+                  Privacy Policy
+                </Link>{" "}
+                and{" "}
+                <Link
+                  to="/terms"
+                  target="_blank"
+                  className="font-medium text-foreground underline decoration-border underline-offset-2 hover:decoration-foreground"
+                >
+                  Terms and Conditions
+                </Link>
+                .
+              </p>
+
               <button
-                onClick={startSync}
-                disabled={syncStatus === "running"}
-                className="mt-3 flex w-full items-center justify-center gap-2 rounded-2xl border border-border bg-surface px-4 py-2.5 text-sm font-medium transition hover:bg-surface-2 disabled:opacity-60"
+                onClick={authorizePinterest}
+                disabled={authorizing || phase !== "authorize"}
+                className="mt-6 flex w-full items-center justify-center gap-2 rounded-2xl bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground shadow-glow transition hover:opacity-95 disabled:opacity-60"
               >
-                {syncStatus === "running" ? (
+                {authorizing ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
+                ) : phase !== "authorize" ? (
+                  <CheckCircle2 className="h-4 w-4" />
                 ) : (
-                  <Layers className="h-4 w-4" />
+                  <PinterestIcon />
                 )}
-                {syncStatus === "success" ? "Re-sync boards & pins" : "Sync boards & pins"}
+                {phase === "authorize"
+                  ? authorizing
+                    ? "Opening Pinterest…"
+                    : "Continue with Pinterest"
+                  : "Pinterest connected"}
+                {phase === "authorize" && !authorizing && <ArrowRight className="h-4 w-4" />}
               </button>
-            )}
 
-            {/* The "Required" pill in the header already says this step can't
-                be skipped; repeating it under the button was a third telling. */}
+              {phase !== "authorize" && (
+                <button
+                  onClick={startSync}
+                  disabled={syncStatus === "running"}
+                  className="mt-3 flex w-full items-center justify-center gap-2 rounded-2xl border border-border bg-surface px-4 py-2.5 text-sm font-medium transition hover:bg-surface-2 disabled:opacity-60"
+                >
+                  {syncStatus === "running" ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Layers className="h-4 w-4" />
+                  )}
+                  {syncStatus === "success" ? "Re-sync boards & pins" : "Sync boards & pins"}
+                </button>
+              )}
+            </div>
           </div>
         )}
       </div>

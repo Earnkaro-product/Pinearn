@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { z } from "zod";
 import { motion } from "framer-motion";
 import { supabase } from "@/integrations/supabase/client";
+import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
 import { ArrowRight, BarChart3, Loader2, Lock, Phone, Quote, Sparkles, Wand2 } from "lucide-react";
 
@@ -242,23 +243,34 @@ function AuthPage() {
           <div className="animate-blob-delay-2 absolute -right-16 top-1/4 h-72 w-72 rounded-full bg-accent/20 blur-[90px]" />
         </div>
 
-        <Link to="/" className="absolute left-5 top-5 z-10 flex items-center gap-2 lg:hidden">
-          <img src="/shopmypin-logo.png" alt="" draggable={false} className="h-7 w-7" />
-          <span className="font-display text-base font-semibold">ShopMyPin</span>
-        </Link>
-
         <motion.div
           initial={{ opacity: 0, y: 16 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
-          className="relative z-10 w-full sm:max-w-md"
+          className="relative z-10 mx-auto w-full max-w-[26rem]"
         >
-          <div className="rounded-3xl border border-border bg-surface/90 px-5 py-6 shadow-elevate backdrop-blur-xl sm:p-8">
-            <h1 className="font-display text-2xl font-semibold leading-tight">
+          {/* On mobile the brand sits in the flow directly above the card, not
+              pinned to the corner. Pinned, it read as a stray element with an
+              empty band under it and the card floating unanchored below —
+              stacking them makes one centred composition instead of two. */}
+          <Link to="/" className="mb-7 flex items-center justify-center gap-2.5 lg:hidden">
+            <img
+              src="/shopmypin-logo.png"
+              alt=""
+              draggable={false}
+              className="h-9 w-9 rounded-[10px]"
+            />
+            <span className="font-display text-lg font-semibold tracking-tight">ShopMyPin</span>
+          </Link>
+
+          <div className="rounded-3xl border border-border bg-surface/90 p-6 shadow-elevate backdrop-blur-xl sm:p-8">
+            <h1 className="font-display text-[1.6rem] font-semibold leading-tight tracking-tight">
               {step === "phone" ? "Welcome to ShopMyPin" : "Enter the code"}
             </h1>
-            <p className="mt-1.5 text-sm text-muted-foreground">
-              {step === "phone" ? "Sign in with your phone." : `We sent a code to ${phone}`}
+            <p className="mt-2 text-sm text-muted-foreground">
+              {step === "phone"
+                ? "Sign in with your phone number to continue."
+                : `We sent a code to ${phone}`}
             </p>
 
             {step === "phone" ? (
@@ -270,14 +282,15 @@ function AuthPage() {
                     <button
                       type="button"
                       onClick={() => setPickerOpen((v) => !v)}
-                      className="flex h-full items-center gap-2 rounded-xl border border-input bg-surface-2 px-4 py-3 text-base font-medium transition hover:bg-surface"
+                      className="flex h-14 items-center gap-2 rounded-2xl border border-input bg-surface-2 px-4 text-base font-medium tabular-nums transition hover:bg-surface focus-visible:border-primary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/15"
                       aria-label="Select country"
+                      aria-expanded={pickerOpen}
                     >
                       <span className="text-lg leading-none">{country.flag}</span>
                       <span>{country.dial}</span>
                     </button>
                     {pickerOpen && (
-                      <div className="absolute left-0 top-[calc(100%+6px)] z-40 max-h-64 w-60 overflow-auto rounded-xl border border-border bg-surface p-1.5 shadow-elevate">
+                      <div className="absolute left-0 top-[calc(100%+8px)] z-40 max-h-64 w-64 overflow-auto rounded-2xl border border-border bg-surface p-1.5 shadow-elevate">
                         {COUNTRIES.map((c, i) => (
                           <button
                             type="button"
@@ -298,7 +311,7 @@ function AuthPage() {
                       </div>
                     )}
                   </div>
-                  <div className="flex flex-1 items-center gap-2.5 rounded-xl border border-border bg-background px-3.5 py-0.5 transition focus-within:border-primary/60 focus-within:ring-2 focus-within:ring-primary/15">
+                  <div className="flex h-14 flex-1 items-center gap-2.5 rounded-2xl border border-input bg-background px-3.5 transition focus-within:border-primary/60 focus-within:ring-2 focus-within:ring-primary/15">
                     <Phone className="h-4 w-4 shrink-0 text-muted-foreground" />
                     <input
                       ref={phoneRef}
@@ -313,41 +326,58 @@ function AuthPage() {
                       }
                       aria-label="Phone number"
                       placeholder="Phone number"
-                      className="min-w-0 flex-1 bg-transparent py-2.5 text-lead outline-none placeholder:text-muted-foreground"
+                      className="min-w-0 flex-1 bg-transparent text-base tabular-nums tracking-wide outline-none placeholder:tracking-normal placeholder:text-muted-foreground"
                     />
                   </div>
                 </div>
-                <label className="mt-4 flex items-start gap-2.5 text-sm text-muted-foreground">
-                  <input
-                    type="checkbox"
+                <div className="mt-5 flex items-start gap-3">
+                  <Checkbox
+                    id="consent"
                     checked={agreed}
-                    onChange={(e) => setAgreed(e.target.checked)}
-                    className="mt-0.5 h-4 w-4 shrink-0 rounded border-border text-primary focus:ring-primary/40"
+                    onCheckedChange={(v) => setAgreed(v === true)}
+                    className="mt-0.5 h-[18px] w-[18px] rounded-[5px] border-input data-[state=checked]:border-primary"
                   />
-                  <span>
+                  <label
+                    htmlFor="consent"
+                    className="cursor-pointer select-none text-sm leading-relaxed text-muted-foreground"
+                  >
                     I agree to the{" "}
                     <Link
                       to="/privacy"
                       target="_blank"
-                      className="font-semibold text-primary hover:underline"
+                      className="font-medium text-foreground underline decoration-border underline-offset-2 transition hover:decoration-foreground"
                     >
                       Privacy Policy
                     </Link>{" "}
-                    and Terms, including how ShopMyPin uses my phone number and Pinterest data.
-                  </span>
-                </label>
+                    and{" "}
+                    <Link
+                      to="/terms"
+                      target="_blank"
+                      className="font-medium text-foreground underline decoration-border underline-offset-2 transition hover:decoration-foreground"
+                    >
+                      Terms and Conditions
+                    </Link>
+                    .
+                  </label>
+                </div>
+                {/* The disabled state is a NEUTRAL control, not a faded copy of the
+                    primary gradient. A washed-out brand button is the single thing
+                    that made this screen read as broken rather than as waiting:
+                    a pale pink "Get OTP" looks like a render bug, while a grey one
+                    obviously means "not yet". */}
                 <button
                   type="submit"
                   disabled={sending || !agreed}
-                  className="mt-4 flex w-full items-center justify-center gap-2.5 rounded-2xl bg-gradient-primary px-5 py-4 text-base font-semibold text-primary-foreground shadow-glow transition hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:scale-100"
+                  className="mt-5 flex h-14 w-full items-center justify-center gap-2 rounded-2xl text-base font-semibold transition-all enabled:bg-gradient-primary enabled:text-primary-foreground enabled:shadow-glow enabled:hover:brightness-[1.05] enabled:active:scale-[0.99] disabled:cursor-not-allowed disabled:border disabled:border-border disabled:bg-surface-2 disabled:text-muted-foreground"
                 >
                   {sending ? <Loader2 className="h-5 w-5 animate-spin" /> : null}
-                  Get OTP
-                  {!sending && <ArrowRight className="h-4 w-4" />}
+                  {sending ? "Sending…" : "Get OTP"}
+                  {!sending && agreed && <ArrowRight className="h-4 w-4" />}
                 </button>
 
-                <p className="mt-4 flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
-                  <Lock className="h-3 w-3" /> Your number is only ever used to sign you in.
+                <p className="mt-5 flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
+                  <Lock className="h-3 w-3 shrink-0" /> Your number is only ever used to sign you
+                  in.
                 </p>
               </form>
             ) : (
@@ -400,10 +430,10 @@ function AuthPage() {
                 <button
                   type="submit"
                   disabled={verifying || otp.length < 6}
-                  className="mt-5 flex w-full items-center justify-center gap-2.5 rounded-2xl bg-gradient-primary px-5 py-3.5 text-base font-semibold text-primary-foreground shadow-glow transition hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:scale-100 sm:py-4"
+                  className="mt-6 flex h-14 w-full items-center justify-center gap-2 rounded-2xl text-base font-semibold transition-all enabled:bg-gradient-primary enabled:text-primary-foreground enabled:shadow-glow enabled:hover:brightness-[1.05] enabled:active:scale-[0.99] disabled:cursor-not-allowed disabled:border disabled:border-border disabled:bg-surface-2 disabled:text-muted-foreground"
                 >
                   {verifying ? <Loader2 className="h-5 w-5 animate-spin" /> : null}
-                  Verify & Continue
+                  {verifying ? "Verifying…" : "Verify & Continue"}
                 </button>
 
                 <div className="mt-4 flex items-center justify-center gap-3 text-sm">
@@ -438,8 +468,8 @@ function AuthPage() {
             )}
           </div>
 
-          <p className="mt-5 text-center text-xs text-muted-foreground">
-            By continuing you're joining ShopMyPin — free, always, for Pinterest creators.
+          <p className="mt-6 text-center text-xs text-muted-foreground">
+            Free for Pinterest creators.
           </p>
         </motion.div>
       </div>

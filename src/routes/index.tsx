@@ -361,11 +361,12 @@ function Welcome() {
           variants={rise}
           className="mt-3 text-center text-mini leading-relaxed text-muted-foreground"
         >
-          Free to start · Works on boards you already have
-          <br />
-          Not affiliated with Pinterest ·{" "}
           <Link to="/privacy" className="underline underline-offset-2 hover:text-foreground">
-            Privacy
+            Privacy Policy
+          </Link>{" "}
+          ·{" "}
+          <Link to="/terms" className="underline underline-offset-2 hover:text-foreground">
+            Terms and Conditions
           </Link>
         </motion.p>
       </motion.div>
