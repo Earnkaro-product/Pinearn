@@ -63,7 +63,7 @@ function AuthPage() {
   const [agreed, setAgreed] = useState(false);
   const [countryIdx, setCountryIdx] = useState(0);
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [localPhone, setLocalPhone] = useState("8619596704");
+  const [localPhone, setLocalPhone] = useState("7777777777");
   const [phone, setPhone] = useState(""); // full E.164 after send
   const [otp, setOtp] = useState("");
   const [sending, setSending] = useState(false);

@@ -160,6 +160,9 @@ function PinsPage() {
         .select("*")
         .eq("user_id", userId)
         .eq("is_owner", true)
+        // Flagged gone from Pinterest — see pins_.attach.tsx for why these rows
+        // survive and every read has to exclude them.
+        .is("pinterest_removed_at", null)
         .order("created_at", { ascending: false });
       if (error) throw error;
       return data as Pin[];

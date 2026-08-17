@@ -11,6 +11,7 @@ import {
   getPinAnalytics,
   getTopPinsAnalytics,
   getUserAccount,
+  isCreatedByUser,
   listBoardPins,
   listBoards,
   PinterestAuthError,
@@ -225,8 +226,10 @@ export const importPinterestBoards = createServerFn({ method: "POST" })
       if (pins.length === 0) continue;
 
       // This is a creator app — only sync pins the user actually authored,
-      // never pins they saved/repinned from someone else's content.
-      const ownerPins = pins.filter((p) => p.isOwner);
+      // never pins they saved/repinned from someone else's content. `listBoards`
+      // has already limited the boards above to PUBLIC ones, so nothing secret or
+      // protected reaches this loop.
+      const ownerPins = pins.filter(isCreatedByUser);
 
       // Cover for a just-created board: its newest pin's image, so the Boards
       // tab isn't a wall of blank cards before anything is monetised. Only on
@@ -4595,6 +4598,9 @@ export const getBoardMonetizationCandidates = createServerFn({ method: "POST" })
     const { data: pins, error: pErr } = await supabase
       .from("pins")
       .select("id,title,image_url,impressions,clicks")
+      // Flagged gone from Pinterest — see pins_.attach.tsx. This feeds the
+      // board-monetisation swipe deck, and each card costs a visual search.
+      .is("pinterest_removed_at", null)
       .eq("collection_id", data.collectionId)
       .eq("is_owner", true)
       .is("product_id", null)

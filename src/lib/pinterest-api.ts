@@ -271,37 +271,106 @@ function toUtcIso(value: string | null | undefined): string | null {
   return /[zZ]|[+-]\d\d:?\d\d$/.test(value) ? value : `${value}Z`;
 }
 
+// Pinterest's three board privacy levels. PROTECTED and SECRET are both
+// non-public: SECRET is the creator's private board, PROTECTED is a business
+// board hidden from the profile (and what an ad-only board silently becomes).
+// Only PUBLIC content may ever be imported — see isPublicBoard.
+export type BoardPrivacy = "PUBLIC" | "PROTECTED" | "SECRET";
+
 export type PinterestBoard = {
   id: string;
   name: string;
   description?: string | null;
   createdAt: string | null;
+  /** What Pinterest said this board's privacy is, or null when the field was
+   * absent or carried a value outside the documented enum. Null is NOT treated
+   * as public — see isPublicBoard. */
+  privacy: BoardPrivacy | null;
 };
+
+function toPrivacy(value: unknown): BoardPrivacy | null {
+  return value === "PUBLIC" || value === "PROTECTED" || value === "SECRET" ? value : null;
+}
+
+/**
+ * The single public/private gate, deliberately FAIL-CLOSED.
+ *
+ * Anything that isn't an explicit "PUBLIC" — PROTECTED, SECRET, an
+ * undocumented value, or a missing field — reads as not public. The spec gives
+ * `privacy` a default of PUBLIC, so defaulting an absent field the same way
+ * would look reasonable; it is the wrong default here, because the cost of the
+ * two mistakes is not symmetric. Dropping a public board is a board the creator
+ * can ask about. Importing a secret one publishes something they chose to hide.
+ *
+ * The listing calls also pass `privacy=PUBLIC` so Pinterest filters server-side;
+ * this is the second gate, and the only one covering boards resolved by id.
+ */
+export function isPublicBoard(board: Pick<PinterestBoard, "privacy">): boolean {
+  return board.privacy === "PUBLIC";
+}
 
 function toBoard(b: {
   id: string;
   name: string;
   description?: string | null;
   created_at?: string | null;
+  privacy?: unknown;
 }): PinterestBoard {
   return {
     id: b.id,
     name: b.name,
     description: b.description ?? null,
     createdAt: toUtcIso(b.created_at),
+    privacy: toPrivacy(b.privacy),
   };
 }
 
+/**
+ * The account's PUBLIC boards only.
+ *
+ * `privacy=PUBLIC` is a documented `GET /boards` filter, so the exclusion
+ * happens on Pinterest's side and secret boards never travel over the wire.
+ * The local `isPublicBoard` pass behind it is not redundant: it also catches a
+ * board whose `privacy` field is missing or unrecognised, which the server-side
+ * filter would have let through as "PUBLIC by default".
+ */
 export async function listBoards(accessToken: string): Promise<PinterestBoard[]> {
   const boards: PinterestBoard[] = [];
+  let droppedNonPublic = 0;
+  let droppedUnknown = 0;
   let bookmark: string | undefined;
   do {
-    const qs = new URLSearchParams({ page_size: "100" });
+    const qs = new URLSearchParams({ page_size: "100", privacy: "PUBLIC" });
     if (bookmark) qs.set("bookmark", bookmark);
     const data = await pinterestFetch(accessToken, `/boards?${qs.toString()}`);
-    for (const b of data.items ?? []) boards.push(toBoard(b));
+    for (const raw of data.items ?? []) {
+      const board = toBoard(raw);
+      if (isPublicBoard(board)) {
+        boards.push(board);
+        continue;
+      }
+      // Split the counters because the two causes need different responses: a
+      // SECRET board here means the server-side filter was ignored, while a null
+      // means Pinterest stopped sending `privacy` and this gate is now dropping
+      // everything. Either way the log names it instead of leaving "imported 0
+      // boards" to be guessed at.
+      if (board.privacy === null) droppedUnknown++;
+      else droppedNonPublic++;
+    }
     bookmark = data.bookmark || undefined;
   } while (bookmark);
+
+  if (droppedNonPublic > 0) {
+    console.warn(
+      `[pinterest-api] GET /boards?privacy=PUBLIC still returned ${droppedNonPublic} non-public board(s) — dropped locally`,
+    );
+  }
+  if (droppedUnknown > 0) {
+    console.warn(
+      `[pinterest-api] dropped ${droppedUnknown} board(s) with no usable \`privacy\` field. ` +
+        `If this is every board, Pinterest has stopped returning the field and the public-only gate is over-filtering.`,
+    );
+  }
   return boards;
 }
 
@@ -329,6 +398,10 @@ export async function createBoard(
  * normally (privacy PUBLIC, nothing unusual about it). Any board id we learn
  * about some other way — from a pin's `board_id` — can therefore still be
  * resolved, which is what keeps those pins from vanishing.
+ *
+ * This path takes no `privacy` filter, so the returned board carries its
+ * privacy and the CALLER must gate on `isPublicBoard`. That is the whole reason
+ * `privacy` is on the type rather than being consumed inside `listBoards`.
  */
 export async function getBoard(
   accessToken: string,
@@ -353,12 +426,37 @@ export type PinterestPin = {
   /** Which board Pinterest says this pin lives on — the only reliable way to
    * place pins found through the account-wide listing. */
   boardId: string | null;
-  // Pinterest's own "authored by this account" flag — false means this pin
-  // was saved/repinned from someone else's content, not created by the
-  // creator. Confirmed against the real API: is_owner tracks parent_pin_id
-  // exactly (non-null parent_pin_id <=> is_owner === false).
+  // Pinterest's own "authored by this account" flag. Strict: only an explicit
+  // `true` counts, so an absent field reads as not-owned rather than owned.
+  //
+  // NOT sufficient on its own to mean "created". An earlier comment here claimed
+  // is_owner tracked parent_pin_id exactly; measuring a live account disproved
+  // it (15 pins report is_owner: true while carrying a parent_pin_id). Use
+  // isCreatedByUser, never this field alone.
   isOwner: boolean;
+  /** Set when this pin was saved from another pin — Pinterest's second, and more
+   * literal, "this is a repin" signal. Null for a pin the creator authored. */
+  parentPinId: string | null;
 };
+
+/**
+ * Created by this creator, not saved from someone else.
+ *
+ * Both of Pinterest's signals have to agree, and both are read fail-closed: a
+ * pin counts as authored only when `is_owner` is explicitly true AND it has no
+ * `parent_pin_id`.
+ *
+ * Requiring both is not belt-and-braces — the signals genuinely disagree.
+ * Measured against a live account of 469 pins: 206 carry a `parent_pin_id` (all
+ * saves), and 15 of those ALSO report `is_owner: true` — a pin the account saved
+ * from someone else and now owns a copy of. `is_owner` alone therefore admitted
+ * 278 pins where the truth is 263, and those 15 saves were being imported as
+ * authored work. `parent_pin_id` is the signal that matches Pinterest's own
+ * `pin_filter=exclude_repins` exactly (263 = 263 on that account).
+ */
+export function isCreatedByUser(pin: PinterestPin): boolean {
+  return pin.isOwner && pin.parentPinId === null;
+}
 
 // Pinterest v5 returns `images` as a map keyed by size, e.g. `originals`,
 // `600x`, `1200x`, `400x300`, `150x150` (no guaranteed key or order) — pick
@@ -396,43 +494,107 @@ function toPin(p: Record<string, unknown>, fallbackBoardId: string | null): Pint
     imageUrl: largestImage(p.media),
     createdAt: toUtcIso(p.created_at as string),
     boardId: ((p.board_id as string) ?? null) || fallbackBoardId,
-    isOwner: p.is_owner !== false,
+    isOwner: p.is_owner === true,
+    parentPinId: (p.parent_pin_id as string) ?? null,
   };
 }
 
+/** Running tally for one listing walk, so the reason pins were dropped survives
+ * as a log line instead of as an unexplained count. */
+type PinFilterStats = { saves: number; noOwnerFlag: number };
+
+/** Convert raw items, keeping only authored pins. */
+function pushCreatedPins(
+  target: PinterestPin[],
+  items: Array<Record<string, unknown>>,
+  fallbackBoardId: string | null,
+  stats: PinFilterStats,
+) {
+  for (const raw of items) {
+    if (raw.is_owner === undefined) stats.noOwnerFlag++;
+    const pin = toPin(raw, fallbackBoardId);
+    if (isCreatedByUser(pin)) target.push(pin);
+    else stats.saves++;
+  }
+}
+
+function logPinFilterStats(source: string, kept: number, stats: PinFilterStats) {
+  if (stats.saves > 0) {
+    console.info(
+      `[pinterest-api] ${source}: kept ${kept} authored pin(s), skipped ${stats.saves} save(s)`,
+    );
+  }
+  // `is_owner` is documented and has always been present. If it ever stops
+  // arriving, the strict gate drops every pin, and this is the line that says so
+  // rather than leaving it to look like an account with no content.
+  if (stats.noOwnerFlag > 0) {
+    console.warn(
+      `[pinterest-api] ${source}: ${stats.noOwnerFlag} pin(s) arrived with no \`is_owner\` field and were treated as saves. ` +
+        `If this equals the total, Pinterest has stopped sending it and the created-only gate is over-filtering.`,
+    );
+  }
+}
+
+/**
+ * The authored pins on one board.
+ *
+ * `GET /boards/{id}/pins` accepts neither `pin_filter` nor
+ * `include_protected_pins` (verified against Pinterest's OpenAPI description),
+ * so unlike the account-wide listing this cannot push the work server-side —
+ * every item is fetched and the repins are dropped here.
+ *
+ * Pin-level privacy is not a thing on this endpoint either: a pin is as public
+ * as the board holding it, so the caller's job is to only ever pass a board that
+ * passed `isPublicBoard`.
+ */
 export async function listBoardPins(accessToken: string, boardId: string): Promise<PinterestPin[]> {
   const pins: PinterestPin[] = [];
+  const stats: PinFilterStats = { saves: 0, noOwnerFlag: 0 };
   let bookmark: string | undefined;
   do {
     const qs = new URLSearchParams({ page_size: "100" });
     if (bookmark) qs.set("bookmark", bookmark);
     const data = await pinterestFetch(accessToken, `/boards/${boardId}/pins?${qs.toString()}`);
-    for (const p of data.items ?? []) pins.push(toPin(p, boardId));
+    pushCreatedPins(pins, data.items ?? [], boardId, stats);
     bookmark = data.bookmark || undefined;
   } while (bookmark);
+  logPinFilterStats(`board ${boardId}`, pins.length, stats);
   return pins;
 }
 
 /**
- * Every pin on the account, walking Pinterest's own pin listing rather than the
- * boards.
+ * Every AUTHORED, PUBLIC pin on the account, walking Pinterest's own pin listing
+ * rather than the boards. Still needed as a safety net: a live account has
+ * authored pins on a board that `GET /boards` does not list, and walking boards
+ * alone is what produced "connected Pinterest, imported 0 pins".
  *
- * `include_protected_pins` is the whole point. Without it this endpoint returned
- * 19 pins for a live account — all of them saves — and hid the 3 pins the creator
- * had actually made. With it, all 22 come back. Those 3 are also the ones that
- * never appear under any board `GET /boards` lists, so walking boards alone can
- * never find them: "connected Pinterest, imported 0 pins" was exactly this.
+ * Two filters, both server-side:
+ *
+ *   pin_filter=exclude_repins   Pinterest itself omits pins saved from someone
+ *                               else, so saves never travel over the wire.
+ *   include_protected_pins      LEFT OFF (its documented default is false).
+ *
+ * That second one used to be set to `true`, and the comment here explained why:
+ * without it the endpoint returned 19 pins for a live account — all saves — and
+ * hid the 3 the creator had made. Those 3 live on a PROTECTED board, which is
+ * exactly the content that must not be imported now, so the flag has to go. The
+ * consequence is deliberate and worth stating plainly: an account whose only
+ * authored pins sit on secret or protected boards now imports nothing, and that
+ * is the correct outcome rather than a regression. Making such a board public on
+ * Pinterest is what brings its pins in.
  */
 export async function listUserPins(accessToken: string): Promise<PinterestPin[]> {
   const pins: PinterestPin[] = [];
+  const stats: PinFilterStats = { saves: 0, noOwnerFlag: 0 };
   let bookmark: string | undefined;
   do {
-    const qs = new URLSearchParams({ page_size: "100", include_protected_pins: "true" });
+    const qs = new URLSearchParams({ page_size: "100", pin_filter: "exclude_repins" });
     if (bookmark) qs.set("bookmark", bookmark);
     const data = await pinterestFetch(accessToken, `/pins?${qs.toString()}`);
-    for (const p of data.items ?? []) pins.push(toPin(p, null));
+    pushCreatedPins(pins, data.items ?? [], null, stats);
     bookmark = data.bookmark || undefined;
   } while (bookmark);
+  logPinFilterStats("account listing", pins.length, stats);
   return pins;
 }
 
@@ -559,8 +721,9 @@ export async function createPin(
     imageUrl: largestImage(data.media),
     createdAt: toUtcIso(data.created_at),
     boardId: data.board_id ?? null,
-    // Just published through our own create-pin flow — always owned.
+    // Just published through our own create-pin flow — always owned, never a save.
     isOwner: true,
+    parentPinId: null,
   };
 }
 
