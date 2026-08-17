@@ -33,6 +33,18 @@ export const getPublicStorefront = createServerFn({ method: "GET" })
           .eq("storefront_id", store.id)
           .eq("status", "live")
           .eq("is_owner", true)
+          // NOTE: no `.is("pinterest_removed_at", null)` here, deliberately, even
+          // though every other pin read has one. This is the anon path, and anon
+          // holds a COLUMN-level GRANT on `pins` that doesn't include that column
+          // (20260803150000_scope_public_read.sql) — filtering on it is a hard
+          // 42501 "permission denied for table pins", which takes the whole
+          // public storefront down rather than hiding a row.
+          //
+          // Removed pins are excluded for anon by the RLS policy instead
+          // (20260817120000_pins_public_read_excludes_removed.sql). A policy
+          // expression isn't subject to the caller's column privileges, so it can
+          // test the column this query cannot — and it applies to every anon
+          // reader, including one that forgets to ask.
           .order("created_at", { ascending: false })
           .limit(200),
         sb

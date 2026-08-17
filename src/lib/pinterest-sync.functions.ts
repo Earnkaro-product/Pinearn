@@ -6,6 +6,8 @@ import {
   getBoard,
   getPinAnalytics,
   getUserAccount,
+  isCreatedByUser,
+  isPublicBoard,
   listBoardPins,
   listBoards,
   listUserPins,
@@ -48,7 +50,15 @@ export type PinterestSyncResult = {
   needsReconnect: boolean;
   error: string | null;
   username: string | null;
-  boards: { created: number; updated: number; removed: number };
+  boards: {
+    created: number;
+    updated: number;
+    removed: number;
+    /** Secret/protected boards found on the account and deliberately not
+     * imported. Reported for the same reason `savedSkipped` is: so a creator
+     * whose boards are all private sees why nothing arrived. */
+    nonPublicSkipped: number;
+  };
   pins: {
     created: number;
     updated: number;
@@ -69,7 +79,7 @@ function emptyResult(): PinterestSyncResult {
     needsReconnect: false,
     error: null,
     username: null,
-    boards: { created: 0, updated: 0, removed: 0 },
+    boards: { created: 0, updated: 0, removed: 0, nonPublicSkipped: 0 },
     pins: { created: 0, updated: 0, rehomed: 0, removed: 0, savedSkipped: 0 },
     analytics: { updated: 0, remaining: 0 },
     syncedAt: new Date().toISOString(),
@@ -224,16 +234,23 @@ async function runSync(userId: string, opts: { analytics: boolean }): Promise<Pi
     })
     .eq("id", userId);
 
-  // ---- What the account actually contains.
+  // ---- What the account actually contains, within what we're allowed to take.
+  //
+  // TWO HARD RULES, enforced in pinterest-api.ts and re-checked here:
+  //   PUBLIC ONLY   secret and protected boards are never listed, never fetched
+  //                 by id, and never contribute pins. A pin has no privacy of
+  //                 its own — it is as public as the board holding it — so the
+  //                 board gate is the pin gate.
+  //   CREATED ONLY  pins the creator authored. Saves/repins are excluded by
+  //                 Pinterest itself (pin_filter=exclude_repins) and dropped
+  //                 again locally on the per-board path, which takes no filter.
   //
   // Two sources, because neither is complete on its own:
   //
-  //   GET /boards            — misses boards (a live account has a perfectly
-  //                            ordinary PUBLIC board holding three freshly
-  //                            created pins that this listing never returns)
-  //   GET /pins              — misses pins unless include_protected_pins is set,
-  //                            and those hidden ones are exactly the authored
-  //                            pins this app exists to work on
+  //   GET /boards   misses boards (a live account has a perfectly ordinary
+  //                 PUBLIC board holding three freshly created pins that this
+  //                 listing never returns)
+  //   GET /pins     the safety net for those, resolved back to their board by id
   //
   // Walking boards alone is what produced "connected Pinterest, found 0 pins".
   const [listedBoards, accountPins] = await Promise.all([
@@ -251,18 +268,35 @@ async function runSync(userId: string, opts: { analytics: boolean }): Promise<Pi
   const missing = [
     ...new Set(
       accountPins
-        .filter((p) => p.isOwner && p.boardId && !known.has(p.boardId))
+        .filter((p) => isCreatedByUser(p) && p.boardId && !known.has(p.boardId))
         .map((p) => p.boardId as string),
     ),
   ];
   const recovered: PinterestBoard[] = [];
+  let recoveredNonPublic = 0;
   for (const boardId of missing) {
     const board = await withPinterestToken(userId, (t) => getBoard(t, boardId));
-    if (board) recovered.push(board);
+    if (!board) continue;
+    // `GET /boards/{id}` takes no privacy filter, so this is the ONE path where a
+    // secret or protected board can still arrive. It is also the path that exists
+    // to rescue unlisted boards — and "unlisted" is exactly what a non-public
+    // board looks like, so without this check the recovery step would quietly
+    // re-import precisely the content the public-only rule excludes.
+    if (!isPublicBoard(board)) {
+      recoveredNonPublic++;
+      continue;
+    }
+    recovered.push(board);
   }
   if (recovered.length > 0) {
     console.info(
-      `[pinterest-sync] recovered ${recovered.length} board(s) that GET /boards didn't list`,
+      `[pinterest-sync] recovered ${recovered.length} public board(s) that GET /boards didn't list`,
+    );
+  }
+  if (recoveredNonPublic > 0) {
+    result.boards.nonPublicSkipped += recoveredNonPublic;
+    console.info(
+      `[pinterest-sync] skipped ${recoveredNonPublic} non-public board(s) referenced by account pins`,
     );
   }
 
@@ -590,8 +624,8 @@ async function reconcilePins({
   userId: string;
   storefrontId: string;
   boards: PinterestBoard[];
-  /** The account-wide listing, including protected pins — the safety net for
-   * anything the per-board walk can't see. */
+  /** The account-wide listing — authored, non-protected pins only — the safety
+   * net for anything the per-board walk can't see. */
   accountPins: PinterestPin[];
   collectionIdByBoard: Map<string, string>;
   syncColumns: boolean;
@@ -666,7 +700,12 @@ async function reconcilePins({
     // content. Counted rather than silently dropped — an account whose boards are
     // all saves would otherwise import nothing with no explanation, which is
     // indistinguishable from the sync being broken.
-    const ownerPins = pins.filter((p) => p.isOwner);
+    //
+    // Both listing paths already apply this gate, so in practice nothing is
+    // dropped here. It stays because this is the last point before an INSERT: the
+    // rule is "no saved pin ever reaches the database", and enforcing it where the
+    // write happens means a future third discovery path cannot bypass it.
+    const ownerPins = pins.filter(isCreatedByUser);
     skippedSaves += pins.length - ownerPins.length;
     const inserts: Record<string, unknown>[] = [];
     const updates: Record<string, unknown>[] = [];

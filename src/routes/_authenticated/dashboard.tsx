@@ -454,6 +454,9 @@ function MonetizePins() {
         .select("id, title, image_url, impressions, clicks")
         .eq("user_id", userId)
         .eq("is_owner", true)
+        // Flagged gone from Pinterest — see pins_.attach.tsx. This list is the
+        // "monetize these next" prompt, so a dead pin would be actively suggested.
+        .is("pinterest_removed_at", null)
         .is("product_id", null)
         .order("created_at", { ascending: false });
       return data ?? [];
@@ -626,7 +629,9 @@ function MonetizeBoards() {
         .from("pins")
         .select("id, collection_id, image_url, product_id")
         .eq("user_id", userId)
-        .eq("is_owner", true);
+        .eq("is_owner", true)
+        // Flagged gone from Pinterest — see pins_.attach.tsx.
+        .is("pinterest_removed_at", null);
       return data ?? [];
     },
   });

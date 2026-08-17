@@ -56,6 +56,10 @@ async function fetchHealthData(): Promise<HealthData> {
       )
       .eq("user_id", userId)
       .eq("is_owner", true)
+      // Flagged gone from Pinterest — see pins_.attach.tsx. Scoring them would
+      // hold the Boost score down over pins the creator can no longer fix, and
+      // feed the rewrite deck cards that apply to nothing.
+      .is("pinterest_removed_at", null)
       .order("created_at", { ascending: false }),
     supabase
       .from("collections")

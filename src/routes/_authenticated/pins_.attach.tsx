@@ -100,6 +100,13 @@ function AttachPage() {
         .select("*")
         .eq("user_id", userId)
         .eq("is_owner", true)
+        // Gone from Pinterest — deleted there, or the board holding it was made
+        // secret. The sync FLAGS these rather than deleting them (they can carry
+        // an attached product and earnings history), which means every read has
+        // to exclude them or they keep showing up. Offering one here is the worst
+        // case: a creator attaches a product to a pin that no longer exists, so
+        // the affiliate link can never earn.
+        .is("pinterest_removed_at", null)
         .order("created_at", { ascending: false });
       if (error) throw error;
       return data as Pin[];

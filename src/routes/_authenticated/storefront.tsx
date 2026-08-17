@@ -228,6 +228,8 @@ function StorefrontPage() {
         .select("id,title,image_url,collection_id,external_url,product_id,status")
         .eq("storefront_id", storefront!.id)
         .eq("is_owner", true)
+        // Flagged gone from Pinterest — see pins_.attach.tsx.
+        .is("pinterest_removed_at", null)
         .order("created_at", { ascending: false });
       if (error) throw error;
       return data as Pin[];
@@ -1656,7 +1658,7 @@ function NewCollectionDialog({
             </p>
             <label className="mt-4 block cursor-pointer">
               <div className="relative grid aspect-video w-full place-items-center overflow-hidden rounded-xl border border-dashed border-border bg-surface-2 text-muted-foreground">
-                {preview ?? defaultCover ? (
+                {(preview ?? defaultCover) ? (
                   <FadeImage
                     src={(preview ?? defaultCover)!}
                     className="absolute inset-0 h-full w-full object-cover"
