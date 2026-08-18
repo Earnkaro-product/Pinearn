@@ -144,6 +144,10 @@ function PinPreviewPage() {
             title: a.title,
             affiliateUrl: a.url,
             imageUrl: a.image,
+            // Carry the price through. The pick already holds the figure the
+            // shopper saw, and the public storefront can only ever read a stored
+            // price — it has no authenticated way to re-resolve one.
+            priceCents: a.price ? Math.round(a.price.extractedValue * 100) : null,
           })),
         },
       });

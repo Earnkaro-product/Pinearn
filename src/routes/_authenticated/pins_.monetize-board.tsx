@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 
 import { AppShell } from "@/components/app-shell";
+import { priceCentsOf } from "@/lib/product-price";
 import {
   SuggestionCard,
   ProgressiveSuggestionCard,
@@ -406,7 +407,12 @@ function MonetizeBoardPage() {
 
   const persistApproval = async (
     candidate: BoardCandidate,
-    products: Array<{ title: string; affiliateUrl: string; imageUrl: string | null }>,
+    products: Array<{
+      title: string;
+      affiliateUrl: string;
+      imageUrl: string | null;
+      priceCents: number | null;
+    }>,
   ) => {
     setPendingIds((s) => new Set(s).add(candidate.pinId));
     // The pin was marked "approved" optimistically for an instant advance; if
@@ -507,11 +513,18 @@ function MonetizeBoardPage() {
     }
     const candidate = current;
     const manualAndCollectionProducts = [
-      ...selectedManual.map((p) => ({ title: p.title, affiliateUrl: p.url, imageUrl: null })),
+      ...selectedManual.map((p) => ({
+        title: p.title,
+        affiliateUrl: p.url,
+        imageUrl: null,
+        // A pasted URL has no price anywhere in the system.
+        priceCents: null,
+      })),
       ...selectedCollection.map((p) => ({
         title: p.title,
         affiliateUrl: p.affiliate_url,
         imageUrl: p.image_url,
+        priceCents: p.price_cents,
       })),
     ];
     const next = { ...statusById, [candidate.pinId]: "approved" as const };
@@ -528,7 +541,12 @@ function MonetizeBoardPage() {
     const chosenLinks = new Set(chosenMatches.map((m) => m.link));
     setPendingIds((s) => new Set(s).add(candidate.pinId));
     void (async () => {
-      let recProducts: Array<{ title: string; affiliateUrl: string; imageUrl: string | null }> = [];
+      let recProducts: Array<{
+        title: string;
+        affiliateUrl: string;
+        imageUrl: string | null;
+        priceCents: number | null;
+      }> = [];
       try {
         const result = await qc.fetchQuery({
           queryKey: ["pin-recommendation", candidate.pinId],
@@ -538,7 +556,12 @@ function MonetizeBoardPage() {
         });
         recProducts = result.recommendations
           .filter((r) => chosenLinks.has(r.link))
-          .map((r) => ({ title: r.title, affiliateUrl: r.link, imageUrl: r.thumbnail }));
+          .map((r) => ({
+            title: r.title,
+            affiliateUrl: r.link,
+            imageUrl: r.thumbnail,
+            priceCents: priceCentsOf(r.price),
+          }));
       } catch {
         // CK lookup failed — fall through with just the manual/collection picks.
       }
@@ -715,6 +738,7 @@ function MonetizeBoardPage() {
                   title: rec.title,
                   affiliateUrl: rec.link,
                   imageUrl: rec.thumbnail,
+                  priceCents: priceCentsOf(rec.price),
                 })),
               })),
             },

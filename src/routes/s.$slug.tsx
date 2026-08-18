@@ -439,12 +439,24 @@ function CoverCard({
    a chance to not buy.
    ========================================================================== */
 
-/** The symbol the in-app card uses. `currency` is stored as a symbol already on
- * most rows; fall back to ₹ to match `realProductPrice`. */
+/**
+ * The currency symbol to print in front of a stored price.
+ *
+ * Every price in this app is rupees: the retailer allowlist is Indian
+ * (CK_SUPPORTED_RETAILER_DOMAINS), Lens prices are parsed as ₹, and the in-app
+ * card's `realProductPrice` hardcodes ₹.
+ *
+ * The `storefront_products.currency` column, however, was created as
+ * `TEXT DEFAULT 'USD'` (20260706061832) and NOTHING has ever written to it — so
+ * a stored "USD" means "nobody set this", not "priced in dollars". Reading it
+ * literally is what put a $ in front of ₹2,199 on the public page while the
+ * in-app card showed ₹ for the same product. Treat it as the unset default it is.
+ */
 function currencySymbol(currency: string | null): string {
-  if (!currency) return "₹";
-  const map: Record<string, string> = { INR: "₹", USD: "$", GBP: "£", EUR: "€" };
-  return map[currency.toUpperCase()] ?? currency;
+  const code = (currency ?? "").trim().toUpperCase();
+  if (!code || code === "USD" || code === "INR" || code === "₹") return "₹";
+  const map: Record<string, string> = { GBP: "£", EUR: "€" };
+  return map[code] ?? currency!;
 }
 
 function CollectionView({
