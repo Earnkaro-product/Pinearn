@@ -4282,7 +4282,12 @@ async function performGoLive(
   storefront: { id: string; slug: string },
   position: number,
   existingProductIds: string[],
-  newProducts: Array<{ title: string; affiliateUrl: string; imageUrl: string | null }>,
+  newProducts: Array<{
+    title: string;
+    affiliateUrl: string;
+    imageUrl: string | null;
+    priceCents?: number | null;
+  }>,
 ): Promise<{ externalUrl: string; collectionId: string; productId: string | null }> {
   if (existingProductIds.length === 0 && newProducts.length === 0) {
     throw new Error("Attach at least one product before going live.");
@@ -4341,6 +4346,17 @@ async function performGoLive(
         title: p.title,
         affiliate_url: p.affiliateUrl,
         image_url: p.imageUrl ?? pin.image_url,
+        // The price the shopper was shown at the moment they picked this match.
+        // Dropping it here is what left every stored product with a null
+        // price_cents — and therefore no price, no struck-through MRP and no
+        // discount badge on the public storefront, which reads those columns
+        // and cannot run a live retailer lookup for an anonymous visitor.
+        price_cents: p.priceCents ?? null,
+        // Written explicitly because the column's own default was 'USD' and no
+        // code ever set it — see 20260818120000_products_currency_inr.sql. Every
+        // price this pipeline can produce comes from an Indian retailer via Lens,
+        // which the parser stamps as ₹.
+        currency: "INR",
       }));
     if (toInsert.length > 0) {
       const { data: inserted, error: insErr } = await supabase
@@ -4389,7 +4405,12 @@ export const goLivePin = createServerFn({ method: "POST" })
       pinId: string;
       origin: string;
       existingProductIds?: string[];
-      newProducts?: Array<{ title: string; affiliateUrl: string; imageUrl: string | null }>;
+      newProducts?: Array<{
+        title: string;
+        affiliateUrl: string;
+        imageUrl: string | null;
+        priceCents?: number | null;
+      }>;
     }) =>
       z
         .object({
@@ -4402,6 +4423,7 @@ export const goLivePin = createServerFn({ method: "POST" })
                 title: z.string(),
                 affiliateUrl: z.string().url(),
                 imageUrl: z.string().url().nullable(),
+                priceCents: z.number().int().nonnegative().nullable().optional(),
               }),
             )
             .optional()
@@ -4672,7 +4694,12 @@ export const approveBoardPins = createServerFn({ method: "POST" })
       origin: string;
       approvals: Array<{
         pinId: string;
-        products: Array<{ title: string; affiliateUrl: string; imageUrl: string | null }>;
+        products: Array<{
+          title: string;
+          affiliateUrl: string;
+          imageUrl: string | null;
+          priceCents?: number | null;
+        }>;
       }>;
     }) =>
       z
@@ -4688,6 +4715,7 @@ export const approveBoardPins = createServerFn({ method: "POST" })
                       title: z.string(),
                       affiliateUrl: z.string().url(),
                       imageUrl: z.string().url().nullable(),
+                      priceCents: z.number().int().nonnegative().nullable().optional(),
                     }),
                   )
                   .min(1),

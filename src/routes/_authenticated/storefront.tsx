@@ -1352,7 +1352,7 @@ function CollectionCard({
           collection is the action the whole storefront exists to enable — it
           cannot be the one control a creator can't find. Cover editing stays on
           hover because it's rare and desktop-shaped. */}
-      <div className="absolute right-2 top-2 flex items-center gap-1.5">
+      <div className="absolute right-2 top-2 z-10 flex items-center gap-1.5">
         <SharePopover url={shareUrl} title={name} text={`${name} — from ${storeName}`} align="end">
           <button
             aria-label={`Share ${name}`}

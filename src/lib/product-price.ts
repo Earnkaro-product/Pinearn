@@ -60,3 +60,16 @@ export function productPriceParts(
     discountPct: hasDiscount ? Math.round((1 - amount / mrp) * 100) : null,
   };
 }
+
+/**
+ * A visual match's price as integer cents, for storing on `storefront_products`.
+ *
+ * Every "go live" path has to do this conversion, and each one that skips it
+ * writes a product with a null price — which the public storefront then renders
+ * with no price, no struck-through MRP and no discount badge, because it has no
+ * authenticated way to look one up for an anonymous visitor.
+ */
+export function priceCentsOf(price: { extractedValue: number } | null | undefined): number | null {
+  if (!price || !Number.isFinite(price.extractedValue)) return null;
+  return Math.round(price.extractedValue * 100);
+}

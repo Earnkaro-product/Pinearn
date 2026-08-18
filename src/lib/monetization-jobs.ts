@@ -2,6 +2,8 @@ import { useSyncExternalStore } from "react";
 import type { QueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
+import { priceCentsOf } from "./product-price";
+
 import type { BoardCandidate, VisualMatch } from "./pinterest.functions";
 
 // A single "monetise the whole board" background job. It is deliberately held
@@ -85,7 +87,12 @@ type RunApprove = (args: {
     origin: string;
     approvals: Array<{
       pinId: string;
-      products: Array<{ title: string; affiliateUrl: string; imageUrl: string | null }>;
+      products: Array<{
+        title: string;
+        affiliateUrl: string;
+        imageUrl: string | null;
+        priceCents: number | null;
+      }>;
     }>;
   };
 }) => Promise<{ approved: number; failed: string[] }>;
@@ -177,6 +184,7 @@ async function runJob(opts: StartBoardMonetizationOptions): Promise<void> {
               title: rec.title,
               affiliateUrl: rec.link,
               imageUrl: rec.thumbnail,
+              priceCents: priceCentsOf(rec.price),
             })),
           })),
         },
