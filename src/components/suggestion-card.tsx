@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { Check, ExternalLink, Image as ImageIcon, Loader2 } from "lucide-react";
 import { estimateCommissionPct } from "@/lib/brands";
+import { computeMrp, formatMoney } from "@/lib/product-price";
 import { useProductDetails } from "@/hooks/use-product-details";
 import type { CkResult, RawVisualMatch } from "@/lib/pinterest.functions";
 
@@ -15,21 +16,8 @@ export function realProductPrice(priceCents: number | null | undefined): Suggest
   return { value: `₹${amount.toLocaleString("en-IN")}`, extractedValue: amount, currency: "₹" };
 }
 
-// Real stored products have no MRP field of their own (just one selling
-// price) — synthesize a plausible struck-through MRP the same way most
-// shopping apps show a "was" price: a fixed markup, rounded to a clean
-// number, deterministic (not random) so it's stable across re-renders.
-// AI visual-search matches skip this entirely — they carry a real MRP from
-// the CK Product Details lookup.
-function computeMrp(extractedValue: number): number {
-  const inflated = extractedValue * 1.25;
-  const step = inflated >= 1000 ? 50 : 10;
-  return Math.ceil(inflated / step) * step;
-}
-
-function formatMoney(n: number, currency: string) {
-  return `${currency}${n.toLocaleString("en-IN")}`;
-}
+// computeMrp/formatMoney moved to @/lib/product-price so the public storefront
+// renders the identical "was" price for the same product — see the note there.
 
 /**
  * The one product card used everywhere a product is shown anywhere in the

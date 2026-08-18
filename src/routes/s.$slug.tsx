@@ -1,7 +1,11 @@
 import { createFileRoute, Link, notFound } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { useState } from "react";
+import { ChevronLeft, Image as ImageIcon } from "lucide-react";
 import { z } from "zod";
+
+import { hostBrand } from "@/lib/brands";
+import { productPriceParts } from "@/lib/product-price";
 
 const DEFAULT_BACKGROUND =
   "https://images.unsplash.com/photo-1519681393784-d120267933ba?w=1600&q=80&auto=format&fit=crop";
@@ -64,17 +68,81 @@ export const getPublicStorefront = createServerFn({ method: "GET" })
         .in("board_id", boardIds);
       boardCollections = bc ?? [];
     }
+
+    // ---- Products, read with the SERVICE ROLE and hand-scoped.
+    //
+    // `anon` has no access to storefront_products at all, and that is on
+    // purpose: 20260803150000_scope_public_read.sql revoked it because a
+    // table-wide GRANT "published every creator's affiliate URLs, prices and
+    // commission rates" to anybody holding the publishable key, queryable
+    // straight off PostgREST.
+    //
+    // Re-granting it would reopen exactly that. So the read happens here
+    // instead — server-side, one storefront, and an explicit column list. The
+    // difference that matters: `commission_pct` and `user_id` are never
+    // selected, so the creator's rate cannot leave the server even by accident,
+    // and no visitor can enumerate anyone else's products.
+    //
+    // Scoped to the collections this page already decided are visible, so a
+    // collection hidden from the storefront takes its products with it.
+    const visibleCollectionIds = (collections ?? []).map((c) => c.id);
+    const livePinIds = (pins ?? []).map((p) => p.id);
+    let products: Array<{
+      id: string;
+      title: string;
+      image_url: string | null;
+      affiliate_url: string;
+      price_cents: number | null;
+      currency: string | null;
+      collection_id: string | null;
+      pin_id: string | null;
+      position: number;
+    }> = [];
+    if (visibleCollectionIds.length > 0 || livePinIds.length > 0) {
+      const admin = createClient(
+        process.env.SUPABASE_URL!,
+        process.env.SUPABASE_SERVICE_ROLE_KEY!,
+        {
+          auth: { storage: undefined, persistSession: false, autoRefreshToken: false },
+        },
+      );
+      const filters = [
+        visibleCollectionIds.length > 0
+          ? `collection_id.in.(${visibleCollectionIds.join(",")})`
+          : null,
+        livePinIds.length > 0 ? `pin_id.in.(${livePinIds.join(",")})` : null,
+      ].filter(Boolean);
+      const { data: prod } = await admin
+        .from("storefront_products")
+        .select(
+          "id,title,image_url,affiliate_url,price_cents,currency,collection_id,pin_id,position",
+        )
+        .eq("storefront_id", store.id)
+        .or(filters.join(","))
+        .order("position", { ascending: true })
+        .limit(500);
+      products = prod ?? [];
+    }
+
     return {
       store,
       collections: collections ?? [],
       pins: pins ?? [],
       boards: boards ?? [],
       boardCollections,
+      products,
       profile: profile ?? null,
     };
   });
 
 export const Route = createFileRoute("/s/$slug")({
+  // `?c=<collection slug>` is the shareable deep link a creator sends out. It is
+  // a search param rather than a nested route so every storefront URL already in
+  // the wild keeps working, and the collection is simply a deeper entry point
+  // into the same page.
+  validateSearch: (s: Record<string, unknown>): { c?: string } => ({
+    c: typeof s.c === "string" && s.c.length > 0 ? s.c : undefined,
+  }),
   loader: async ({ params }) => {
     const result = await getPublicStorefront({ data: { slug: params.slug } });
     if (!result) throw notFound();
@@ -108,8 +176,10 @@ function PublicStorefront() {
     pins,
     boards,
     boardCollections,
+    products,
     profile,
   } = Route.useLoaderData();
+  const { c: openSlug } = Route.useSearch();
   type C = (typeof allCollections)[number];
   type P = (typeof pins)[number];
   type B = (typeof boards)[number];
@@ -122,6 +192,38 @@ function PublicStorefront() {
   // board) only shows up publicly once it has at least one live pin.
   const collectionIdsWithProduct = new Set(pins.map((p) => p.collection_id));
   const collections = allCollections.filter((c) => collectionIdsWithProduct.has(c.id));
+
+  // Which collection each product belongs to. A product is routed either
+  // directly (collection_id) or through the pin it was attached to — see
+  // 20260720120000_pin_product_routing.sql — so resolve the pin's collection
+  // when the direct link is absent.
+  const collectionIdByPin = new Map(pins.map((p: P) => [p.id, p.collection_id]));
+  const productsByCollection = new Map<string, typeof products>();
+  for (const prod of products) {
+    const cid = prod.collection_id ?? (prod.pin_id ? collectionIdByPin.get(prod.pin_id) : null);
+    if (!cid) continue;
+    const arr = productsByCollection.get(cid) ?? [];
+    arr.push(prod);
+    productsByCollection.set(cid, arr);
+  }
+
+  const openCollection = openSlug ? collections.find((c: C) => c.slug === openSlug) : undefined;
+
+  // A shared link whose collection is gone (removed from the storefront, or its
+  // last pin taken down) lands on the storefront rather than on an error — the
+  // visitor still gets somewhere useful, which a 404 would not give them.
+  if (openCollection) {
+    return (
+      <CollectionView
+        store={store}
+        collection={openCollection}
+        products={productsByCollection.get(openCollection.id) ?? []}
+        pins={pins.filter((p: P) => p.collection_id === openCollection.id)}
+        brand={brand}
+        backgroundUrl={backgroundUrl}
+      />
+    );
+  }
 
   const collectionsByBoard = new Map<string, string[]>();
   for (const bc of boardCollections) {
@@ -198,14 +300,16 @@ function PublicStorefront() {
                 const cPins = pins.filter((p: P) => p.collection_id === c.id);
                 const cover =
                   c.cover_image_url ?? cPins.find((p: P) => p.image_url)?.image_url ?? null;
+                const count = (productsByCollection.get(c.id) ?? []).length || cPins.length;
                 return (
                   <CoverCard
                     key={c.id}
                     name={c.name}
-                    subtitle={`${cPins.length} pin${cPins.length === 1 ? "" : "s"}`}
+                    subtitle={`${count} product${count === 1 ? "" : "s"}`}
                     coverUrl={cover}
                     coverColor={c.cover_color}
                     brand={brand}
+                    to={{ to: "/s/$slug", params: { slug: store.slug }, search: { c: c.slug } }}
                   />
                 );
               })}
@@ -263,6 +367,7 @@ function CoverCard({
   coverColor,
   brand,
   mosaic,
+  to,
 }: {
   name: string;
   subtitle: string;
@@ -270,10 +375,29 @@ function CoverCard({
   coverColor: string | null;
   brand: string;
   mosaic?: string[];
+  /** When present the whole card becomes a link. Boards have no destination
+   * yet, so they stay inert rather than pretending to be tappable. */
+  to?: { to: string; params: { slug: string }; search: { c: string } };
 }) {
   const showMosaic = !coverUrl && mosaic && mosaic.length >= 2;
+  const Wrapper = to
+    ? ({ children }: { children: React.ReactNode }) => (
+        <Link
+          to={to.to}
+          params={to.params}
+          search={to.search}
+          className="group block overflow-hidden rounded-2xl border border-border bg-surface shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg"
+        >
+          {children}
+        </Link>
+      )
+    : ({ children }: { children: React.ReactNode }) => (
+        <div className="group overflow-hidden rounded-2xl border border-border bg-surface shadow-sm">
+          {children}
+        </div>
+      );
   return (
-    <div className="group overflow-hidden rounded-2xl border border-border bg-surface shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg">
+    <Wrapper>
       <div
         className="relative aspect-square w-full"
         style={{
@@ -302,6 +426,182 @@ function CoverCard({
           <div className="text-micro opacity-80">{subtitle}</div>
         </div>
       </div>
+    </Wrapper>
+  );
+}
+
+/* ============================================================================
+   One collection, as a visitor sees it — the destination of a shared link.
+
+   Products carry exactly ONE call to action: Buy now. No price comparison, no
+   "view details", no secondary link. A second button on a product card competes
+   with the only tap that earns the creator anything, and every extra choice is
+   a chance to not buy.
+   ========================================================================== */
+
+/** The symbol the in-app card uses. `currency` is stored as a symbol already on
+ * most rows; fall back to ₹ to match `realProductPrice`. */
+function currencySymbol(currency: string | null): string {
+  if (!currency) return "₹";
+  const map: Record<string, string> = { INR: "₹", USD: "$", GBP: "£", EUR: "€" };
+  return map[currency.toUpperCase()] ?? currency;
+}
+
+function CollectionView({
+  store,
+  collection,
+  products,
+  pins,
+  brand,
+  backgroundUrl,
+}: {
+  store: { name: string; slug: string };
+  collection: { name: string; description: string | null };
+  products: Array<{
+    id: string;
+    title: string;
+    image_url: string | null;
+    affiliate_url: string;
+    price_cents: number | null;
+    currency: string | null;
+  }>;
+  pins: Array<{ id: string; image_url: string | null }>;
+  brand: string;
+  backgroundUrl: string;
+}) {
+  return (
+    <div className="min-h-screen bg-background text-foreground">
+      <div className="relative h-36 w-full overflow-hidden sm:h-48">
+        <img src={backgroundUrl} alt="" className="absolute inset-0 h-full w-full object-cover" />
+        <div className="absolute inset-0 bg-gradient-to-b from-black/25 via-transparent to-background" />
+      </div>
+
+      <header className="mx-auto max-w-5xl px-6 pt-4">
+        <Link
+          to="/s/$slug"
+          params={{ slug: store.slug }}
+          search={{ c: undefined }}
+          className="inline-flex items-center gap-1.5 text-sm font-medium text-muted-foreground hover:text-foreground"
+        >
+          <ChevronLeft className="h-4 w-4" /> {store.name}
+        </Link>
+        <h1 className="mt-3 font-display text-2xl font-semibold sm:text-3xl">{collection.name}</h1>
+        {collection.description && (
+          <p className="mt-2 max-w-xl text-sm text-muted-foreground">{collection.description}</p>
+        )}
+        <p className="mt-1 text-sm text-muted-foreground">
+          {products.length} product{products.length === 1 ? "" : "s"}
+        </p>
+      </header>
+
+      <main className="mx-auto max-w-5xl px-6 py-6">
+        {products.length > 0 ? (
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
+            {products.map((p) => {
+              // Same helper the in-app SuggestionCard uses, so the struck-through
+              // "was" price a visitor sees is the same number the creator sees.
+              const parts = productPriceParts(p.price_cents, currencySymbol(p.currency));
+              return (
+                <article
+                  key={p.id}
+                  className="group relative flex h-full flex-col overflow-hidden rounded-2xl border border-border bg-surface text-left shadow-sm transition hover:-translate-y-1 hover:border-primary/50 hover:shadow-elevate"
+                >
+                  <div className="relative aspect-square w-full overflow-hidden bg-surface-2">
+                    {p.image_url ? (
+                      <img
+                        src={p.image_url}
+                        alt={p.title}
+                        loading="lazy"
+                        className="absolute inset-0 h-full w-full object-cover transition duration-500 group-hover:scale-[1.06]"
+                      />
+                    ) : (
+                      <div className="absolute inset-0 grid place-items-center text-muted-foreground">
+                        <ImageIcon className="h-8 w-8" />
+                      </div>
+                    )}
+                    <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/30 via-transparent to-transparent" />
+                  </div>
+
+                  <div className="flex flex-1 flex-col gap-2 p-3">
+                    <span className="truncate text-micro font-bold uppercase tracking-wide text-muted-foreground">
+                      {hostBrand(p.affiliate_url)}
+                    </span>
+                    <h3 className="line-clamp-2 min-h-[2.4em] text-xs font-semibold leading-snug text-foreground">
+                      {p.title}
+                    </h3>
+
+                    {parts && (
+                      <div className="flex flex-wrap items-baseline gap-1.5">
+                        <span className="text-lead font-extrabold tracking-tight text-foreground">
+                          {parts.price}
+                        </span>
+                        {parts.mrp && (
+                          <span className="text-mini font-medium text-muted-foreground line-through">
+                            {parts.mrp}
+                          </span>
+                        )}
+                        {parts.discountPct != null && parts.discountPct > 0 && (
+                          <span className="text-mini font-bold text-amber-600">
+                            ({parts.discountPct}% OFF)
+                          </span>
+                        )}
+                      </div>
+                    )}
+
+                    {/* The ONLY call to action. No compare, no details, no
+                        secondary link — and deliberately no earnings pill: the
+                        commission is the creator's business, never the shopper's.
+                        rel="sponsored nofollow" because this is a paid affiliate
+                        link; noopener/noreferrer so the retailer's page gets no
+                        handle on this tab. */}
+                    <a
+                      href={p.affiliate_url}
+                      target="_blank"
+                      rel="sponsored nofollow noopener noreferrer"
+                      className="mt-auto flex items-center justify-center rounded-xl px-3 py-2.5 text-sm font-semibold text-white transition hover:brightness-110 active:scale-[0.99]"
+                      style={{ background: brand }}
+                    >
+                      Buy now
+                    </a>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        ) : (
+          <>
+            {/* No products attached yet, but the collection's pins still show —
+                an empty grid would make a shared link look broken. */}
+            {pins.length > 0 && (
+              <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
+                {pins
+                  .filter((p) => p.image_url)
+                  .map((p) => (
+                    <div
+                      key={p.id}
+                      className="overflow-hidden rounded-2xl border border-border bg-surface"
+                    >
+                      <img
+                        src={p.image_url!}
+                        alt=""
+                        loading="lazy"
+                        className="aspect-square w-full object-cover"
+                      />
+                    </div>
+                  ))}
+              </div>
+            )}
+            {pins.length === 0 && <EmptyState text="Nothing in this collection yet." />}
+          </>
+        )}
+      </main>
+
+      <footer className="px-6 py-8 text-center text-xs text-muted-foreground">
+        Powered by{" "}
+        <Link to="/" className="text-primary hover:underline">
+          ShopMyPin
+        </Link>
+      </footer>
     </div>
   );
 }

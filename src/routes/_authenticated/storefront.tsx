@@ -31,6 +31,8 @@ import {
 } from "lucide-react";
 import { Reorder, motion } from "framer-motion";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { SharePopover } from "@/components/share-popover";
+import { collectionShareUrl, storeShareUrl } from "@/lib/share-links";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
 import { takeDownCollection } from "@/lib/pinterest.functions";
@@ -642,7 +644,7 @@ function StorefrontPage() {
     );
   }
 
-  const publicUrl = `${typeof window !== "undefined" ? window.location.origin : ""}/s/${storefront.slug}`;
+  const publicUrl = storeShareUrl(storefront.slug);
   const brandColor = storefront.brand_color ?? "#E60023";
   const backgroundUrl = storefront.background_image_url ?? DEFAULT_BACKGROUND;
 
@@ -744,117 +746,15 @@ function StorefrontPage() {
           >
             <Pencil className="h-3.5 w-3.5" /> Edit
           </button>
-          <Popover>
-            <PopoverTrigger asChild>
-              <button className="inline-flex items-center gap-1.5 rounded-full border border-border px-4 py-2 text-sm font-medium text-foreground hover:bg-surface-2">
-                <Share2 className="h-3.5 w-3.5" /> Share
-              </button>
-            </PopoverTrigger>
-            <PopoverContent align="end" className="w-64 p-2">
-              <div className="grid grid-cols-4 gap-1">
-                {(() => {
-                  const shareText = `Check out my storefront: ${storefront.name}`;
-                  const encodedUrl = encodeURIComponent(publicUrl);
-                  const encodedText = encodeURIComponent(shareText);
-                  const items: { label: string; icon: ReactNode; onClick: () => void }[] = [
-                    {
-                      label: "Pinterest",
-                      icon: (
-                        <svg viewBox="0 0 24 24" className="h-5 w-5" fill="currentColor">
-                          <path d="M12 0C5.4 0 0 5.4 0 12c0 5 3.1 9.4 7.5 11.1-.1-.9-.2-2.4 0-3.4.2-.9 1.4-5.7 1.4-5.7s-.4-.7-.4-1.8c0-1.7 1-2.9 2.2-2.9 1 0 1.5.8 1.5 1.7 0 1-.7 2.6-1 4-.3 1.2.6 2.1 1.7 2.1 2.1 0 3.7-2.2 3.7-5.4 0-2.8-2-4.8-4.9-4.8-3.3 0-5.3 2.5-5.3 5.1 0 1 .4 2.1.9 2.7.1.1.1.2.1.3-.1.4-.3 1.2-.3 1.4-.1.2-.2.3-.4.2-1.5-.7-2.4-2.9-2.4-4.6 0-3.8 2.7-7.2 7.9-7.2 4.1 0 7.3 3 7.3 6.9 0 4.1-2.6 7.5-6.2 7.5-1.2 0-2.4-.6-2.8-1.4l-.7 2.9c-.3 1-1 2.3-1.5 3.1 1.1.3 2.3.5 3.5.5 6.6 0 12-5.4 12-12S18.6 0 12 0z" />
-                        </svg>
-                      ),
-                      onClick: () =>
-                        window.open(
-                          `https://pinterest.com/pin/create/button/?url=${encodedUrl}&description=${encodedText}`,
-                          "_blank",
-                        ),
-                    },
-                    {
-                      label: "WhatsApp",
-                      icon: <MessageCircle className="h-5 w-5" />,
-                      onClick: () =>
-                        window.open(`https://wa.me/?text=${encodedText}%20${encodedUrl}`, "_blank"),
-                    },
-                    {
-                      label: "Telegram",
-                      icon: <Send className="h-5 w-5" />,
-                      onClick: () =>
-                        window.open(
-                          `https://t.me/share/url?url=${encodedUrl}&text=${encodedText}`,
-                          "_blank",
-                        ),
-                    },
-                    {
-                      label: "X",
-                      icon: <Twitter className="h-5 w-5" />,
-                      onClick: () =>
-                        window.open(
-                          `https://twitter.com/intent/tweet?url=${encodedUrl}&text=${encodedText}`,
-                          "_blank",
-                        ),
-                    },
-                    {
-                      label: "Facebook",
-                      icon: <Facebook className="h-5 w-5" />,
-                      onClick: () =>
-                        window.open(
-                          `https://www.facebook.com/sharer/sharer.php?u=${encodedUrl}`,
-                          "_blank",
-                        ),
-                    },
-                    {
-                      label: "Email",
-                      icon: <Mail className="h-5 w-5" />,
-                      onClick: () => {
-                        window.location.href = `mailto:?subject=${encodeURIComponent(storefront.name)}&body=${encodedText}%20${encodedUrl}`;
-                      },
-                    },
-                    {
-                      label: "More",
-                      icon: <Share2 className="h-5 w-5" />,
-                      onClick: async () => {
-                        if (navigator.share) {
-                          try {
-                            await navigator.share({
-                              title: storefront.name,
-                              text: shareText,
-                              url: publicUrl,
-                            });
-                          } catch {
-                            /* user dismissed the native share sheet */
-                          }
-                        } else {
-                          navigator.clipboard.writeText(publicUrl);
-                          toast.success("Link copied");
-                        }
-                      },
-                    },
-                    {
-                      label: "Copy",
-                      icon: <Copy className="h-5 w-5" />,
-                      onClick: () => {
-                        navigator.clipboard.writeText(publicUrl);
-                        toast.success("Link copied");
-                      },
-                    },
-                  ];
-                  return items.map((it) => (
-                    <button
-                      key={it.label}
-                      onClick={it.onClick}
-                      className="flex flex-col items-center gap-1 rounded-lg p-2 text-micro font-medium text-foreground hover:bg-surface-2"
-                    >
-                      <span className="flex h-10 w-10 items-center justify-center rounded-full bg-surface-2">
-                        {it.icon}
-                      </span>
-                      {it.label}
-                    </button>
-                  ));
-                })()}
-              </div>
-            </PopoverContent>
-          </Popover>
+          <SharePopover
+            url={publicUrl}
+            title={storefront.name}
+            text={`Check out my storefront: ${storefront.name}`}
+          >
+            <button className="inline-flex items-center gap-1.5 rounded-full border border-border px-4 py-2 text-sm font-medium text-foreground hover:bg-surface-2">
+              <Share2 className="h-3.5 w-3.5" /> Share
+            </button>
+          </SharePopover>
         </div>
       </div>
 
@@ -965,6 +865,8 @@ function StorefrontPage() {
                     coverUrl={coverUrl}
                     coverColor={c.cover_color}
                     brandColor={brandColor}
+                    shareUrl={collectionShareUrl(storefront.slug, c.slug)}
+                    storeName={storefront.name}
                     onOpen={() => setViewCollectionFor(c.id)}
                     onEditCover={() => setCoverPickerFor(c.id)}
                     onRemove={() => {
@@ -1395,6 +1297,8 @@ function CollectionCard({
   coverUrl,
   coverColor,
   brandColor,
+  shareUrl,
+  storeName,
   onOpen,
   onEditCover,
   onRemove,
@@ -1405,6 +1309,9 @@ function CollectionCard({
   coverUrl: string | null;
   coverColor: string | null;
   brandColor: string;
+  /** The visitor-facing link for THIS collection, not the whole store. */
+  shareUrl: string;
+  storeName: string;
   onOpen: () => void;
   onEditCover: () => void;
   onRemove: () => void;
@@ -1440,13 +1347,29 @@ function CollectionCard({
           </div>
         </div>
       </button>
-      <button
-        onClick={onEditCover}
-        aria-label="Change cover"
-        className="absolute right-2 top-2 grid h-8 w-8 place-items-center rounded-full bg-black/50 text-white opacity-0 backdrop-blur transition group-hover:opacity-100"
-      >
-        <ImageIcon className="h-3.5 w-3.5" />
-      </button>
+      {/* Share and cover sit together, top-right. Share is NOT hover-gated:
+          this is a phone-first app, hover never fires on touch, and sharing a
+          collection is the action the whole storefront exists to enable — it
+          cannot be the one control a creator can't find. Cover editing stays on
+          hover because it's rare and desktop-shaped. */}
+      <div className="absolute right-2 top-2 flex items-center gap-1.5">
+        <SharePopover url={shareUrl} title={name} text={`${name} — from ${storeName}`} align="end">
+          <button
+            aria-label={`Share ${name}`}
+            onClick={(e) => e.stopPropagation()}
+            className="grid h-8 w-8 place-items-center rounded-full bg-black/50 text-white backdrop-blur transition hover:bg-black/70"
+          >
+            <Share2 className="h-3.5 w-3.5" />
+          </button>
+        </SharePopover>
+        <button
+          onClick={onEditCover}
+          aria-label="Change cover"
+          className="grid h-8 w-8 place-items-center rounded-full bg-black/50 text-white opacity-0 backdrop-blur transition group-hover:opacity-100"
+        >
+          <ImageIcon className="h-3.5 w-3.5" />
+        </button>
+      </div>
       {/* Always visible (not hover-gated) — hover never fires on touch
           screens, and delete must be reachable there. */}
       <button
