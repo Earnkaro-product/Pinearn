@@ -4,7 +4,7 @@ import { z } from "zod";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { getFriendlyMessage } from "@/lib/friendly-error";
-import { hasRealName, storefrontSlugFor } from "@/lib/creator-name";
+import { hasRealName, opaqueHandle, storefrontSlugFor } from "@/lib/creator-name";
 import {
   CheckCircle2,
   ArrowRight,
@@ -130,13 +130,22 @@ async function renameStorefront(userId: string, name: string) {
       slug,
     };
     const { error } = await supabase.from("storefronts").update(patch).eq("id", store.id);
-    // A taken slug is the one predictable failure — two creators called Priya.
-    // Retry once with a short id suffix rather than losing the rename.
+    // A taken slug is the one predictable failure — two creators called Priya —
+    // and it is now a real unique-index violation rather than a silent duplicate
+    // (20260818140000_storefront_slug_unique.sql). Step down through suffixed
+    // forms; the last one is derived from the user id, so it cannot collide.
     if (error) {
-      await supabase
+      const suffixed = `${slug}-${opaqueHandle(userId, 4)}`;
+      const { error: retryError } = await supabase
         .from("storefronts")
-        .update({ ...patch, slug: `${slug}-${userId.slice(0, 4)}` })
+        .update({ ...patch, slug: suffixed })
         .eq("id", store.id);
+      if (retryError) {
+        await supabase
+          .from("storefronts")
+          .update({ ...patch, slug: `shop-${opaqueHandle(userId)}` })
+          .eq("id", store.id);
+      }
     }
   } catch {
     /* non-fatal — the name is editable from the storefront screen */
