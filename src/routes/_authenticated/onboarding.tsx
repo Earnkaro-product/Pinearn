@@ -4,6 +4,7 @@ import { z } from "zod";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { getFriendlyMessage } from "@/lib/friendly-error";
+import { hasRealName, storefrontSlugFor } from "@/lib/creator-name";
 import {
   CheckCircle2,
   ArrowRight,
@@ -91,17 +92,55 @@ const NEVER_ITEMS = [
 ] as const;
 
 /**
- * Has this creator actually told us their name?
+ * Carry the name the creator just typed onto their storefront.
  *
- * Sign-up seeds `display_name` with the phone number (see auth.tsx:
- * `options: { data: { display_name: phone } }`), so a non-empty display_name is
- * NOT the same as a name the user chose — every brand-new account already has
- * one. Checking only for non-empty is what skipped the name step for new users.
- * A real name contains at least one letter; "+918619596704" doesn't.
+ * The storefront is created by a database trigger the instant the profile row
+ * appears — which is BEFORE this screen runs — so it is named from whatever
+ * display_name held then: the phone number. This screen's own caption promises
+ * the name is "shown on your storefront", and until this function existed that
+ * was simply untrue; every store stayed called "+917777777777", with the number
+ * in its public URL.
+ *
+ * Only a placeholder store is renamed. A creator who has already picked a name in
+ * Settings keeps it, and their slug is left alone — a live slug is a URL people
+ * may have saved, so it is never rewritten out from under them once it is real.
+ *
+ * Best-effort: a failure here must not block onboarding, since the name is
+ * editable later from the storefront screen.
  */
-function hasRealName(value: string | null | undefined): boolean {
-  const v = (value ?? "").trim();
-  return v.length >= 2 && /\p{L}/u.test(v);
+async function renameStorefront(userId: string, name: string) {
+  try {
+    const { data: store } = await supabase
+      .from("storefronts")
+      .select("id,name,slug")
+      .eq("user_id", userId)
+      .order("is_default", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (!store) return;
+    // Placeholder = whatever the trigger derived from the phone number, or the
+    // generic fallback. Anything else is a real choice and is left untouched.
+    const isPlaceholder = !hasRealName(store.name) || store.name === "My Shop";
+    if (!isPlaceholder) return;
+
+    const slug = storefrontSlugFor(name, userId);
+    const patch = {
+      name,
+      description: `Curated picks and affiliate links from ${name}`,
+      slug,
+    };
+    const { error } = await supabase.from("storefronts").update(patch).eq("id", store.id);
+    // A taken slug is the one predictable failure — two creators called Priya.
+    // Retry once with a short id suffix rather than losing the rename.
+    if (error) {
+      await supabase
+        .from("storefronts")
+        .update({ ...patch, slug: `${slug}-${userId.slice(0, 4)}` })
+        .eq("id", store.id);
+    }
+  } catch {
+    /* non-fatal — the name is editable from the storefront screen */
+  }
 }
 
 function OnboardingPage() {
@@ -159,8 +198,12 @@ function OnboardingPage() {
       .from("profiles")
       .update({ display_name: trimmed })
       .eq("id", userId);
+    if (error) {
+      setSavingName(false);
+      return toast.error(getFriendlyMessage(error));
+    }
+    await renameStorefront(userId, trimmed);
     setSavingName(false);
-    if (error) return toast.error(getFriendlyMessage(error));
     setPhase("authorize");
   }
 
