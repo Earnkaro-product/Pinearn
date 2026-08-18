@@ -16,6 +16,7 @@ import {
   type PinterestPin,
 } from "@/lib/pinterest-api";
 import { withPinterestToken } from "@/lib/pinterest-oauth.functions";
+import { storefrontNameFor, storefrontSlugFor } from "@/lib/creator-name";
 
 /**
  * The one Pinterest sync.
@@ -211,8 +212,12 @@ async function runSync(userId: string, opts: { analytics: boolean }): Promise<Pi
       .select("display_name")
       .eq("id", userId)
       .maybeSingle();
-    const name = profile?.display_name?.trim() || "My storefront";
-    const slug = `store-${userId.slice(0, 8)}`;
+    // display_name is seeded with the creator's PHONE NUMBER at sign-up, so it
+    // can't be used raw — that is how storefronts ended up called
+    // "+917777777777". storefrontNameFor falls back to a neutral placeholder,
+    // which onboarding replaces with the real name.
+    const name = storefrontNameFor(profile?.display_name);
+    const slug = storefrontSlugFor(profile?.display_name, userId);
     const { data: created, error } = await supabase
       .from("storefronts")
       .insert({ user_id: userId, name, slug, is_default: true })
