@@ -1,12 +1,63 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { ChevronLeft } from "lucide-react";
+import type { ReactNode } from "react";
 
 export const Route = createFileRoute("/privacy")({
   head: () => ({
-    meta: [{ title: "Privacy Policy — ShopMyPin" }],
+    meta: [
+      { title: "Privacy Policy — ShopMyPin" },
+      {
+        name: "description",
+        content:
+          "How ShopMyPin collects, uses, shares and retains your personal data and your Pinterest data, and the rights you have under the DPDP Act, 2023.",
+      },
+    ],
   }),
   component: PrivacyPolicy,
 });
+
+/* A legal page is mostly long prose with a few dense tables. These two helpers
+   exist so every table scrolls inside its own container on a phone rather than
+   forcing the whole page sideways, and so the heading rhythm can't drift
+   between sections. */
+function Table({ head, children }: { head: string[]; children: ReactNode }) {
+  return (
+    <div className="mt-4 overflow-x-auto rounded-xl border border-border">
+      <table className="w-full min-w-[34rem] border-collapse text-left text-sm">
+        <thead className="bg-surface-2">
+          <tr>
+            {head.map((h) => (
+              <th key={h} className="border-b border-border px-4 py-2.5 font-semibold">
+                {h}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>{children}</tbody>
+      </table>
+    </div>
+  );
+}
+
+function Row({ cells }: { cells: ReactNode[] }) {
+  return (
+    <tr className="border-b border-border/60 last:border-0 align-top">
+      {cells.map((c, i) => (
+        <td key={i} className="px-4 py-2.5">
+          {c}
+        </td>
+      ))}
+    </tr>
+  );
+}
+
+function H2({ children }: { children: ReactNode }) {
+  return <h2 className="mt-10 font-display text-xl font-bold">{children}</h2>;
+}
+
+function H3({ children }: { children: ReactNode }) {
+  return <h3 className="mt-6 font-display text-base font-semibold">{children}</h3>;
+}
 
 function PrivacyPolicy() {
   return (
@@ -18,624 +69,508 @@ function PrivacyPolicy() {
         <ChevronLeft className="h-4 w-4" /> Back
       </Link>
 
-      <h1 className="font-display text-3xl font-bold">Privacy Policy</h1>
-
-      <p className="mt-6">
-        Pouring Pounds Limited and/ or Pouring Pounds India Private Limited (as the case may be) (
-        We&rdquo;, &ldquo;Our&rdquo;, &ldquo;EarnKaro&rdquo; or &ldquo;Us&rdquo;, where such
-        expression shall unless repugnant to the context thereof, be deemed to include its
-        respective legal heirs, representatives, administrators, permitted successors and assigns)
-        own and/ or operate the website and mobile application EarnKaro.com (&ldquo;Website&rdquo;,
-        &ldquo;Our Website&rdquo;, &ldquo;Site&rdquo;).
+      <h1 className="font-display text-3xl font-bold">Privacy Policy — ShopMyPin</h1>
+      <p className="mt-2 text-muted-foreground">
+        Last updated: 10 August 2026 · Effective from: 10 August 2026
       </p>
 
+      <H2>Introduction</H2>
       <p className="mt-4">
-        For the purpose of providing the Services (as defined in clause 1 below), EarnKaro is
-        required to collect and use certain information of the users of the Website
-        (&ldquo;Users&rdquo;) using the Services and involves capturing, storage and transmission of
-        such information. This privacy policy (&quot;Privacy Policy&quot;/ &ldquo;Policy&rdquo;)
-        explains how We collect, use, share and protect personal information of the Users of the
-        Services (jointly and severally referred to as &ldquo;You&rdquo;, &ldquo;Your&rdquo;,
-        &ldquo;Yourself&rdquo; or &ldquo;User&rdquo; or &ldquo;Users&rdquo; in this Privacy Policy).
-        We have created this Privacy Policy to ensure our steady commitment to the privacy of the
-        information of the Users who interact with our Services. Your use of and access to the
-        Services is subject to this Privacy Policy and our Terms and Conditions. Any capitalized
-        term used, but not defined, in this Privacy Policy shall have the meaning attributed to it
-        in our Terms and Conditions.
+        This Privacy Policy governs the use of ShopMyPin, a service operated under the domain
+        shopmypin.com as part of the EarnKaro ecosystem.
+      </p>
+      <p className="mt-4">
+        ShopMyPin is operated by Pouring Pounds India Private Limited (&ldquo;ShopMyPin&rdquo;,
+        &ldquo;We&rdquo;, &ldquo;Our&rdquo;, &ldquo;Us&rdquo;), a company incorporated under the
+        laws of India with its registered office at UM House, 2nd Floor, Sector 44, Gurgaon, Haryana
+        122002, India. Pouring Pounds India Private Limited also operates EarnKaro (earnkaro.com),
+        and is the Data Fiduciary in respect of all personal data processed through ShopMyPin.
+      </p>
+      <p className="mt-4">
+        ShopMyPin is built exclusively for Pinterest Creators. It allows a Creator to connect their
+        own Pinterest account, review the Pins and boards they have created, receive automated
+        suggestions for products that appear in those Pins, and &mdash; where the Creator chooses to
+        do so &mdash; attach a monetised destination link to their own Pins and publish a shoppable
+        collection page.
+      </p>
+      <p className="mt-4">
+        This Policy explains what personal data we collect, why we collect it, how we use and share
+        it, how long we keep it, and what rights you have. It applies to shopmypin.com and to any
+        ShopMyPin mobile or web application.
+      </p>
+      <p className="mt-4">
+        ShopMyPin is not affiliated with, endorsed by, or sponsored by Pinterest, Inc.
+        &ldquo;Pinterest&rdquo; and &ldquo;Pin&rdquo; are trademarks of Pinterest, Inc., used here
+        only to describe interoperability.
+      </p>
+      <p className="mt-4">
+        By creating a ShopMyPin account or connecting your Pinterest account, you agree to this
+        Policy and to our{" "}
+        <Link to="/terms" className="font-semibold text-primary hover:underline">
+          Terms and Conditions
+        </Link>
+        .
       </p>
 
-      <p className="mt-4">
-        The headings used herein are only for the purpose of arranging the various provisions of the
-        Privacy Policy. The headings are for the purpose of reference only and shall not be
-        interpreted to limit or expand the provisions of the clauses contained therein.
-      </p>
+      <H2>1. Definitions</H2>
+      <Table head={["Term", "Meaning"]}>
+        <Row
+          cells={[
+            <strong key="t">Creator / You</strong>,
+            "A natural person aged 18 or over who registers for ShopMyPin and connects a Pinterest account they own and control.",
+          ]}
+        />
+        <Row
+          cells={[
+            <strong key="t">Personal Data</strong>,
+            "Any data about an identifiable individual, as defined under the Digital Personal Data Protection Act, 2023 (“DPDP Act”).",
+          ]}
+        />
+        <Row
+          cells={[
+            <strong key="t">Data Fiduciary</strong>,
+            "Pouring Pounds India Private Limited, which determines the purpose and means of processing your Personal Data.",
+          ]}
+        />
+        <Row
+          cells={[
+            <strong key="t">Data Principal</strong>,
+            "You, the individual to whom the Personal Data relates.",
+          ]}
+        />
+        <Row
+          cells={[
+            <strong key="t">Pinterest Data</strong>,
+            "Data we receive from the Pinterest API under an access token you have authorised.",
+          ]}
+        />
+        <Row
+          cells={[
+            <strong key="t">Access Token</strong>,
+            "The OAuth 2.0 credential issued by Pinterest that permits ShopMyPin to call the Pinterest API on your behalf.",
+          ]}
+        />
+        <Row
+          cells={[
+            <strong key="t">EarnKaro</strong>,
+            "The affiliate platform operated by the same company at earnkaro.com, through which affiliate links are generated and earnings are settled.",
+          ]}
+        />
+      </Table>
 
-      <h2 className="mt-10 font-display text-xl font-bold">1. Definitions</h2>
+      <H2>2. How we authenticate you with Pinterest</H2>
       <p className="mt-4">
-        In this Privacy Policy, unless the context otherwise requires, the terms defined shall bear
-        the meanings assigned to them below, and their cognate expressions shall be construed
-        accordingly.
+        We use Pinterest&rsquo;s OAuth 2.0 authorisation flow. We do not ask for, receive, collect,
+        or store your Pinterest password. We do not collect, copy, or reuse Pinterest session
+        cookies. We do not use scraping, headless browsers, or credential-based sign-in of any kind
+        to access Pinterest.
       </p>
-      <p className="mt-4">
-        &ldquo;Personal Information&rdquo; shall have the same meaning as given in Rule 2(1)(i) of
-        the Information Technology (Reasonable Security Practices and Procedures and Sensitive
-        Personal Data or Information) Rules, 2011 to mean any information that relates to a natural
-        person, which, either directly or indirectly, in combination with other information
-        available or likely to be available to a body corporate, is capable of identifying such
-        person.
-      </p>
-      <p className="mt-4">
-        The SPI Rules further define &ldquo;Sensitive Personal Data or Information&rdquo; of a
-        person to mean Personal Information about that person relating to:
-      </p>
-      <ul className="mt-2 list-disc space-y-1 pl-6">
-        <li>passwords;</li>
-        <li>
-          financial information such as bank accounts, credit and debit card details or other
-          payment instrument details;
-        </li>
-        <li>physical, physiological and mental health condition;</li>
-        <li>sexual orientation;</li>
-        <li>medical records and history;</li>
-        <li>biometric information;</li>
-        <li>information received by body corporate under lawful contract or otherwise;</li>
-        <li>visitor details as provided at the time of registration or thereafter; and</li>
-        <li>call data records.</li>
-      </ul>
-      <p className="mt-4">
-        &ldquo;You&rdquo;, &ldquo;Your&rdquo;, &ldquo;Yourself&rdquo; and &ldquo;User&rdquo; shall
-        mean and refer to natural &amp; legal individuals and legal entities/companies who visit
-        and/or use the Services and will also include the individuals/entities/companies who avail
-        the services by submission of details by some other person.
-      </p>
-      <p className="mt-4">
-        &ldquo;Third Parties&rdquo; refer to any website/application/web portal, company or
-        individual apart from the User and Us.
-      </p>
-      <p className="mt-4">
-        &ldquo;Services&rdquo; shall mean the Website (https://earnkaro.com/) and Mobile Application
-        (EarnKaro) and contextual information transmitted to/ received from Users via various
-        communication channels including but not limited to e-mail, SMS, WhatsApp, phone calls,
-        website chat, IVR. We are primarily engaged in the business of allowing Users to share
-        customized links for various products in the network of such Users, the customized links
-        drive sales to e-commerce websites and in turn the Users earn cashbacks. We currently
-        operate under the brand name EarnKaro.
-      </p>
-      <p className="mt-4">
-        &ldquo;User Information&rdquo; shall mean Personal Information and Sensitive Personal Data
-        or Information.
-      </p>
-      <p className="mt-4">
-        &ldquo;Website&rdquo; shall mean and refer to https://earnkaro.com/, the
-        &ldquo;Application&rdquo; and/ or &ldquo;App&rdquo; shall refer to the EarnKaro mobile
-        application available on Android Play Store or iOS App Store. These shall be collectively
-        referred to as the &ldquo;Platform&rdquo;
-      </p>
-
-      <h2 className="mt-10 font-display text-xl font-bold">2. WHY THIS PRIVACY POLICY?</h2>
-      <p className="mt-4">This Privacy Policy is published in compliance with, inter alia,</p>
-      <ul className="mt-2 list-disc space-y-1 pl-6">
-        <li>Section 43A of the Information Technology Act, 2000;</li>
-        <li>Regulation 4 of the SPI Rules; and</li>
-        <li>
-          Regulation 3(1) of the Information Technology (Intermediaries Guidelines) Rules, 2011
-          (&ldquo;Intermediaries Guidelines&rdquo;).
-        </li>
-      </ul>
-      <p className="mt-4">This Privacy Policy states, inter alia, the following:</p>
+      <p className="mt-4">When you click &ldquo;Connect Pinterest&rdquo;:</p>
       <ul className="mt-2 list-disc space-y-1 pl-6">
         <li>
-          The type of information collected from the Users, including Sensitive Personal Data or
-          Information;
+          You are redirected to Pinterest&rsquo;s own domain, where Pinterest &mdash; not ShopMyPin
+          &mdash; authenticates you.
         </li>
-        <li>The purpose, means and modes of usage of such information; and</li>
-        <li>How and to whom we will disclose such information</li>
-      </ul>
-
-      <h2 className="mt-10 font-display text-xl font-bold">3. GENERAL</h2>
-      <ul className="mt-4 list-disc space-y-3 pl-6">
+        <li>Pinterest shows you the specific permissions (scopes) ShopMyPin is requesting.</li>
         <li>
-          The User unequivocally agrees that this Policy and the aforementioned Terms and Conditions
-          constitute a legally binding agreement between the User and EarnKaro, and that the User
-          shall be subject to the rules, guidelines, policies, terms, and conditions applicable to
-          any service that is provided by EarnKaro including the Services, and that the same shall
-          be deemed to be incorporated into the Terms and Conditions, and shall be treated as part
-          of the same.
+          If you approve, Pinterest returns an authorisation code to ShopMyPin, which we exchange
+          for an Access Token and a refresh token.
         </li>
         <li>
-          This document is an electronic record in terms of Information Technology Act, 2000 and
-          rules there under as applicable and the amended provisions pertaining to electronic
-          records in various statutes as amended by the Information Technology Act, 2000. This
-          electronic record is generated by a computer system and does not require any physical or
-          digital signatures. Further, this document is published in accordance with the provisions
-          of the SPI Rules and Intermediaries Guidelines.
-        </li>
-        <li>
-          The terms &lsquo;Party&rsquo; and &lsquo;Parties&rsquo; shall respectively be used to
-          refer to the User and EarnKaro individually and collectively, as the context so requires.
-        </li>
-        <li>
-          The headings of each section in this Policy are only for the purpose of organizing the
-          various provisions under this Policy in an orderly manner and shall not be used by either
-          Party to interpret the provisions contained herein in any manner. Further, it is
-          specifically agreed to by the Parties that the headings shall have no legal or contractual
-          value.
-        </li>
-        <li>
-          The Parties expressly agree that subject to clause 13 of this Policy, EarnKaro retains the
-          sole and exclusive right to amend or modify the Policy and the aforementioned Terms and
-          Conditions without any prior permission or intimation to the User keeping in mind best
-          practices and laws set by State/Central Government of India, and the User expressly agrees
-          that any such amendments or modifications shall come into effect immediately. The User has
-          a duty to periodically check the Policy and Terms and Conditions and stay updated on their
-          provisions and requirements. If the User continues to use the Services following such a
-          change, the User will be deemed to have consented to any and all amendments/ modifications
-          made to the Policy and Terms and Conditions. In so far as the User complies with the
-          Policy and Terms and Conditions, he/she is granted a personal, non-exclusive,
-          non-transferable, revocable, limited privilege to enter, access and use the Services.
-        </li>
-      </ul>
-
-      <h2 className="mt-10 font-display text-xl font-bold">
-        4. COLLECTION AND HANDLING OF PERSONAL INFORMATION
-      </h2>
-      <p className="mt-4">
-        Privacy of the Parties is of prime importance to Us and all Services are strictly designed
-        within the jurisdiction of laws defined by the Government of India.
-      </p>
-      <p className="mt-4">
-        Generally, the Services require us to know who you are so that we can best meet your needs.
-        When you access the Services, we may ask you to voluntarily provide us with certain
-        information that personally identifies you or could be used to personally identify you.
-        Without prejudice to the generality of the above, information collected by us from you may
-        include (but is not limited to) the following:
-      </p>
-      <ul className="mt-2 list-disc space-y-1 pl-6">
-        <li>Contact data (such as your email address and phone number);</li>
-        <li>User name and passwords;</li>
-        <li>
-          Demographic data (such as your name, gender, age, your date of birth and your pin code);
-        </li>
-        <li>
-          Data regarding your usage of the services and other transactions made by or with you
-          through the use of Services;
-        </li>
-        <li>
-          Information about your clicks on and from EarnKaro mobile device, web browser, web and
-          mobile browsing patterns, retailer preferences
-        </li>
-        <li>
-          Your bank account information including name of the bank account, account number, IFSC
-          code, bank branch or any other payment related information
-        </li>
-        <li>
-          Any other information that you voluntarily choose to provide to us (such as information
-          shared by you with us through emails, calls or letters, your work details, home / work
-          address, your family details, details about transactions done on ecommerce sites,
-          screenshots of transactions, order IDs for transactions, alternate numbers and emails and
-          various other information provided from time to time).
+          The Access Token and refresh token are encrypted at rest using AES-256, stored in
+          access-controlled infrastructure, and are never written to logs, analytics tools, browser
+          storage, or client-side code.
         </li>
       </ul>
       <p className="mt-4">
-        The information collected from You by Us shall constitute &lsquo;Personal Information&rsquo;
-        or &lsquo;Sensitive Personal Data Information&rsquo; under the SPI Rules.
+        The Access Token is the only Pinterest credential we hold. You can revoke it at any time
+        &mdash; either from inside ShopMyPin (Settings &rarr; Disconnect Pinterest) or from
+        Pinterest&rsquo;s own Apps settings page. Revocation immediately ends our ability to call
+        the Pinterest API on your behalf, and triggers the deletion process described in Section 8.
       </p>
 
-      <h2 className="mt-10 font-display text-xl font-bold">5. PRIVACY STATEMENTS</h2>
-      <p className="mt-4">5.1. The User expressly agrees and acknowledges:</p>
-      <ul className="mt-4 list-disc space-y-3 pl-6">
-        <li>
-          Information that is freely available in the public domain or accessible under the Right to
-          Information Act, 2005 or any other law will not be considered as &lsquo;Personal
-          Information&rsquo; or &lsquo;Sensitive Personal Data or Information&rsquo; for the
-          purposes of this Policy.That EarnKaro may automatically track information about the User
-          based on the User&rsquo;s IP address and the User&rsquo;s behaviour on the Platform, and
-          the User expressly consents to the same. The User is aware that this information may be
-          used to conduct internal research on user demographics, interests, and behaviour, to
-          enable EarnKaro to better understand, and cater to the interests of the Users. Further,
-          the User is expressly made aware that such information may include the User&rsquo;s
-          computer &amp; web browser information, the User&rsquo;s IP address, mobile device details
-          etc. The linkage between User&rsquo;s IP address and User&rsquo;s personally identifiable
-          information may be shared with or disclosed to third parties in order to facilitate the
-          provisions of the Services to You. The User hereby consents to the sharing of such
-          information to such third parties as may be determined by EarnKaro from time to time.
-          Further, we may also share and/or disclose some of the aggregate findings (not the
-          specific data) in anonymized form (i.e., non-personally identifiable) with third parties
-          for market research and new feature development.
-        </li>
-        <li>
-          That any and all information pertaining to the User collected by EarnKaro, whether or not
-          directly provided by the User to EarnKaro, including but not limited to personal
-          correspondence such as emails or letters or SMS or WhatsApp or calls, feedback from other
-          users or third parties regarding the User&rsquo;s activities or postings on the Platform,
-          etc., may be collected and compiled by EarnKaro into a file/folder specifically created
-          for/allotted to the User, and the User hereby expressly consents to the same.Also, in
-          order to keep You informed of Your activities on the Website we occasionally send You
-          emails, SMS, App notifications and other marketing communication. These include Your
-          transaction messages to show how much You have earned, referral messages that show You how
-          much You have earned from referrals, payment confirmations for payments to You and,
-          important administrative messages and messages to confirm Your activities on the Website.
-          These emails are not shared with anyone else apart from You.We also send newsletters,
-          SMSs, App notifications, browser notification and other marketing that features some of
-          our best ideas to help You save more. You may choose not to receive this marketing
-          communication from EarnKaro by informing Us at any time.We do not support spamming by our
-          members and we explicitly prohibit it in our Terms and Conditions. If You would like to
-          report an incident of spamming, please contact us so we can investigate and take suitable
-          action.
-        </li>
-        <li>
-          That the contact information provided to EarnKaro may be used to send the User offers and
-          promotions, whether or not based on the User&rsquo;s previous interests, and the User
-          hereby expressly consents to receiving the same. The User may choose to unsubscribe from
-          promotional communications by clicking on the &lsquo;unsubscribe&rsquo; link provided at
-          the end of such promotional communication or by emailing us on support@earnkaro.com
-        </li>
-        <li>
-          That EarnKaro may occasionally request the User to complete optional online surveys. These
-          surveys may require the User to provide contact information and demographic information
-          (like zip code, age, income bracket, sex, etc.). The User is aware that this information
-          is used to improve/customise the Services for the benefit of the User and providing all
-          users of the Platform with services that EarnKaro believes they might be interested in
-          availing of.
-        </li>
-        <li>
-          That EarnKaro may keep records of electronic communications and telephone calls received
-          and made for support or other purposes for the purpose of administration of Services,
-          customer support, research and development and for better assistance to Users.That
-          EarnKaro may occasionally request the User to write reviews for services availed of by the
-          User from the Platform. The User is aware that such reviews will help potential users of
-          the Platform in availing the Services, and the User hereby expressly authorizes EarnKaro
-          to publish any and all reviews written by the User on the Platform, along with the
-          User&rsquo;s name and certain contact details, for the benefit and use of other users.
-        </li>
-        <li>
-          Nothing contained herein shall be deemed to compel EarnKaro to store, upload, publish, or
-          display in any manner content/reviews/surveys/feedback submitted by the User, and the User
-          hereby expressly authorizes EarnKaro to remove from the Platform any such content, review,
-          survey, or feedback submitted by the User, without cause or being required to notify the
-          User of the same.
-        </li>
-        <li>
-          Generation and collection of &lsquo;Sensitive Personal Data or Information&rsquo; in
-          accordance with Information Technology Act, 2000 as amended from time to time and allied
-          rules requires the User&rsquo;s express consent. By affirming assent to this Policy as
-          well as clicking on the &ldquo;I agree with Terms and Policy&rdquo; button at the time of
-          registration, the User provides consent to such generation and collection as required
-          under applicable laws.
-        </li>
-        <li>
-          The User is responsible for ensuring that the accuracy of the information submitted to
-          EarnKaro. The User may correct, delete inaccuracies, or amend information by contacting
-          EarnKaro through email on support@earnkaro.com. EarnKaro will make good faith efforts to
-          make requested changes in the databases as soon as reasonably practicable. If the User
-          provides any information that is untrue, inaccurate, out of date or incomplete (or becomes
-          untrue, inaccurate, out of date or incomplete), or EarnKaro has reasonable grounds to
-          suspect that the information provided by the User is untrue, inaccurate, out of date or
-          incomplete, EarnKaro may, at its sole discretion, discontinue the provision of the
-          Services to you as per the provisions laid down in the Terms and Conditions. There may be
-          circumstances where Pouring Pounds will not correct, delete or update your Personal Data,
-          including (a) where the Personal Data is opinion data that is kept solely for evaluative
-          purpose; and (b) the Personal Data is in documents related to a prosecution if all
-          proceedings relating to the prosecution have not been completed.
-        </li>
-        <li>
-          All the information provided to Us by a User, including Sensitive Personal Data or
-          Information, is voluntary. User has the right to withdraw his/ her/ its consent at any
-          time, in accordance with the terms of this Privacy Policy, and the Terms and Conditions
-          applicable to such User, it being however clarified that withdrawal of consent will not be
-          retroactive. If the User wishes to delete his/her account or request that EarnKaro no
-          longer uses the User&rsquo;s information to provide Services, the User may contact
-          EarnKaro on support@earnkaro.com. We shall not retain such information for longer than is
-          required for the purposes for which the information may lawfully be used or is otherwise
-          required under any other law for the time being in force. After a period of time, your
-          data may be anonymized and aggregated, and then may be held by us as long as necessary for
-          us to provide our Services effectively, but our use of the anonymized data will be solely
-          for analytic purposes. Please note that your withdrawal of consent, or cancellation of
-          account may result in Pouring Pounds being unable to provide you with its Services or to
-          terminate any existing relationship Pouring Pounds may have with you.
-        </li>
-        <li>
-          If you wish to opt-out of receiving non-essential communications such as promotional and
-          marketing-related information regarding the Services, please send us an email at
-          support@earnkaro.com.
-        </li>
-      </ul>
+      <H2>3. Pinterest permissions we request, and why</H2>
+      <p className="mt-4">
+        We request only the scopes required by features you can see and use in the product. Each
+        scope maps to a specific function:
+      </p>
+      <Table head={["Scope", "What it lets us do", "The feature it powers"]}>
+        <Row
+          cells={[
+            <code key="s">boards:read</code>,
+            "Read the list of boards you have created, with their names and Pin counts.",
+            "The board list on your dashboard; the “Monetise a board” flow.",
+          ]}
+        />
+        <Row
+          cells={[
+            <code key="s">pins:read</code>,
+            "Read the Pins you have created — image URL, title, description, destination link, board.",
+            "The Pin list on your dashboard; product matching against your Pin images.",
+          ]}
+        />
+        <Row
+          cells={[
+            <code key="s">user_accounts:read</code>,
+            "Read your Pinterest profile (handle, display name, avatar) and account-level analytics.",
+            "Showing you which account is connected; the Pinterest SEO score on the Boost page.",
+          ]}
+        />
+        <Row
+          cells={[
+            <code key="s">pins:write</code>,
+            "Create a Pin, or update a Pin you own — specifically, to set its destination link.",
+            "Attaching a monetised destination to a Pin you have approved; the “Create Pin” flow.",
+          ]}
+        />
+        <Row
+          cells={[
+            <code key="s">boards:read_secret, pins:read_secret</code>,
+            "Read boards and Pins you have marked secret on Pinterest.",
+            "Allowing you to view and monetise your secret boards alongside your public ones.",
+          ]}
+        />
+      </Table>
+      <p className="mt-4">
+        <strong>A specific note on secret boards.</strong> Secret boards are private to you. If you
+        grant these scopes, ShopMyPin can read the Pins on them. We use that access only to display
+        those Pins to you inside your own logged-in ShopMyPin account and to run product matching
+        where you request it. We never make a secret board or a secret Pin public, and we never
+        write to a secret Pin unless you explicitly approve that specific Pin. Secret Pin data is
+        not included in any aggregate reporting, is not shown on your public store page, and is not
+        shared with EarnKaro, affiliate networks, or retailers.
+      </p>
+      <p className="mt-4">
+        If you would prefer ShopMyPin not to see your secret boards, you can decline those scopes on
+        Pinterest&rsquo;s consent screen, or disconnect and reconnect. The rest of the product will
+        continue to work on your public boards.
+      </p>
+      <p className="mt-4">
+        We do not request advertising scopes, catalogue scopes, or access to other people&rsquo;s
+        Pinterest accounts. We never access a Pinterest account other than the one you personally
+        authorise.
+      </p>
 
-      <h2 className="mt-10 font-display text-xl font-bold">6. OUR USE OF YOUR INFORMATION</h2>
+      <H2>4. What we write back to Pinterest</H2>
       <p className="mt-4">
-        All the information provided to EarnKaro by a User, including Personal Information or any
-        Sensitive Personal Data or Information, is voluntary. Such information in its original form
-        may be shared with any Third Parties in furtherance of the consent from the User as provided
-        hereunder. You understand that EarnKaro may use certain information of yours, which has been
-        designated as Personal Information or &lsquo;Sensitive Personal Data or Information&rsquo;
-        under the SPI Rules for the following purposes:
-      </p>
-      <ul className="mt-2 list-disc space-y-1 pl-6">
-        <li>providing you the Services;</li>
-        <li>taking product &amp; Services feedback;</li>
-        <li>for offering new products or services and marketing of the Services;</li>
-        <li>for analysing software usage patterns for improving product design and utility;</li>
-        <li>
-          for providing the services of generating alerts/reminders/SMS for offers and also for
-          internal record.
-        </li>
-        <li>
-          for commercial purposes and in an aggregated or non-personally identifiable form for
-          research, statistical analysis and business intelligence purposes,
-        </li>
-        <li>
-          for sale or transfer of such research, statistical or intelligence data in a
-          non-personally identifiable form to third parties and affiliates;
-        </li>
-        <li>debugging customer support related issues; and</li>
-      </ul>
-      <p className="mt-4">
-        We may use your tracking information such as IP addresses, and or Device ID to help identify
-        You and to gather broad demographic information.
-      </p>
-      <p className="mt-4">
-        In case we are acquired by or merged with another company, We shall transfer information
-        disclosed by You and information about You to the company we are acquired by or merged with,
-        and such company will have the right to continue to use the User&rsquo;s Personal
-        Information and/ or other information that a User provides to Us. In the event of a merger
-        or acquisition, We shall notify You by email/by putting a notice on the Website and/ or
-        Application before Your Personal Information is transferred and becomes subject to a
-        different privacy policy.
-      </p>
-      <p className="mt-4">
-        The Users expressly agree and acknowledge that EarnKaro collects and stores the User&rsquo;s
-        Personal Information and/or Sensitive Personal Information in a secure cloud based platform
-        which is provided by the User from time to time on the Platform or while using other
-        Services.
-      </p>
-      <p className="mt-4">
-        The User is aware that this information will be used by EarnKaro to deliver its services and
-        help customize/improve the Platform experience safer and easier but no personally
-        identifiable information will be shared with any Third Party under any circumstances without
-        User&rsquo;s explicit consent unless directed by the law.
-      </p>
-      <p className="mt-4">
-        EarnKaro may need to disclose/ transfer User&rsquo;s Personal Information to the following
-        third parties for the purposes mentioned in this Privacy Policy, and the Terms and
-        Conditions as applicable to such User:
+        Every write to Pinterest is initiated by a deliberate action you take in the product.
+        Specifically:
       </p>
       <ul className="mt-2 list-disc space-y-1 pl-6">
         <li>
-          To government institutions/ authorities to the extent required:
-          <ul className="mt-1 list-disc space-y-1 pl-6">
-            <li>
-              under the laws, rules, and regulations and/ or under orders of any relevant judicial
-              or quasi-judicial authority;
-            </li>
-            <li>to protect and defend the rights or property of EarnKaro;</li>
-            <li>to fight fraud and credit risk;</li>
-            <li>to enforce EarnKaro&rsquo;s Terms and Conditions applicable to the Users; or</li>
-            <li>
-              when EarnKaro, in its sole discretion, deems it necessary in order to protect its
-              rights or the rights of others.
-            </li>
-          </ul>
+          <strong>Updating a Pin&rsquo;s destination link</strong> &mdash; only after you have
+          reviewed the suggested product match for that specific Pin and approved it.
         </li>
         <li>
-          If otherwise required by an order under any law for the time being in force including in
-          response to enquiries by government agencies for the purpose of verification of identity,
-          or for prevention, detection, investigation including cyber incidents, prosecution, and
-          punishment of offences.
+          <strong>Creating a Pin</strong> &mdash; only when you use the &ldquo;Create Pin&rdquo;
+          flow and confirm publication.
         </li>
       </ul>
       <p className="mt-4">
-        However, We contract with third parties to serve ads on our behalf across the Internet and
-        sometimes on this site. They may collect information about Your visits to our website, and
-        Your interaction with our products and services. They may also use information about Your
-        visits to this and other websites to target advertisements for goods and services. This
-        information is collected through the use of a pixel tag, which is industry standard
-        technology used by most major websites. Such third parties are not permitted to sell or
-        share Your personally identifiable information as part of this process.
+        We do not run background jobs that modify your Pins. We do not schedule Pins. We do not
+        repost, duplicate, or re-pin other people&rsquo;s content. We do not modify Pin titles,
+        descriptions, or images without your action. If you use a bulk approval option, that option
+        applies only to Pins you have been shown and have chosen to approve in that session, and you
+        will always see the count of Pins that will be affected before any write occurs.
       </p>
       <p className="mt-4">
-        The following third-party vendors, including Google, Facebook, advertising platforms,
-        remarketing platforms like CleverTap, customer query management platforms like Freshworks
-        &amp; Exotel use cookies to serve ads based on a user&apos;s prior visits to Your website.
-      </p>
-      <p className="mt-4">
-        Google&apos;s use of the DoubleClick cookie enables it and its partners to serve ads to your
-        users based on their visit to your sites and/or other sites on the Internet.
-      </p>
-      <p className="mt-4">
-        Users may opt out of the use of the DoubleClick cookie for interest-based advertising by
-        visiting Ads Settings.
+        You remain the author and publisher of your Pins. ShopMyPin acts on your instruction.
       </p>
 
-      <h2 className="mt-10 font-display text-xl font-bold">7. CONFIDENTIALITY AND SECURITY</h2>
+      <H2>5. Personal Data we collect</H2>
+      <H3>5.1 Data you give us</H3>
+      <ul className="mt-2 list-disc space-y-1 pl-6">
+        <li>Name, mobile number, email address.</li>
+        <li>
+          Payment settlement details (bank account name, account number, IFSC) and PAN, where
+          required for payout and tax withholding.
+        </li>
+        <li>Any information you send us in support conversations.</li>
+      </ul>
+
+      <H3>5.2 Pinterest Data we receive under your Access Token</H3>
+      <ul className="mt-2 list-disc space-y-1 pl-6">
+        <li>Your Pinterest profile: user ID, handle, display name, profile image URL.</li>
+        <li>Your boards: board ID, name, description, privacy status, Pin count.</li>
+        <li>
+          Your Pins: Pin ID, title, description, destination URL, board association, creation date,
+          and the URL of the Pin image.
+        </li>
+        <li>
+          Pin and account analytics made available by Pinterest, such as impressions and outbound
+          clicks.
+        </li>
+      </ul>
       <p className="mt-4">
-        7.1. Your information is regarded as confidential and therefore shall not be divulged to any
-        Third Parties, unless as provided hereunder and unless legally required to do so to the
-        appropriate authorities, or if necessary, for providing the Services through the Platform.
-      </p>
-      <p className="mt-4">
-        7.2. Your Personal Information/Sensitive Personal Data is maintained by Us in an electronic
-        form on our equipments, and on the equipments of our employees. Such information may also be
-        converted to physical form from time to time.
-      </p>
-      <p className="mt-4">7.3. People who can access your Personal Information</p>
-      <p className="mt-2">
-        User Information will be processed by our employees, authorised staff, marketing agencies or
-        agents, on a need to know basis, depending on the specific purposes for which the User
-        Information have been collected by Us. EarnKaro may, therefore, retain and submit all such
-        records to the relevant stakeholders.
-      </p>
-      <p className="mt-4">
-        7.4. Security Practices. We treat data as an asset that must be protected against loss and
-        unauthorised access. We employ many different security techniques to protect such data from
-        unauthorized access by members inside and outside EarnKaro. We follow generally accepted
-        industry standards to protect the User Information submitted to Us and information that We
-        have accessed, including managerial, technical, operational and physical security control
-        measures. However, for any data loss or theft due to unauthorized access to the User&rsquo;s
-        electronic devices through which the User avails the Services, We shall not be held liable
-        for any loss whatsoever incurred by the User.
-      </p>
-      <p className="mt-4">
-        7.5. Measures We expect you to take: It is important that you also play a role in keeping
-        your User Information safe and secure. When signing up for an online account, please be sure
-        to choose an account password that would be difficult for others to guess and never reveal
-        your password to anyone else. You are responsible for keeping this password confidential and
-        for any use of your account. If you use a shared or public computer, never choose to have
-        your login ID/email address or password remembered and make sure to log out of your account
-        every time you leave the computer. You should also make use of any privacy settings or
-        controls We provide you in Our Platform.
-      </p>
-      <p className="mt-4">
-        7.6. Unauthorised use of User&rsquo;s account. We do not undertake any liability for any
-        unauthorized use of your account and password. If you suspect any unauthorized use of your
-        account, you must immediately notify Us by sending an email to support@earnkaro.com.
-      </p>
-      <p className="mt-4">
-        7.7. Notwithstanding the above, EarnKaro is not responsible for the confidentiality,
-        security or distribution of your Personal Information by third parties outside the scope of
-        our agreement with such third parties. Further, EarnKaro shall not be responsible for any
-        breach of security or for any actions of any third parties or events that are beyond the
-        reasonable control of EarnKaro including but not limited to the, acts of government,
-        computer hacking, unauthorised access to computer data and storage device, computer crashes,
-        breach of security and encryption.
+        We store Pinterest metadata only. We do not download, copy, or retain your Pin images on our
+        servers. Images shown inside ShopMyPin are loaded directly from Pinterest&rsquo;s own
+        content delivery network (i.pinimg.com) in your browser. Product matching is performed
+        against the Pinterest-hosted image URL; where a transient copy is created in memory to run
+        image analysis, it is discarded immediately after processing and is not written to
+        persistent storage.
       </p>
 
-      <h2 className="mt-10 font-display text-xl font-bold">8. RETENTION OF YOUR PERSONAL DATA</h2>
+      <H3>5.3 Data we generate</H3>
+      <ul className="mt-2 list-disc space-y-1 pl-6">
+        <li>Product matches suggested for each Pin, and whether you accepted or rejected them.</li>
+        <li>
+          Affiliate links created for you, and clicks, orders, sales and earnings attributed to
+          those links.
+        </li>
+        <li>Your public store page content and its slug.</li>
+      </ul>
+
+      <H3>5.4 Technical data</H3>
+      <ul className="mt-2 list-disc space-y-1 pl-6">
+        <li>
+          IP address, device and browser type, operating system, referring page, and in-app activity
+          logs, collected for security, fraud prevention, debugging, and product improvement.
+        </li>
+      </ul>
+
+      <H2>6. Purposes and lawful basis</H2>
       <p className="mt-4">
-        In accordance with applicable laws, We will use the User Information for as long as
-        necessary to satisfy the purposes for which such User Information was collected (as
-        described in Section 4 above) or to comply with applicable legal requirements.
+        We process your Personal Data on the basis of the consent you give when you register and
+        when you authorise Pinterest, and where applicable for the legitimate uses permitted under
+        Section 7 of the DPDP Act (such as compliance with law and prevention of fraud).
+      </p>
+      <Table head={["Purpose", "Data used"]}>
+        <Row cells={["Authenticate you and maintain your account", "Contact data, Access Token"]} />
+        <Row cells={["Display your boards and Pins inside the product", "Pinterest Data"]} />
+        <Row
+          cells={[
+            "Detect products in your Pins and suggest matches",
+            "Pin image URL, Pin title and description",
+          ]}
+        />
+        <Row
+          cells={[
+            "Generate affiliate links and attribute earnings",
+            "EarnKaro user ID, Pin ID, click and order data",
+          ]}
+        />
+        <Row cells={["Update a Pin you have approved", "Access Token, Pin ID, destination URL"]} />
+        <Row
+          cells={[
+            "Show you performance and earnings reporting",
+            "Pinterest analytics, click and order data",
+          ]}
+        />
+        <Row cells={["Settle payouts and meet tax obligations", "Bank details, PAN"]} />
+        <Row
+          cells={[
+            "Prevent fraud, abuse and platform policy violations",
+            "Technical data, activity logs",
+          ]}
+        />
+        <Row
+          cells={[
+            "Respond to support requests and grievances",
+            "Contact data, conversation records",
+          ]}
+        />
+      </Table>
+
+      <H2>7. Sharing your data</H2>
+      <H3>7.1 EarnKaro</H3>
+      <p className="mt-4">
+        Registering for ShopMyPin also creates an EarnKaro user account for you, or links your
+        existing one. Affiliate links are generated against that EarnKaro user ID, and your earnings
+        are tracked and settled through EarnKaro&rsquo;s wallet and payout system. Because both
+        services are operated by the same legal entity, Pouring Pounds India Private Limited, this
+        is an internal transfer within a single Data Fiduciary rather than a disclosure to a third
+        party.
+      </p>
+      <p className="mt-4">
+        <strong>What crosses over:</strong> your identity and contact details, your EarnKaro user
+        ID, the affiliate links created, and the click, order, sale and earnings data attributable
+        to them.
+      </p>
+      <p className="mt-4">
+        <strong>What does not cross over:</strong> your Pinterest Access Token, your Pinterest
+        credentials, your secret boards and secret Pins, and Pinterest analytics data. Pinterest
+        Data is not used to build marketing profiles on EarnKaro, is not merged into
+        EarnKaro&rsquo;s advertising or remarketing audiences, and is not used to target you or
+        anyone else with advertising.
       </p>
 
-      <h2 className="mt-10 font-display text-xl font-bold">9. YOUR RIGHTS</h2>
+      <H3>7.2 Affiliate networks and retailers</H3>
       <p className="mt-4">
-        9.1. Access to Personal Data. You have the right to access, review and request a physical or
-        electronic copy of information held about you. You also have the right to request
-        information on the source of your Personal Information/Sensitive Personal Information.
-      </p>
-      <p className="mt-4">
-        9.2. Additional rights (e.g. modification, deletion of Personal Data). Where provided by
-        law, you can (i) request deletion, the portability, correction or revision of your User
-        Information; (ii) limit the use and disclosure of your Personal Data; and (iii) revoke
-        consent to any of our data processing activities. Provided that, we may be required to
-        retain some of your User Information after you have requested deletion, to satisfy our legal
-        or contractual obligations. We may also be permitted by applicable laws to retain some of
-        your User Information to satisfy our business needs.
+        When a shopper clicks a link on your store page, the affiliate network and the retailer
+        receive the click and, if a purchase occurs, the transaction data needed to attribute
+        commission. They receive your publisher identifier. They do not receive your Pinterest data,
+        your Pin content, your boards, or your Pinterest handle.
       </p>
 
-      <h2 className="mt-10 font-display text-xl font-bold">
-        10. CHILDREN&rsquo;S AND MINOR&rsquo;S PRIVACY
-      </h2>
+      <H3>7.3 Service providers</H3>
       <p className="mt-4">
-        We strongly encourage parents and guardians to supervise the online activities of their
-        minor children and consider using parental control tools available from online services and
-        software manufacturers to help provide a child-friendly online environment. These tools can
-        also prevent minors from disclosing their name, address, and other personally identifiable
-        information online without parental permission. Although the Services are not intended for
-        use by minors, We respect the privacy of minors who may inadvertently use the internet or
-        the mobile application.
+        We use processors for cloud hosting, error monitoring, communications, and payments. They
+        act on our instructions under contract, may not use your data for their own purposes, and
+        are bound to confidentiality and security obligations at least as protective as this Policy.
       </p>
 
-      <h2 className="mt-10 font-display text-xl font-bold">11. CONSENT TO THIS POLICY</h2>
+      <H3>7.4 Legal</H3>
       <p className="mt-4">
-        You acknowledge that this Privacy Policy is a part of the Terms and Conditions of the
-        Website and the other Services, and you acknowledge that you have unconditionally agreed as
-        User of the Platform and the Services signifies your assent to this Privacy Policy. Your
-        visit to the Website, use of the App and use of the Services is subject to this Privacy
-        Policy and the Terms and Conditions.
+        We may disclose data where required by law, court order, or a lawful request from a
+        government authority, or where necessary to establish, exercise or defend legal claims, or
+        to investigate fraud or a breach of our Terms.
       </p>
 
-      <h2 className="mt-10 font-display text-xl font-bold">12. COOKIES</h2>
+      <H3>7.5 What we never do</H3>
+      <ul className="mt-2 list-disc space-y-1 pl-6">
+        <li>We do not sell your Personal Data or your Pinterest Data.</li>
+        <li>We do not rent, licence, or trade Pinterest Data with data brokers.</li>
+        <li>
+          We do not use Pinterest Data to train general-purpose machine learning models, and we do
+          not share it with third-party AI providers for model training.
+        </li>
+        <li>
+          We do not use Pinterest Data for advertising targeting or to build advertising audiences.
+        </li>
+        <li>
+          We do not access, read, or store the Pinterest data of anyone who has not personally
+          authorised ShopMyPin.
+        </li>
+      </ul>
+
+      <H2>8. Retention and deletion</H2>
+      <Table head={["Data", "Retained for"]}>
+        <Row
+          cells={[
+            "Pinterest Access Token and refresh token",
+            "Until you disconnect Pinterest or delete your account. Deleted within 24 hours of either event.",
+          ]}
+        />
+        <Row
+          cells={[
+            "Pinterest Data (boards, Pins, metadata, analytics)",
+            "Until you disconnect Pinterest or delete your account. Deleted within 30 days of either event.",
+          ]}
+        />
+        <Row
+          cells={[
+            "Account and contact data",
+            "For as long as your account is active, then 30 days after deletion.",
+          ]}
+        />
+        <Row
+          cells={[
+            "Transaction, earnings, invoicing and tax records",
+            "Retained for the period required under Indian tax and company law, currently 8 years, and cannot be deleted earlier.",
+          ]}
+        />
+        <Row
+          cells={["Anonymised, aggregated statistics containing no identifier", "Indefinitely."]}
+        />
+      </Table>
       <p className="mt-4">
-        When You avail our Services on the Platform, a persistent cookie is placed on Your computer.
+        <strong>Disconnecting Pinterest.</strong> You can disconnect at any time from Settings, or
+        by revoking ShopMyPin&rsquo;s access from Pinterest. On disconnection we stop all API calls
+        immediately, delete your tokens within 24 hours, and delete cached Pinterest metadata within
+        30 days. Pins already updated on Pinterest remain as they are &mdash; they are your Pins and
+        only you can change them back.
       </p>
       <p className="mt-4">
-        This enables us to track any purchases You make with our participating retailers and award
-        cashback / rewards / points to You. If You do not have such persistent cookies enabled on
-        Your computer You will not be able to earn cashback / points on Your online shopping via Our
-        Platform.
-      </p>
-      <p className="mt-4">
-        Disabling/enabling cookies: You have the ability to accept or decline cookies by modifying
-        the settings in Your browser. However, You may not be able to use all the interactive
-        features of Our Platform if cookies are disabled.
-      </p>
-      <p className="mt-4">
-        Please note: if You disable the cookies in Your browser which are used to track Your
-        purchases via Our Platform, You will not be able to earn cashback / point when You shop from
-        our website.
-      </p>
-      <p className="mt-4">
-        There are a number of ways to manage cookies. If You use different computers in different
-        locations You will need to ensure that each browser is adjusted to suit Your cookie
-        preferences.
-      </p>
-      <p className="mt-4">
-        You can easily delete any cookies that have been installed in the cookie folder of your
-        browser. For example, if you are using Microsoft Windows Explorer:
-      </p>
-      <ol className="mt-2 list-decimal space-y-1 pl-6">
-        <li>Open &apos;Windows Explorer&apos;</li>
-        <li>Click on the &apos;Search&apos; button on the tool bar</li>
-        <li>Type &quot;cookie&quot; into the search box for &apos;Folders and Files&apos;</li>
-        <li>Select &apos;My Computer&apos; in the &apos;Look In&apos; box</li>
-        <li>Click &apos;Search Now&apos;</li>
-        <li>Double click on the folders that are found</li>
-        <li>&apos;Select&apos; any cookie file</li>
-        <li>Hit the &apos;Delete&apos; button on your keyboard</li>
-      </ol>
-      <p className="mt-4">
-        If you are not using Microsoft Windows Explorer, then you should select &quot;cookies&quot;
-        in the &quot;Help&quot; function for information on where to find your cookie folder
+        <strong>Deleting your account.</strong> Write to us at the address in Section 12. We will
+        delete your ShopMyPin data on the schedule above. Note that deleting ShopMyPin does not
+        automatically close your EarnKaro account; tell us if you want both closed.
       </p>
 
-      <h2 className="mt-10 font-display text-xl font-bold">13. AFFILIATE COMMISSION</h2>
+      <H2>9. Security</H2>
+      <ul className="mt-2 list-disc space-y-1 pl-6">
+        <li>All traffic is served over TLS 1.2 or higher.</li>
+        <li>
+          Access Tokens and refresh tokens are encrypted at rest with AES-256, held separately from
+          application data, and never exposed to the browser.
+        </li>
+        <li>
+          Access to production data is restricted to authorised personnel on a need-to-know basis
+          and is logged.
+        </li>
+        <li>We monitor for unauthorised access and maintain an incident response process.</li>
+        <li>
+          In the event of a personal data breach, we will notify the Data Protection Board of India
+          and affected Data Principals as required under the DPDP Act.
+        </li>
+      </ul>
       <p className="mt-4">
-        EarnKaro, an affiliate platform, is essentially a service provider that connects retailers
-        and publishers. EarnKaro is not liable to pay for any commission which is cancelled by the
-        partner retailer due to any reason whatsoever and not limited to bulk buying, self
-        consumption, unattributed sale, return or cancellation of product and/or violating any
-        affiliate policy of our partner retailer. Users are required to constantly keep a check on
-        profit rates and terms of campaigns as these are subject to change real time without prior
-        notice. EarnKaro reserves the right to cancel the profit as directed by the partner
-        retailer. By signing up on EarnKaro, user agrees to abide by this clause.
+        No system is perfectly secure. Please use a strong, unique password, do not share your
+        account, and log out of shared devices.
       </p>
 
-      <h2 className="mt-10 font-display text-xl font-bold">
-        14. AMENDMENTS OR CHANGE TO PRIVACY POLICY
-      </h2>
+      <H2>10. Your rights</H2>
+      <p className="mt-4">Under the DPDP Act you have the right to:</p>
+      <ul className="mt-2 list-disc space-y-1 pl-6">
+        <li>
+          <strong>Access</strong> &mdash; obtain a summary of the Personal Data we process about you
+          and the processing activities undertaken.
+        </li>
+        <li>
+          <strong>Correction and completion</strong> &mdash; have inaccurate or incomplete data
+          corrected or updated.
+        </li>
+        <li>
+          <strong>Erasure</strong> &mdash; request deletion of your Personal Data, subject to the
+          legal retention periods in Section 8.
+        </li>
+        <li>
+          <strong>Withdraw consent</strong> &mdash; at any time, with the same ease as it was given.
+          Withdrawal is not retrospective and may prevent us from continuing to provide the service.
+        </li>
+        <li>
+          <strong>Grievance redressal</strong> &mdash; raise a complaint with our Grievance Officer
+          (Section 12) and, if unsatisfied, escalate to the Data Protection Board of India.
+        </li>
+        <li>
+          <strong>Nominate</strong> &mdash; nominate another individual to exercise your rights in
+          the event of your death or incapacity.
+        </li>
+      </ul>
       <p className="mt-4">
-        EarnKaro may update this Privacy Policy at any time, with or without advance notice. In the
-        event there are significant changes in the way EarnKaro treats User Information, or in the
-        Privacy Policy itself, EarnKaro will display a notice on the Website or send Users an email,
-        as provided for above, so that the User may review the changed terms prior to continuing to
-        use the Services. As always, if the User objects to any of the changes to our terms, and the
-        User no longer wish to use the Services, the User may communicate the same to
-        support@earnkaro.com to deactivate Your account. Unless stated otherwise, the current
-        Privacy Policy applies to all information that EarnKaro has about You and Your account.
-      </p>
-      <p className="mt-4">
-        If a User uses the Services after a notice of changes has been sent to such User or
-        published on the Platform, such User hereby provides his/her/its consent to the changed
-        terms.
+        To exercise any right, email support@earnkaro.com with &ldquo;ShopMyPin — Data
+        Request&rdquo; in the subject line. We will respond within 30 days.
       </p>
 
-      <h2 className="mt-10 font-display text-xl font-bold">15. ADDRESS FOR PRIVACY QUESTIONS</h2>
+      <H2>11. Other matters</H2>
       <p className="mt-4">
-        Should You have any questions about this Privacy Policy or EarnKaro&rsquo;s information
-        collection, use and disclosure practices, You may contact, the Data Protection Officer
-        appointed by EarnKaro. We will use reasonable efforts to respond promptly to any requests,
-        questions or concerns, which You may have regarding our use of Your Personal Information. If
-        You have any grievance with respect to Our use of Your information, You may communicate such
-        grievance to the Data Protection Officer:
+        <strong>Cookies.</strong> We use strictly necessary cookies to keep you signed in and to
+        secure your session, and affiliate tracking cookies to attribute purchases made through your
+        links. You can control cookies in your browser, but disabling them will break sign-in and
+        earnings attribution.
       </p>
       <p className="mt-4">
-        Name: Manish Saini, IT Manager
+        <strong>Children.</strong> ShopMyPin is available only to individuals aged 18 or over. We do
+        not knowingly process the data of children. If we learn that a person under 18 has
+        registered, we will close the account and delete the data.
+      </p>
+      <p className="mt-4">
+        <strong>Cross-border transfers.</strong> Personal Data is processed and stored on
+        infrastructure located in [SPECIFY REGION — e.g. India / Singapore]. Where data is processed
+        outside India, we do so in accordance with Section 16 of the DPDP Act and only to countries
+        not restricted by the Central Government.
+      </p>
+      <p className="mt-4">
+        <strong>Changes.</strong> We will post any update here with a revised &ldquo;Last
+        updated&rdquo; date. Where a change is material, we will notify you by email or in-product
+        before it takes effect.
+      </p>
+
+      <H2>12. Contact and Grievance Officer</H2>
+      <p className="mt-4">
+        Grievance Officer (appointed under the DPDP Act, 2023 and the Information Technology
+        (Intermediary Guidelines) Rules, 2021):
+      </p>
+      <p className="mt-4">
+        Manish Saini, IT Manager
         <br />
-        Pouring Pounds India Private Limited,
+        Pouring Pounds India Private Limited
         <br />
-        UM House, 2nd Floor, Gurgaon, Sector 44, 122002, Haryana, India
+        UM House, 2nd Floor, Sector 44, Gurgaon, Haryana 122002, India
         <br />
         Email: support@earnkaro.com
+      </p>
+      <p className="mt-4">
+        We acknowledge grievances within 24 hours and resolve them within 15 days.
       </p>
     </div>
   );
