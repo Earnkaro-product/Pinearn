@@ -1139,6 +1139,18 @@ async function fetchCkProductDetails(productUrl: string): Promise<CkResult> {
   return promise;
 }
 
+// CK returns prices as numbers, but a partial scrape can hand back a numeric
+// string (or a "₹1,299" display string) instead. Coerce anything that
+// carries a real positive amount; everything else is "no price".
+function toPositivePrice(raw: number | string | null | undefined): number | null {
+  if (typeof raw === "number") return Number.isFinite(raw) && raw > 0 ? raw : null;
+  if (typeof raw !== "string") return null;
+  const digits = raw.replace(/[^0-9.]/g, "");
+  if (!digits) return null;
+  const n = Number.parseFloat(digits);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
 // CK Product Details API — looks up a product URL directly on the retailer
 // and returns its live MRP/price/stock. Never throws — every outcome
 // (timeout, dead link, no price data, retailer error) collapses to `null` so
@@ -1168,23 +1180,38 @@ async function fetchCkProductDetailsLive(productUrl: string): Promise<CkResult> 
 
         const data = (await res.json()) as {
           status?: boolean;
-          mrp?: number;
-          discounted_price?: number;
+          mrp?: number | string | null;
+          discounted_price?: number | string | null;
           availability?: boolean;
           availability_status?: string;
         };
-        if (!data.status || data.mrp == null || data.discounted_price == null) {
-          logNet("CK", { url: productUrl, outcome: "no_price_data" });
+        // Every URL that reaches CK already passed the supported-retailer
+        // filter, so any number CK answers with belongs to a real listing we
+        // can price and monetize — keep it. Deliberately NOT gated on
+        // `status`: CK sets it false for partial scrapes that still carry a
+        // live price, and dropping those was silently emptying tabs full of
+        // otherwise perfectly attachable products. A missing MRP or a missing
+        // discounted price is likewise not fatal — whichever figure came back
+        // stands in for the other (equal values simply mean no discount to
+        // show, never an invented one). Only a response with no usable number
+        // anywhere collapses to null.
+        const mrpValue = toPositivePrice(data.mrp);
+        const discountedValue = toPositivePrice(data.discounted_price);
+        const price = discountedValue ?? mrpValue;
+        if (price == null) {
+          logNet("CK", { url: productUrl, outcome: "no_price_data", ckStatus: !!data.status });
           return null;
         }
-        if (!data.availability) {
-          // Real price data, just not purchasable right now — surface it
-          // (the retailer may restock) rather than dropping it like a dead
-          // link. Callers that auto-attach without human review filter this
-          // out explicitly; interactive UI still shows it as pickable.
-          return { mrp: data.mrp, discountedPrice: data.discounted_price, available: false };
-        }
-        return { mrp: data.mrp, discountedPrice: data.discounted_price, available: true };
+        // Out of stock is a display state, never an exclusion: the price is
+        // real and the retailer may restock, so the card still shows price,
+        // MRP and its earnings pill and stays attachable. `availability`
+        // absent (partial payload) is not evidence of "unavailable" either —
+        // only an explicit false marks it out of stock.
+        return {
+          mrp: mrpValue ?? price,
+          discountedPrice: price,
+          available: data.availability !== false,
+        };
       },
       { timeoutMs: CK_TIMEOUT_MS, label: "CK", timeoutMaxRetries: 0 },
     );

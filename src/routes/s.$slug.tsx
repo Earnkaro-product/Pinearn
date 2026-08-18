@@ -17,11 +17,30 @@ export const getPublicStorefront = createServerFn({ method: "GET" })
     const sb = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_PUBLISHABLE_KEY!, {
       auth: { storage: undefined, persistSession: false, autoRefreshToken: false },
     });
-    const { data: store } = await sb
+    // NOT maybeSingle(). `storefronts.slug` carries no unique constraint — only
+    // user_id does (20260706071512) — and uniqueness was merely attempted in
+    // application code, which a set-based backfill and concurrent sign-ups both
+    // defeat. Three storefronts ended up sharing the slug "dua", and maybeSingle
+    // treats "more than one row" as an error: the page 404'd with "Storefront not
+    // found" for every one of them, including from a link the creator had just
+    // copied.
+    //
+    // Ordered by `id`, not `created_at`: anon holds a COLUMN-level GRANT on this
+    // table (20260803150000_scope_public_read.sql) and created_at is not in it, so
+    // ordering by it is a 42501 that takes the whole page down — the same trap as
+    // the pins query above. `id` is granted, stable, and gives a deterministic
+    // winner, so a given link always resolves to the same storefront rather than
+    // flipping between owners. The duplicates are
+    // being cleaned up and a unique index added in
+    // 20260818140000_storefront_slug_unique.sql; this stays as the guard that
+    // keeps a public page from 500ing over a data problem.
+    const { data: stores } = await sb
       .from("storefronts")
       .select("id,user_id,name,slug,description,brand_color,background_image_url")
       .eq("slug", data.slug)
-      .maybeSingle();
+      .order("id", { ascending: true })
+      .limit(1);
+    const store = stores?.[0];
     if (!store) return null;
     const [{ data: collections }, { data: pins }, { data: boards }, { data: profile }] =
       await Promise.all([
