@@ -798,13 +798,15 @@ const lensLimit = createLimiter(LENS_CONCURRENCY);
 // with no retry, and a genuine hang stops after a single attempt (see
 // LENS_TIMEOUT_MAX_RETRIES = 0 at the call site) instead of doubling the wait.
 const LENS_TIMEOUT_MS = 16_000;
-// CK product-page scrapes commonly take ~5–7s; a 5s budget timed the slow ones
-// out just before they'd have succeeded, then re-ran the identical scrape (a
-// duplicate ~10s round trip for one card). 8s covers the real latency so a
-// resolvable product lands on the first attempt, and a genuinely dead link
-// fails once and falls back to the Lens price (see CK call site: it also uses
-// timeoutMaxRetries 0 — re-scraping an unresolvable URL never helps).
-const CK_TIMEOUT_MS = 8_000;
+// CK product-page scrapes are far slower than they look on a good URL. Timed
+// against the live API: myntra 3.5s, flipkart 3.7s, nykaa 1.3s — but an
+// ajio/shopify page took 14.4s, and that is a SUCCESSFUL scrape, not a hang.
+// The old 8s budget cut those off mid-flight, so an entirely resolvable
+// product came back as "no price" and the card rendered blank. 20s covers the
+// measured worst case with headroom; a genuinely dead link still fails once
+// and falls back to the Lens price (timeoutMaxRetries 0 below — re-scraping an
+// unresolvable URL never helps).
+const CK_TIMEOUT_MS = 20_000;
 // Exponential backoff sequence for a retried attempt — attempt 2 waits
 // RETRY_BACKOFFS_MS[0], and so on.
 //
@@ -944,9 +946,19 @@ async function withRetry<T>(
     // Per-call override for how many times a timeout is retried. Defaults to
     // TIMEOUT_MAX_RETRIES; LENS passes 0 so a hung 16s query is never re-run.
     timeoutMaxRetries?: number;
+    // Whether a timeout counts as evidence the SERVICE is down. True for a
+    // service whose own latency is the thing being measured; false for CK,
+    // where the slow part is the third-party retailer page being scraped, not
+    // CK itself — see the CK call site.
+    timeoutTripsBreaker?: boolean;
   },
 ): Promise<T> {
-  const { timeoutMs, label, timeoutMaxRetries = TIMEOUT_MAX_RETRIES } = opts;
+  const {
+    timeoutMs,
+    label,
+    timeoutMaxRetries = TIMEOUT_MAX_RETRIES,
+    timeoutTripsBreaker = true,
+  } = opts;
   const overallStart = Date.now();
 
   // Don't queue work for a service that just told us, repeatedly, that it's down.
@@ -977,8 +989,10 @@ async function withRetry<T>(
 
       if (attempt >= maxRetries) {
         // Only a retryable failure counts toward the breaker. A 404 or a bad
-        // request says the URL is wrong, not that the service is down.
-        if (isTimeout || isRetryableHttp) breakerRecordFailure(label);
+        // request says the URL is wrong, not that the service is down — and a
+        // timeout only counts when this service's own latency is what timed
+        // out (`timeoutTripsBreaker`).
+        if ((isTimeout && timeoutTripsBreaker) || isRetryableHttp) breakerRecordFailure(label);
         if (isTimeout) {
           logNet(`${label}.request`, {
             outcome: "timeout",
@@ -1213,7 +1227,20 @@ async function fetchCkProductDetailsLive(productUrl: string): Promise<CkResult> 
           available: data.availability !== false,
         };
       },
-      { timeoutMs: CK_TIMEOUT_MS, label: "CK", timeoutMaxRetries: 0 },
+      {
+        timeoutMs: CK_TIMEOUT_MS,
+        label: "CK",
+        timeoutMaxRetries: 0,
+        // A CK timeout is a fact about ONE retailer's page (a slow shopify
+        // storefront), not about CK. Letting those trip the shared breaker was
+        // catastrophic: four slow products in a row opened it, and for the next
+        // 60 seconds EVERY card's lookup — across every pin and every user on
+        // this server — failed instantly without a request being sent, which is
+        // exactly the "whole grids of cards with no price at all, but the API
+        // returns fine when I hit it by hand" symptom. Real CK-is-down
+        // evidence (429/502/503/504) still trips it.
+        timeoutTripsBreaker: false,
+      },
     );
   } catch (e) {
     void e;
