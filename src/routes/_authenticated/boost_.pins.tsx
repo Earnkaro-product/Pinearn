@@ -75,6 +75,7 @@ import {
   ctrLabel,
   DIAGNOSIS_META,
   GROUP_META,
+  HIGH_IMPACT_COUNT,
   reachLabel,
   scorePins,
   type PinImpact,
@@ -806,6 +807,9 @@ function PinBoostPicker({
   const [limit, setLimit] = useState(PIN_GRID_PAGE_SIZE);
   const [boardLimit, setBoardLimit] = useState(BOARD_LIST_PAGE_SIZE);
   const [workingOpen, setWorkingOpen] = useState(false);
+  // The shortlist rail opens on the high tier and its Show-more tile walks
+  // down the same ranking, one page at a time.
+  const [railLimit, setRailLimit] = useState(HIGH_IMPACT_COUNT);
 
   // Ranked once — the run order for everything on this screen, so "biggest win
   // first" holds whether the creator queued the shortlist, a search result, a
@@ -820,6 +824,12 @@ function PinBoostPicker({
   const rest = useMemo(() => ranked.filter((c) => !c.impact.protect), [ranked]);
 
   const searching = query.trim().length > 0;
+
+  // What the shortlist rail shows. `rest` is the whole account in impact
+  // order and its prefix IS the high tier, so page one of the rail is exactly
+  // the old shortlist and Show-more continues down the same ranking.
+  const railCards = useMemo(() => rest.slice(0, railLimit), [rest, railLimit]);
+  const railHidden = rest.length - railCards.length;
 
   const visible = useMemo(() => {
     const compare = SORT_OPTIONS.find((o) => o.key === sort)!.compare;
@@ -902,6 +912,67 @@ function PinBoostPicker({
           }}
         />
 
+        {/* 1 — the shortlist, above the tabs so the best wins greet the
+            creator before any navigation. A horizontal rail (same scroll
+            rhythm as the board picker's), whose last tile walks further down
+            the ranking. Hidden while searching: a search means the creator
+            knows what they want, and the shortlist reshuffling above their
+            results is noise. */}
+        {best.length > 0 && !searching && (
+          <section
+            aria-label={GROUP_META.high.label}
+            className="relative overflow-hidden rounded-3xl border border-primary/25 bg-gradient-to-b from-primary/[0.07] via-surface to-surface p-3.5"
+          >
+            <div
+              aria-hidden
+              className="pointer-events-none absolute -left-14 -top-16 h-44 w-44 rounded-full bg-primary/10 blur-3xl"
+            />
+            <div className="relative flex items-center justify-between gap-3">
+              <div className="flex min-w-0 items-center gap-2.5">
+                <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-gradient-primary text-primary-foreground shadow-glow">
+                  <Flame className="h-4 w-4" strokeWidth={2.5} />
+                </span>
+                <div className="min-w-0">
+                  <h3 className="truncate font-display text-[17px] font-bold leading-tight tracking-tight">
+                    {GROUP_META.high.label}
+                  </h3>
+                  {/* Four words where a sentence was — the cards below
+                      argue their own case now. */}
+                  <p className="text-micro font-semibold text-muted-foreground">
+                    Most reach per rewrite
+                  </p>
+                </div>
+              </div>
+              <QueueAllButton ids={headlineIds} selected={selected} onQueueMany={setMany} hero />
+            </div>
+            <div className="no-scrollbar relative -mx-3.5 mt-3 flex snap-x gap-2.5 overflow-x-auto px-3.5 pb-1">
+              {railCards.map((card, i) => (
+                <ImpactRailCard
+                  key={card.id}
+                  card={card}
+                  index={i}
+                  selected={selected.has(card.id)}
+                  boosted={statusById[card.id] === "approved"}
+                  points={perPinPoints}
+                  onToggle={() => toggleOne(card.id)}
+                />
+              ))}
+              {railHidden > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setRailLimit((l) => l + HIGH_IMPACT_COUNT)}
+                  className="flex aspect-[3/4] w-[calc((100vw-5rem)/2.4)] min-w-[124px] max-w-[162px] shrink-0 snap-start flex-col items-center justify-center gap-1 rounded-xl border border-dashed border-border bg-surface/70 text-mini font-bold text-primary transition hover:bg-primary/[0.04]"
+                >
+                  Show more
+                  <span className="text-micro font-semibold tabular-nums text-muted-foreground">
+                    {railHidden} more
+                  </span>
+                </button>
+              )}
+            </div>
+          </section>
+        )}
+
         {/* Pinterest-style tabs — same pattern as the Select pin screen. */}
         <div className="flex items-center justify-center gap-8 border-b border-border/60">
           <PickerTab active={tab === "pins"} onClick={() => setTab("pins")}>
@@ -923,57 +994,6 @@ function PinBoostPicker({
               className="space-y-5"
             >
               {!hasAnalytics && <NoAnalyticsNote />}
-
-              {/* 1 — the shortlist. Hidden while searching: a search means the
-                  creator knows what they want, and the shortlist reshuffling
-                  above their results is noise. */}
-              {best.length > 0 && !searching && (
-                <section
-                  aria-label={GROUP_META.high.label}
-                  className="relative overflow-hidden rounded-3xl border border-primary/25 bg-gradient-to-b from-primary/[0.07] via-surface to-surface p-3.5"
-                >
-                  <div
-                    aria-hidden
-                    className="pointer-events-none absolute -left-14 -top-16 h-44 w-44 rounded-full bg-primary/10 blur-3xl"
-                  />
-                  <div className="relative flex items-center justify-between gap-3">
-                    <div className="flex min-w-0 items-center gap-2.5">
-                      <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-gradient-primary text-primary-foreground shadow-glow">
-                        <Flame className="h-4 w-4" strokeWidth={2.5} />
-                      </span>
-                      <div className="min-w-0">
-                        <h3 className="truncate font-display text-[17px] font-bold leading-tight tracking-tight">
-                          {GROUP_META.high.label}
-                        </h3>
-                        {/* Four words where a sentence was — the rows below
-                            argue their own case now. */}
-                        <p className="text-micro font-semibold text-muted-foreground">
-                          Most reach per rewrite
-                        </p>
-                      </div>
-                    </div>
-                    <QueueAllButton
-                      ids={headlineIds}
-                      selected={selected}
-                      onQueueMany={setMany}
-                      hero
-                    />
-                  </div>
-                  <div className="relative mt-3 space-y-2">
-                    {best.map((card, i) => (
-                      <ImpactRow
-                        key={card.id}
-                        card={card}
-                        index={i}
-                        selected={selected.has(card.id)}
-                        boosted={statusById[card.id] === "approved"}
-                        points={perPinPoints}
-                        onToggle={() => toggleOne(card.id)}
-                      />
-                    ))}
-                  </div>
-                </section>
-              )}
 
               {/* 2 — the inventory. */}
               <section aria-label="All pins">
@@ -1260,24 +1280,14 @@ function NoAnalyticsNote() {
   );
 }
 
-/** A pin's age at chip length — the number, not a sentence about it. */
-function ageLabel(days: number): string {
-  if (days <= 0) return "Today";
-  if (days < 30) return `${days}d`;
-  if (days < 365) return `${Math.round(days / 30)}mo`;
-  return `${Math.floor(days / 365)}y`;
-}
-
 /**
- * A shortlist pin, as a row that argues its case in glances, not sentences.
- *
- * The old row spent two lines of prose per pin repeating the model's
- * reasoning — six near-identical paragraphs in a row read as filler. The same
- * facts are now marks: a rank badge (why it's ordered here), chips for the
- * diagnosis / age / views (the measurement), an impact meter (the score the
- * ranking runs on), and the modelled reach gain as the one highlighted number.
+ * A shortlist pin as a rail card — same width rhythm as the board picker's
+ * rail, so the two screens scroll alike. The rank badge and the diagnosis ride
+ * the image (the order and the "why" are the model's whole argument), and the
+ * payoff — modelled reach, or pts when analytics haven't landed — sits under
+ * the title as the one highlighted number.
  */
-function ImpactRow({
+function ImpactRailCard({
   card,
   index,
   selected,
@@ -1293,30 +1303,34 @@ function ImpactRow({
   onToggle: () => void;
 }) {
   const { impact } = card;
-  const DiagIcon = DIAGNOSIS_ICON[impact.diagnosis];
-  const delay = Math.min(index, 6) * 0.04;
   return (
     <motion.button
       type="button"
       onClick={onToggle}
       aria-pressed={selected}
-      // The retired prose still matters to a screen reader — the chips and the
-      // meter don't read aloud, so the label carries the case in words.
+      // The chips and badges don't read aloud, so the label carries the case
+      // in words.
       aria-label={`${selected ? "Remove" : "Queue"} ${card.title} — ${impact.headline}`}
-      whileTap={{ scale: 0.985 }}
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ delay, duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
-      className={`flex w-full items-stretch gap-3 rounded-2xl border-2 bg-surface p-2 text-left transition ${
-        selected ? "border-primary shadow-sm" : "border-transparent ring-1 ring-border/70"
-      }`}
+      whileTap={{ scale: 0.96 }}
+      initial={{ opacity: 0, x: 12 }}
+      animate={{ opacity: 1, x: 0 }}
+      transition={{ delay: Math.min(index, 6) * 0.04, duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+      className="w-[calc((100vw-5rem)/2.4)] min-w-[124px] max-w-[162px] shrink-0 snap-start text-left"
     >
-      <div className="relative h-[88px] w-[70px] shrink-0 overflow-hidden rounded-xl bg-surface-2">
+      <div
+        className={`relative aspect-[3/4] overflow-hidden rounded-xl bg-surface-2 transition ${
+          selected ? "ring-2 ring-primary" : "ring-1 ring-border/60"
+        }`}
+      >
         <PinImage card={card} />
-        {/* Rank, worn by the pin itself — the order is the model's whole
-            argument, so it gets to be visible. */}
         <span className="absolute left-1 top-1 grid h-5 w-5 place-items-center rounded-full bg-black/55 text-nano font-extrabold text-white backdrop-blur-sm">
           {index + 1}
+        </span>
+        <span className="absolute right-1 top-1">
+          <SelectDot on={selected} small />
+        </span>
+        <span className="absolute bottom-1 left-1 inline-flex max-w-[calc(100%-8px)] items-center rounded-full bg-black/50 px-1.5 py-0.5 text-nano font-bold text-white backdrop-blur-sm">
+          <span className="truncate">{DIAGNOSIS_META[impact.diagnosis].label}</span>
         </span>
         {boosted && (
           <span className="absolute inset-0 grid place-items-center bg-emerald-500/75 text-white">
@@ -1324,57 +1338,18 @@ function ImpactRow({
           </span>
         )}
       </div>
-
-      <div className="flex min-w-0 flex-1 flex-col justify-between py-0.5">
-        <div className="min-w-0">
-          <p className="line-clamp-1 text-body font-bold leading-tight">
-            {card.title?.trim() || <span className="text-muted-foreground">Untitled pin</span>}
-          </p>
-          {/* The measurement as chips: what's wrong, how old, how seen. */}
-          <div className="mt-1.5 flex flex-wrap items-center gap-1">
-            <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-micro font-bold text-primary">
-              <DiagIcon className="h-2.5 w-2.5 shrink-0" strokeWidth={2.5} />
-              {DIAGNOSIS_META[impact.diagnosis].label}
-            </span>
-            <span className="inline-flex items-center gap-1 rounded-full bg-surface-2 px-2 py-0.5 text-micro font-bold tabular-nums text-muted-foreground">
-              <Clock3 className="h-2.5 w-2.5 shrink-0" strokeWidth={2.5} />
-              {ageLabel(impact.ageDays)}
-            </span>
-            {impact.reach > 0 && (
-              <span className="inline-flex items-center gap-1 rounded-full bg-surface-2 px-2 py-0.5 text-micro font-bold tabular-nums text-muted-foreground">
-                <Eye className="h-2.5 w-2.5 shrink-0" strokeWidth={2.5} />
-                {metricLabel(impact.reach)}
-              </span>
-            )}
-          </div>
-        </div>
-
-        {/* The 0–100 impact score the whole page ranks by, drawn instead of
-            asserted — and the payoff for fixing it on the right. */}
-        <div className="mt-2 flex items-center gap-2">
-          <div className="relative h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-surface-2">
-            <motion.span
-              className="absolute inset-y-0 left-0 rounded-full bg-gradient-primary"
-              initial={{ width: 0 }}
-              animate={{ width: `${Math.max(4, Math.min(100, impact.score))}%` }}
-              transition={{ duration: 0.7, delay: delay + 0.2, ease: [0.22, 1, 0.36, 1] }}
-            />
-          </div>
-          <span className="inline-flex shrink-0 items-center gap-1 text-micro font-bold tabular-nums text-primary">
-            {impact.reachLift !== null && impact.reachLift > 0 ? (
-              <>
-                <TrendingUp className="h-2.5 w-2.5" /> +{reachLabel(impact.reachLift)} views
-              </>
-            ) : (
-              <>+{pointsLabel(points)} pts</>
-            )}
-          </span>
-        </div>
-      </div>
-
-      <span className="shrink-0 self-center pr-1">
-        <SelectDot on={selected} small />
-      </span>
+      <p className="mt-1 line-clamp-1 px-0.5 text-mini font-bold">
+        {card.title?.trim() || <span className="text-muted-foreground">Untitled pin</span>}
+      </p>
+      <p className="flex items-center gap-1 px-0.5 text-micro font-bold tabular-nums text-primary">
+        {impact.reachLift !== null && impact.reachLift > 0 ? (
+          <>
+            <TrendingUp className="h-2.5 w-2.5 shrink-0" /> ≈ +{reachLabel(impact.reachLift)} views
+          </>
+        ) : (
+          <>+{pointsLabel(points)} pts</>
+        )}
+      </p>
     </motion.button>
   );
 }
