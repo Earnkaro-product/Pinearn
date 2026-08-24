@@ -597,7 +597,10 @@ function BoardBoostPicker({
     () => [...cards].sort((a, b) => boardOpportunityScore(b) - boardOpportunityScore(a)),
     [cards],
   );
-  const suggested = useMemo(() => ranked.slice(0, SUGGESTED_BOARDS_COUNT), [ranked]);
+  // The rail opens on the top picks and its Show-more tile walks further down
+  // the same ranking, a page at a time — mirrors the pin picker's rail.
+  const [railLimit, setRailLimit] = useState(SUGGESTED_BOARDS_COUNT);
+  const suggested = useMemo(() => ranked.slice(0, railLimit), [ranked, railLimit]);
 
   const counts = useMemo(
     () =>
@@ -678,8 +681,10 @@ function BoardBoostPicker({
           <SuggestedBoardsRail
             cards={suggested}
             selected={selected}
+            hiddenCount={ranked.length - suggested.length}
             onToggle={toggleOne}
             onQueueAll={setMany}
+            onMore={() => setRailLimit((l) => l + SUGGESTED_BOARDS_COUNT)}
           />
         )}
 
@@ -778,13 +783,18 @@ function BoardBoostPicker({
 function SuggestedBoardsRail({
   cards,
   selected,
+  hiddenCount,
   onToggle,
   onQueueAll,
+  onMore,
 }: {
   cards: BoardFixCard[];
   selected: Set<string>;
+  /** Ranked boards not yet in the rail — what the Show-more tile reveals. */
+  hiddenCount: number;
   onToggle: (id: string) => void;
   onQueueAll: (ids: string[], on: boolean) => void;
+  onMore: () => void;
 }) {
   const ids = cards.map((c) => c.id);
   const allQueued = ids.length > 0 && ids.every((id) => selected.has(id));
@@ -853,6 +863,18 @@ function SuggestedBoardsRail({
             </motion.button>
           );
         })}
+        {hiddenCount > 0 && (
+          <button
+            type="button"
+            onClick={onMore}
+            className="flex h-[86px] w-[calc((100vw-5rem)/2.4)] min-w-[124px] max-w-[162px] shrink-0 snap-start flex-col items-center justify-center gap-1 rounded-xl border border-dashed border-border bg-surface/70 text-mini font-bold text-primary transition hover:bg-primary/[0.04]"
+          >
+            Show more
+            <span className="text-micro font-semibold tabular-nums text-muted-foreground">
+              {hiddenCount} more
+            </span>
+          </button>
+        )}
       </div>
     </motion.section>
   );
