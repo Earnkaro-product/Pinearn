@@ -1,15 +1,15 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useServerFn } from "@tanstack/react-start";
 import { supabase } from "@/integrations/supabase/client";
-import { toast } from "sonner";
+import { notifyDone, notifyProblem } from "@/lib/notify";
 import { AppShell } from "@/components/app-shell";
 import { PinterestSyncBanner } from "@/components/pinterest-sync-banner";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Loader2, Save, User as UserIcon, ImagePlus, Link2 } from "lucide-react";
-import { startPinterestOAuth } from "@/lib/pinterest-oauth.functions";
 import { getFriendlyMessage } from "@/lib/friendly-error";
+import { usePinterestConnect } from "@/hooks/use-pinterest-connect";
+import { PinterestFailureNotice } from "@/components/pinterest-gate";
 
 export const Route = createFileRoute("/_authenticated/profile")({
   // The Health Score "Complete Profile" action deep-links straight to the
@@ -22,10 +22,9 @@ export const Route = createFileRoute("/_authenticated/profile")({
 
 function ProfilePage() {
   const { focus } = Route.useSearch();
-  const runStartOAuth = useServerFn(startPinterestOAuth);
+  const { connect, connecting, failure: connectFailure } = usePinterestConnect();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [connecting, setConnecting] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
   const [email, setEmail] = useState<string>("");
   const [displayName, setDisplayName] = useState("");
@@ -91,7 +90,7 @@ function ProfilePage() {
       setLoading(false);
     })();
     if (new URLSearchParams(window.location.search).get("connected") === "1") {
-      toast.success("Pinterest connected");
+      notifyDone("Pinterest connected");
       window.history.replaceState(null, "", window.location.pathname);
     }
   }, []);
@@ -101,7 +100,7 @@ function ProfilePage() {
     if (displayName.trim().length < 2) {
       setNameError("Enter your name (min 2 characters)");
       nameInputRef.current?.focus();
-      return toast.error("Enter your name");
+      return notifyProblem("Enter your name");
     }
     setNameError(null);
     setSaving(true);
@@ -113,19 +112,15 @@ function ProfilePage() {
       })
       .eq("id", userId);
     setSaving(false);
-    if (error) return toast.error(getFriendlyMessage(error));
-    toast.success("Profile updated");
+    if (error) return notifyProblem(getFriendlyMessage(error));
+    notifyDone("Profile updated");
   }
 
   async function connectPinterest() {
-    setConnecting(true);
-    try {
-      const { url } = await runStartOAuth({ data: { returnTo: "/profile" } });
-      window.location.href = url;
-    } catch (e) {
-      setConnecting(false);
-      toast.error(e instanceof Error ? e.message : "Couldn't start the Pinterest connection");
-    }
+    // A failure stays on the page under the button (see below) rather than in a
+    // toast — this is a settings screen, and the retry belongs next to the
+    // control that failed.
+    await connect("/profile");
   }
 
   const initials = (displayName || email || "?")
@@ -217,19 +212,32 @@ function ProfilePage() {
                   <PinterestSyncBanner />
                 </>
               ) : (
-                <button
-                  ref={connectButtonRef}
-                  onClick={connectPinterest}
-                  disabled={connecting}
-                  className="flex w-full items-center justify-center gap-2 rounded-2xl border border-primary/40 bg-primary/5 px-4 py-3 text-sm font-semibold text-primary transition hover:bg-primary/10 disabled:opacity-60"
-                >
-                  {connecting ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <Link2 className="h-4 w-4" />
+                <div className="space-y-3">
+                  <button
+                    ref={connectButtonRef}
+                    onClick={connectPinterest}
+                    disabled={connecting}
+                    className="flex w-full items-center justify-center gap-2 rounded-2xl border border-primary/40 bg-primary/5 px-4 py-3 text-sm font-semibold text-primary transition hover:bg-primary/10 disabled:opacity-60"
+                  >
+                    {connecting ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Link2 className="h-4 w-4" />
+                    )}
+                    Connect Pinterest
+                  </button>
+                  <p className="text-xs leading-snug text-muted-foreground">
+                    Optional. Connect it to import your boards and Pins and to read real Pinterest
+                    stats — the rest of ShopMyPin works either way.
+                  </p>
+                  {connectFailure && (
+                    <PinterestFailureNotice
+                      failure={connectFailure}
+                      onRetry={connectPinterest}
+                      retrying={connecting}
+                    />
                   )}
-                  Connect Pinterest
-                </button>
+                </div>
               )}
               <Field label="Avatar URL" icon={ImagePlus}>
                 <input

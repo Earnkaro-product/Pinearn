@@ -10,11 +10,12 @@ import {
   ChevronDown,
   X,
 } from "lucide-react";
-import { toast } from "sonner";
+import { notifyDone, notifyProblem } from "@/lib/notify";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { getBrand } from "@/lib/brands";
 import { BrandLogo } from "@/components/brand-card";
+import { useGoBack } from "@/hooks/use-go-back";
 import {
   ShareSheet,
   CollectionPicker,
@@ -98,6 +99,9 @@ function BrandDetailPage() {
   const urlInputRef = useRef<HTMLInputElement>(null);
   const qc = useQueryClient();
   const router = useRouter();
+  // Brand pages open from Discover and from the dashboard's brand rail, so back
+  // follows history and only falls back to Discover on a deep link.
+  const goBack = useGoBack({ to: "/brands" });
 
   const description = useMemo(
     () =>
@@ -145,13 +149,13 @@ function BrandDetailPage() {
     onSuccess: (inserted) => {
       qc.invalidateQueries({ queryKey: ["all-products"] });
       qc.invalidateQueries({ queryKey: ["storefront-products"] });
-      toast.success("Affiliate link created");
+      notifyDone("Affiliate link created");
       setCreatedProduct(inserted);
       setUrl("");
       setUrlError(null);
     },
     onError: (e: Error) => {
-      toast.error(getFriendlyMessage(e));
+      notifyProblem(getFriendlyMessage(e));
       if (
         e.message === "Paste a product link first" ||
         e.message === "That doesn't look like a valid URL"
@@ -167,15 +171,15 @@ function BrandDetailPage() {
       const t = await navigator.clipboard.readText();
       if (t) setUrl(t.trim());
     } catch {
-      toast.error("Clipboard access blocked");
+      notifyProblem("Clipboard access blocked");
     }
   }
 
   async function copyLink() {
     if (!createdProduct) return;
     const ok = await copyToClipboard(createdProduct.affiliate_url);
-    if (ok) toast.success("Link copied");
-    else toast.error("Could not copy link");
+    if (ok) notifyDone("Link copied");
+    else notifyProblem("Could not copy link");
   }
 
   function resetLinkFlow() {
@@ -190,7 +194,7 @@ function BrandDetailPage() {
       <div className="sticky top-0 z-20 flex items-center border-b border-border bg-surface px-4 py-4">
         <button
           type="button"
-          onClick={() => router.navigate({ to: "/brands" })}
+          onClick={goBack}
           className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-surface-2 text-foreground"
           aria-label="Back"
         >
@@ -365,8 +369,8 @@ function BrandDetailPage() {
                   onDone={(collectionId) => {
                     resetLinkFlow();
                     router.navigate({
-                      to: "/storefront",
-                      search: { collection: collectionId } as never,
+                      to: "/collections/$id",
+                      params: { id: collectionId },
                     });
                   }}
                 />

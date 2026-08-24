@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import { useNavigate } from "@tanstack/react-router";
 
-import { toast } from "sonner";
+import { notifyDone, notifyProblem } from "@/lib/notify";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppSheet } from "@/components/app-sheet";
 import { supabase } from "@/integrations/supabase/client";
@@ -95,11 +95,11 @@ export function AffiliateLinkDialog() {
     onSuccess: (inserted) => {
       qc.invalidateQueries({ queryKey: ["all-products"] });
       qc.invalidateQueries({ queryKey: ["storefront-products"] });
-      toast.success("Affiliate link created");
+      notifyDone("Affiliate link created");
       setCreatedProduct(inserted);
       setUrl("");
     },
-    onError: (e: Error) => toast.error(e.message),
+    onError: (e: Error) => notifyProblem(e.message),
   });
 
   async function pasteFromClipboard() {
@@ -107,15 +107,15 @@ export function AffiliateLinkDialog() {
       const t = await navigator.clipboard.readText();
       if (t) setUrl(t.trim());
     } catch {
-      toast.error("Clipboard access blocked — paste with ⌘/Ctrl+V");
+      notifyProblem("Clipboard access blocked — paste with ⌘/Ctrl+V");
     }
   }
 
   async function copyLink() {
     if (!createdProduct) return;
     const ok = await copyToClipboard(createdProduct.affiliate_url);
-    if (ok) toast.success("Link copied");
-    else toast.error("Could not copy link");
+    if (ok) notifyDone("Link copied");
+    else notifyProblem("Could not copy link");
   }
 
   function reset() {
@@ -168,7 +168,7 @@ export function AffiliateLinkDialog() {
               product={createdProduct}
               onDone={(collectionId) => {
                 setOpen(false);
-                navigate({ to: "/storefront", search: { collection: collectionId } as never });
+                navigate({ to: "/collections/$id", params: { id: collectionId } });
               }}
             />
           ) : createdProduct ? (
@@ -313,7 +313,7 @@ export function ShareSheet({ link, onCopy, onAddToStorefront, onCreateAnother }:
 
   async function instagramShare() {
     await handleCopy();
-    toast.success("Link copied — paste in your Instagram story or DM");
+    notifyDone("Link copied — paste in your Instagram story or DM");
     window.location.href = "instagram://story-camera";
   }
 
@@ -519,10 +519,10 @@ export function CollectionPicker({
     onSuccess: (collectionId) => {
       qc.invalidateQueries({ queryKey: ["storefront-products"] });
       qc.invalidateQueries({ queryKey: ["collection-products"] });
-      toast.success("Added to collection");
+      notifyDone("Added to collection");
       onDone(collectionId);
     },
-    onError: (e: Error) => toast.error(e.message),
+    onError: (e: Error) => notifyProblem(e.message),
   });
 
   const createAndAttach = useMutation({
@@ -563,10 +563,10 @@ export function CollectionPicker({
       qc.invalidateQueries({ queryKey: ["collections"] });
       qc.invalidateQueries({ queryKey: ["storefront-products"] });
       qc.invalidateQueries({ queryKey: ["collection-products"] });
-      toast.success("Collection created");
+      notifyDone("Collection created");
       onDone(collectionId);
     },
-    onError: (e: Error) => toast.error(e.message),
+    onError: (e: Error) => notifyProblem(e.message),
   });
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -576,14 +576,14 @@ export function CollectionPicker({
   function handleDone() {
     if (creatingNew) {
       if (!newName.trim()) {
-        toast.error("Give your collection a name");
+        notifyProblem("Give your collection a name");
         return;
       }
       createAndAttach.mutate(newName);
       return;
     }
     if (!selectedId) {
-      toast.error("Pick a collection first");
+      notifyProblem("Pick a collection first");
       return;
     }
     attach.mutate(selectedId);

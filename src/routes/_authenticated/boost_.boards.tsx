@@ -11,7 +11,6 @@ import {
   Pencil,
   RefreshCw,
   Sparkles,
-  Trophy,
   X,
 } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
@@ -120,8 +119,12 @@ function buildDeck(data: HealthData): BoardFixCard[] {
     else pinsByBoard.set(boardId, [p]);
   }
 
-  // EVERY board, not just the failing ones — same reasoning as the pin deck.
-  return byIssueCountDesc(data.boards, boardIssues).map((b) => {
+  // ONLY the failing boards — same reasoning as the pin deck: a board that
+  // already passes has no points to give, so it isn't on this screen.
+  return byIssueCountDesc(
+    data.boards.filter((b) => boardIssues(b).length > 0),
+    boardIssues,
+  ).map((b) => {
     const boardPins = pinsByBoard.get(b.id) ?? [];
     return {
       id: b.id,
@@ -305,7 +308,7 @@ function FixBoardsPage() {
           <OptimizedState onBack={backToScore} unitLabel="boards" />
         ) : flow.done ? (
           <DoneState
-            scoreLabel="Board Structure"
+            scoreLabel="Board SEO"
             points={pointsEarned("boardStructure", flow.score)}
             maxPoints={maxPointsFor("boardStructure")}
             gained={pointsEarned("boardStructure", flow.gained)}
@@ -320,6 +323,7 @@ function FixBoardsPage() {
         ) : mode === "picker" ? (
           <BoardBoostPicker
             cards={flow.cards}
+            totalBoards={flow.data?.boards.length ?? flow.cards.length}
             score={flow.score}
             statusById={flow.statusById}
             onStart={startRun}
@@ -332,7 +336,7 @@ function FixBoardsPage() {
             {/* One compact status bar: live score, position in the run, a
                 segmented progress track, and the applied/skipped split. */}
             <ReviewProgressHeader
-              label="Board Structure"
+              label="Board SEO"
               points={pointsEarned("boardStructure", flow.score)}
               maxPoints={maxPointsFor("boardStructure")}
               index={flow.index}
@@ -518,11 +522,13 @@ function BoardCover({
  * The screen stays almost wordless; the CTA carries the instruction.
  * ------------------------------------------------------------------ */
 
-// Fixing one failing board moves Board Structure by 1/total of its 100 points,
-// and Board Structure is worth SUB_SCORE_WEIGHTS.boardStructure of the overall
+// Fixing one failing board moves Board SEO by 1/total of its 100 points,
+// and Board SEO is worth SUB_SCORE_WEIGHTS.boardStructure of the overall
 // score. A board that already passes is worth zero points — its rewrite is a
 // keyword play, not a score play, and the flip side says exactly that instead
 // of inventing a number.
+// `totalBoards` is ALL boards on the account, not just the failing subset on
+// this screen — the pass rate is measured against everything.
 function overallPointsFor(failingCount: number, totalBoards: number): number {
   if (totalBoards === 0) return 0;
   return SUB_SCORE_WEIGHTS.boardStructure * (failingCount / totalBoards) * 100;
@@ -576,12 +582,16 @@ const QUEUE_FILTERS: { key: QueueFilter; label: string; match: (c: BoardFixCard)
 
 function BoardBoostPicker({
   cards,
+  totalBoards,
   score,
   statusById,
   onStart,
   onGuide,
 }: {
   cards: BoardFixCard[];
+  /** Every board on the account — the denominator the pass rate is scored on.
+   * `cards` is only the failing subset. */
+  totalBoards: number;
   score: number;
   statusById: Record<string, "approved" | "skipped">;
   onStart: (ids: string[]) => void;
@@ -600,11 +610,7 @@ function BoardBoostPicker({
     () => [...cards].sort((a, b) => boardOpportunityScore(b) - boardOpportunityScore(a)),
     [cards],
   );
-  const failingTotal = useMemo(() => ranked.filter((c) => c.issues.length > 0).length, [ranked]);
-  const suggested = useMemo(
-    () => ranked.filter((c) => c.issues.length > 0).slice(0, SUGGESTED_BOARDS_COUNT),
-    [ranked],
-  );
+  const suggested = useMemo(() => ranked.slice(0, SUGGESTED_BOARDS_COUNT), [ranked]);
 
   const counts = useMemo(
     () =>
@@ -639,11 +645,6 @@ function BoardBoostPicker({
     () => ranked.filter((c) => selected.has(c.id)).map((c) => c.id),
     [ranked, selected],
   );
-  const selectedFailing = useMemo(
-    () => ranked.filter((c) => selected.has(c.id) && c.issues.length > 0).length,
-    [ranked, selected],
-  );
-
   const toggleOne = useCallback((id: string) => {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -666,7 +667,7 @@ function BoardBoostPicker({
 
   const visibleIds = visible.map((c) => c.id);
   const allVisibleSelected = visible.length > 0 && visibleIds.every((id) => selected.has(id));
-  const perBoardPoints = overallPointsFor(1, ranked.length);
+  const perBoardPoints = overallPointsFor(1, totalBoards);
 
   return (
     <motion.div
@@ -682,7 +683,7 @@ function BoardBoostPicker({
           heading="Pick boards to boost"
           points={pointsEarned("boardStructure", score)}
           maxPoints={maxPointsFor("boardStructure")}
-          gainPoints={overallPointsFor(failingTotal, ranked.length)}
+          gainPoints={overallPointsFor(ranked.length, totalBoards)}
           onGuide={onGuide}
         />
 
@@ -735,7 +736,7 @@ function BoardBoostPicker({
                 selected={selected.has(card.id)}
                 flipped={flippedId === card.id}
                 boosted={statusById[card.id] === "approved"}
-                points={card.issues.length > 0 ? perBoardPoints : 0}
+                points={perBoardPoints}
                 pointsNow={pointsEarned("boardStructure", score)}
                 onToggle={() => toggleOne(card.id)}
                 onFlip={() => setFlippedId((cur) => (cur === card.id ? null : card.id))}
@@ -776,7 +777,7 @@ function BoardBoostPicker({
         unit="board"
         unitPlural="boards"
         emptyLabel="Select boards"
-        selectedPoints={overallPointsFor(selectedFailing, ranked.length)}
+        selectedPoints={overallPointsFor(selectedIds.length, totalBoards)}
         onStart={() => selectedIds.length > 0 && onStart(selectedIds)}
         onClear={() => setSelected(new Set())}
       />
@@ -784,11 +785,9 @@ function BoardBoostPicker({
   );
 }
 
-/** The messiest boards, in the same bordered "Start here" panel the pin picker
- * leads with. Two screens of one product cannot present their shortcut two
- * different ways — one bold and bordered, one a grey caption — without the
- * quieter one reading as an afterthought. Rank #1 wears the trophy, each cover
- * carries the numbers it was ranked by, and one tap queues the lot. */
+/** The messiest boards, presented the same quiet way as the pin picker's
+ * "Fix these first" rail: a plain section header with a Queue-all pill.
+ * Two screens of one product present their shortcut identically. */
 function SuggestedBoardsRail({
   cards,
   selected,
@@ -809,48 +808,19 @@ function SuggestedBoardsRail({
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
       aria-label="Suggested boards"
-      className="relative overflow-hidden rounded-3xl border-2 border-primary/45 bg-gradient-to-b from-primary/[0.07] via-surface to-surface p-3.5 shadow-glow"
     >
-      {/* Breathing border — slow and low-contrast on purpose; a hard blink next
-          to a grid of boards would read as an error state. */}
-      <motion.span
-        aria-hidden
-        className="pointer-events-none absolute inset-0 rounded-3xl border-2 border-primary"
-        animate={{ opacity: [0.35, 0.05, 0.35] }}
-        transition={{ duration: 2.8, repeat: Infinity, ease: "easeInOut" }}
-      />
-
-      <div className="relative mb-3 flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="flex items-center gap-1.5 text-micro font-bold uppercase tracking-[0.14em] text-primary">
-            <span className="relative grid h-1.5 w-1.5 place-items-center">
-              <span className="absolute h-full w-full animate-ping rounded-full bg-primary/70" />
-              <span className="h-full w-full rounded-full bg-primary" />
-            </span>
-            Start here
-          </p>
-          {/* Every cover already wears its fix count, so this line was the
-              same tally a second time. */}
-          <h3 className="mt-1 font-display text-[17px] font-bold leading-tight tracking-tight">
-            Your {cards.length} messiest {cards.length === 1 ? "board" : "boards"}
-          </h3>
-        </div>
+      <div className="mb-2 flex items-baseline justify-between gap-3">
+        <h3 className="min-w-0 font-display text-lead font-bold tracking-tight">Fix these first</h3>
         <button
           type="button"
           onClick={() => onQueueAll(ids, !allQueued)}
-          className={`relative shrink-0 overflow-hidden rounded-full px-3.5 py-2 text-mini font-bold transition active:scale-[0.97] ${
+          className={`shrink-0 rounded-full px-3 py-1.5 text-mini font-bold transition active:scale-[0.97] ${
             allQueued
               ? "bg-surface-2 text-muted-foreground ring-1 ring-border"
-              : "bg-gradient-primary text-primary-foreground shadow-glow"
+              : "bg-primary/10 text-primary hover:bg-primary/15"
           }`}
         >
-          {!allQueued && (
-            <span
-              aria-hidden
-              className="animate-sheen pointer-events-none absolute inset-y-0 w-1/3 bg-gradient-to-r from-transparent via-white/30 to-transparent"
-            />
-          )}
-          {allQueued ? "Clear" : "Queue all"}
+          {allQueued ? "Clear" : `Queue all ${ids.length}`}
         </button>
       </div>
 
@@ -881,15 +851,9 @@ function SuggestedBoardsRail({
                 }`}
               >
                 <BoardCover covers={card.covers} flat />
-                {i === 0 ? (
-                  <span className="absolute left-1 top-1 grid h-5 w-5 place-items-center rounded-full bg-primary text-primary-foreground shadow">
-                    <Trophy className="h-2.5 w-2.5" />
-                  </span>
-                ) : (
-                  <span className="absolute left-1 top-1 inline-flex items-center gap-0.5 rounded-full bg-black/45 px-1.5 py-0.5 text-nano font-bold text-white backdrop-blur-sm">
-                    <Sparkles className="h-2 w-2 text-amber-300" /> {card.issues.length}
-                  </span>
-                )}
+                <span className="absolute left-1 top-1 inline-flex items-center rounded-full bg-black/45 px-1.5 py-0.5 text-nano font-bold text-white backdrop-blur-sm">
+                  {card.issues.length} {card.issues.length === 1 ? "fix" : "fixes"}
+                </span>
                 <span className="absolute right-1 top-1">
                   <SelectDot on={on} small />
                 </span>
@@ -928,7 +892,7 @@ function BoardPickCard({
   boosted: boolean;
   /** Pts fixing this one board adds to the overall score. */
   points: number;
-  /** Board Structure's banked pts right now, so the flip side shows the move. */
+  /** Board SEO's banked pts right now, so the flip side shows the move. */
   pointsNow: number;
   onToggle: () => void;
   onFlip: () => void;
@@ -1016,22 +980,16 @@ function BoardPickCard({
         >
           {/* Unit on the number, not a caption under it — same as the pin card. */}
           <span className="font-display text-[26px] font-bold leading-none tabular-nums text-primary">
-            {points > 0 ? `+${pointsLabel(points)}` : "+0"}
+            +{pointsLabel(points)}
             <span className="ml-1 text-mini font-bold uppercase tracking-wide text-muted-foreground">
               pts
             </span>
           </span>
           <span className="text-mini font-semibold leading-snug text-muted-foreground">
-            {points > 0 ? (
-              <>
-                {pointsLabel(pointsNow)} →{" "}
-                <span className="text-emerald-600">
-                  {pointsLabel(Math.min(maxPointsFor("boardStructure"), pointsNow + points))}
-                </span>
-              </>
-            ) : (
-              "Already passing"
-            )}
+            {pointsLabel(pointsNow)} →{" "}
+            <span className="text-emerald-600">
+              {pointsLabel(Math.min(maxPointsFor("boardStructure"), pointsNow + points))}
+            </span>
           </span>
           {fixes > 0 && (
             <span className="line-clamp-2 px-1 text-micro font-medium leading-snug text-foreground/70">

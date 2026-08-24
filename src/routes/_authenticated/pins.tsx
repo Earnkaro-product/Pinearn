@@ -24,7 +24,7 @@ import {
   ArrowRight,
   Grip,
 } from "lucide-react";
-import { toast } from "sonner";
+import { notifyCancellable, notifyDone, notifyProblem } from "@/lib/notify";
 import { takeDownPin, visualSearchComponents, type CkResult } from "@/lib/pinterest.functions";
 import { useVisualSearch } from "@/hooks/use-visual-search";
 import {
@@ -37,13 +37,19 @@ import { EducationalLoader, HINTS } from "@/components/rotating-hint";
 import { hostBrand, estimateCommissionPct } from "@/lib/brands";
 import { CollectionAddFlow, AddFromCollectionButton } from "@/components/collection-picker";
 import { unreviewMonetizeProgressPin } from "@/lib/monetize-progress";
+import { PinterestSyncBanner } from "@/components/pinterest-sync-banner";
+import { usePinterestConnection } from "@/hooks/use-pinterest-connect";
 
-type PinsSearch = { new?: 1; filter?: "drafts" };
+// `pinId` keeps the open pin dialog in the URL rather than in local state
+// only, so leaving for /pins/preview and coming back reopens the pin the user
+// was editing instead of dumping them on the bare grid.
+type PinsSearch = { new?: 1; filter?: "drafts" | "all"; pinId?: string };
 
 export const Route = createFileRoute("/_authenticated/pins")({
   validateSearch: (s: Record<string, unknown>): PinsSearch => ({
     new: s.new === 1 || s.new === "1" ? 1 : undefined,
-    filter: s.filter === "drafts" ? "drafts" : undefined,
+    filter: s.filter === "drafts" || s.filter === "all" ? s.filter : undefined,
+    pinId: typeof s.pinId === "string" ? s.pinId : undefined,
   }),
   component: PinsPage,
 });
@@ -106,8 +112,11 @@ function PinsPage() {
   const runComponents = useServerFn(visualSearchComponents);
   const navigate = useNavigate();
   const search = Route.useSearch();
+  // Only used to pick the right empty-state copy. Pins already imported stay
+  // fully usable without a live connection.
+  const { usable: pinterestUsable } = usePinterestConnection();
   const [collectionFilter, setCollectionFilter] = useState<string>("live");
-  const [openPinId, setOpenPinId] = useState<string | null>(null);
+  const [openPinId, setOpenPinId] = useState<string | null>(search.pinId ?? null);
 
   /** Start the scan on INTENT rather than on open.
    *
@@ -134,10 +143,16 @@ function PinsPage() {
     });
   };
 
-  // Sync the "Drafts" filter chip from ?filter=drafts (e.g. after clicking Save draft).
+  // Sync the filter chip from the URL: ?filter=drafts after Save draft,
+  // ?filter=all from the "check all the shoppable pins" button that every
+  // monetization success screen ends on — a run that just went live can leave
+  // both live pins and drafts behind, and that button has to show both or it
+  // lands on a grid that's missing the work it just did.
   useEffect(() => {
     if (search.filter === "drafts") {
       setCollectionFilter("drafts");
+    } else if (search.filter === "all") {
+      setCollectionFilter("all");
     } else if (search.filter === undefined) {
       setCollectionFilter("live");
     }
@@ -229,9 +244,10 @@ function PinsPage() {
       // The pin's product just detached, so it's un-reviewed again as far as
       // its board's "Continue monetising" progress is concerned.
       if (pin.collection_id) unreviewMonetizeProgressPin(pin.collection_id);
-      toast.success("Pin taken down — back in available pins");
+      // Nothing announced on success: the cancellable toast that scheduled this
+      // said "taken down" the moment the pin left the grid, and repeating it
+      // when the write lands would be two toasts for one action.
     },
-    onError: (e: Error) => toast.error(e.message),
   });
 
   // "Delete all" = run the exact same take-down as the single-pin delete, once
@@ -250,21 +266,88 @@ function PinsPage() {
       for (const pin of removed) {
         if (pin.collection_id) unreviewMonetizeProgressPin(pin.collection_id);
       }
-      toast.success(`${removed.length} pin${removed.length === 1 ? "" : "s"} taken down`);
     },
-    onError: (e: Error) => toast.error(e.message),
   });
 
+  /**
+   * Pins the creator has taken down but whose write hasn't been committed yet.
+   *
+   * A take-down is reversible in principle — the pin returns to the available
+   * pool — but there is no server call that puts its products back, so "undo"
+   * has to mean "don't do it": the rows leave the grid immediately, the write
+   * is held for the length of the toast, and cancelling puts them straight back.
+   * That is why the confirm() dialog on the single-pin delete is gone; a modal
+   * that asks before anything happens and a toast that offers to call it off
+   * afterwards are the same guard, and only one of them interrupts.
+   */
+  const [pendingTakedown, setPendingTakedown] = useState<Set<string>>(new Set());
+  const holdTakedown = (ids: string[], held: boolean) =>
+    setPendingTakedown((prev) => {
+      const next = new Set(prev);
+      for (const id of ids) {
+        if (held) next.add(id);
+        else next.delete(id);
+      }
+      return next;
+    });
+
+  /** Take a pin down after a grace window, or not at all. */
+  const takeDown = (pin: Pin) => {
+    holdTakedown([pin.id], true);
+    notifyCancellable({
+      message: `“${pin.title}” taken down`,
+      run: () => remove.mutateAsync(pin),
+      onCancel: () => holdTakedown([pin.id], false),
+      onError: (e) => {
+        holdTakedown([pin.id], false);
+        notifyProblem(e instanceof Error ? e.message : "Couldn't take that pin down");
+      },
+    });
+  };
+
+  /** The same, for everything currently filtered into view. The confirm() stays
+   *  here: an undo window is a fine safety net for one pin, but agreeing to
+   *  clear a whole shelf is worth saying out loud first. */
+  const takeDownAll = (pinsToRemove: Pin[]) => {
+    const ids = pinsToRemove.map((p) => p.id);
+    holdTakedown(ids, true);
+    notifyCancellable({
+      message: `${ids.length} pin${ids.length === 1 ? "" : "s"} taken down`,
+      run: () => removeAll.mutateAsync(pinsToRemove),
+      onCancel: () => holdTakedown(ids, false),
+      onError: (e) => {
+        holdTakedown(ids, false);
+        notifyProblem(e instanceof Error ? e.message : "Couldn't take those pins down");
+      },
+    });
+  };
+
+  // "new" is a pin imported from Pinterest that nobody has touched yet, and it
+  // used to be filtered out here — so a creator who had just connected, or just
+  // created a Pin on Pinterest, opened Pins and saw nothing. The pins were in
+  // the database and in the monetize picker the whole time, which makes the
+  // empty tab read as a failed import. They belong on this screen; what they
+  // don't get is the take-down controls below, which only mean something for a
+  // pin that has been published or drafted.
   const visiblePins = useMemo(
-    () => pins.filter((p) => p.status === "draft" || p.status === "live"),
-    [pins],
+    () =>
+      pins.filter(
+        (p) =>
+          (p.status === "draft" || p.status === "live" || p.status === "new") &&
+          !pendingTakedown.has(p.id),
+      ),
+    [pins, pendingTakedown],
   );
 
   const filtered = useMemo(() => {
     const base =
       collectionFilter === "drafts"
         ? visiblePins.filter((p) => p.status === "draft")
-        : visiblePins.filter((p) => p.status === "live");
+        : collectionFilter === "new"
+          ? visiblePins.filter((p) => p.status === "new")
+          : collectionFilter === "all"
+            ? visiblePins
+            : visiblePins.filter((p) => p.status === "live");
     return [...base].sort(
       (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
     );
@@ -274,34 +357,56 @@ function PinsPage() {
 
   const draftsCount = visiblePins.filter((p) => p.status === "draft").length;
   const liveCount = visiblePins.filter((p) => p.status === "live").length;
+  const newCount = visiblePins.filter((p) => p.status === "new").length;
+  // Take-down acts on published or drafted pins. An untouched import has
+  // nothing to take down, so the bulk control is withheld on that filter
+  // rather than offering an action that would do nothing.
+  const canBulkTakeDown = collectionFilter === "live" || collectionFilter === "drafts";
 
   return (
     <AppShell
       title="Pins"
       backButton
       backTo="/dashboard"
+      hideWallet
       actions={
         filtered.length > 0 &&
         (storefronts.length === 0 ? (
           <button
             disabled
-            className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-gradient-primary px-5 py-2.5 text-sm font-medium text-primary-foreground shadow-glow opacity-50"
+            className="inline-flex flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg bg-gradient-primary px-5 py-2.5 text-sm font-medium text-primary-foreground shadow-glow opacity-50"
           >
-            <Plus className="h-4 w-4" /> Attach products
+            <Plus className="h-4 w-4" /> Attach product links to pins
           </button>
         ) : (
           <Link
             to="/pins/attach"
-            className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-gradient-primary px-5 py-2.5 text-sm font-medium text-primary-foreground shadow-glow"
+            className="inline-flex flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg bg-gradient-primary px-5 py-2.5 text-sm font-medium text-primary-foreground shadow-glow"
           >
-            <Plus className="h-4 w-4" /> Attach products
+            <Plus className="h-4 w-4" /> Attach product links to pins
           </Link>
         ))
       }
     >
       <div className="no-scrollbar mb-5 -mx-1 flex items-center gap-2 overflow-x-auto px-1">
+        {/* "All" only earns a chip when there is a mix to separate — with no
+            drafts it would be a second name for "Live". */}
+        {draftsCount + newCount > 0 && (
+          <FilterChip
+            active={collectionFilter === "all"}
+            onClick={() => setCollectionFilter("all")}
+            label="All"
+            count={visiblePins.length}
+          />
+        )}
         <FilterChip
-          active={collectionFilter === "live"}
+          // With no drafts, "all" and "live" are the same set and the All chip
+          // isn't rendered — so Live owns the selection rather than leaving no
+          // chip lit at all.
+          active={
+            collectionFilter === "live" ||
+            (collectionFilter === "all" && draftsCount + newCount === 0)
+          }
           onClick={() => setCollectionFilter("live")}
           label="Live"
           count={liveCount}
@@ -314,7 +419,15 @@ function PinsPage() {
             count={draftsCount}
           />
         )}
-        {filtered.length > 0 && (
+        {newCount > 0 && (
+          <FilterChip
+            active={collectionFilter === "new"}
+            onClick={() => setCollectionFilter("new")}
+            label="Not monetized"
+            count={newCount}
+          />
+        )}
+        {canBulkTakeDown && filtered.length > 0 && (
           <button
             onClick={() => {
               if (
@@ -324,7 +437,7 @@ function PinsPage() {
                   }? They go back to your available pins and their products are detached.`,
                 )
               )
-                removeAll.mutate(filtered);
+                takeDownAll(filtered);
             }}
             disabled={removeAll.isPending}
             className="ml-auto inline-flex shrink-0 items-center gap-1.5 rounded-full border border-red-500/40 bg-surface px-4 py-1.5 text-sm font-medium text-red-600 transition hover:bg-red-500/10 disabled:opacity-60"
@@ -344,7 +457,17 @@ function PinsPage() {
           pin={openPin}
           products={products}
           collections={collections}
-          onClose={() => setOpenPinId(null)}
+          onClose={() => {
+            setOpenPinId(null);
+            // Drop ?pinId so a later back/forward doesn't reopen a dialog the
+            // user has already dismissed.
+            if (search.pinId) {
+              void navigate({
+                search: ((s: Record<string, unknown>) => ({ ...s, pinId: undefined })) as never,
+                replace: true,
+              });
+            }
+          }}
         />
       )}
 
@@ -358,7 +481,7 @@ function PinsPage() {
           ))}
         </div>
       ) : filtered.length === 0 ? (
-        <EmptyPins canCreate={storefronts.length > 0} />
+        <EmptyPins canCreate={storefronts.length > 0} pinterestConnected={pinterestUsable} />
       ) : (
         <div className="masonry-3 sm:masonry-4 lg:masonry-4">
           {filtered.map((p, i) => {
@@ -367,12 +490,12 @@ function PinsPage() {
               <article
                 key={p.id}
                 onClick={() => {
-                  if (p.status === "draft") setOpenPinId(p.id);
+                  if (p.status === "draft" || p.status === "new") setOpenPinId(p.id);
                 }}
                 onPointerEnter={() => warmScan(p)}
                 onPointerDown={() => warmScan(p)}
                 className={`group overflow-hidden rounded-2xl bg-surface shadow-sm ring-1 ring-border/60 transition hover:shadow-elevate ${
-                  p.status === "draft" ? "cursor-pointer" : ""
+                  p.status === "draft" || p.status === "new" ? "cursor-pointer" : ""
                 }`}
               >
                 {/* No forced aspect ratio — each pin renders at its own image's
@@ -407,30 +530,30 @@ function PinsPage() {
                         e.stopPropagation();
                         setOpenPinId(p.id);
                       }}
-                      aria-label={p.status === "draft" ? "Attach product" : "Edit"}
+                      aria-label={p.status === "live" ? "Edit" : "Attach product"}
                       className="grid h-8 w-8 place-items-center rounded-full bg-transparent text-white transition hover:bg-white/20"
                     >
-                      {p.status === "draft" ? (
-                        <Link2 className="h-3.5 w-3.5" />
-                      ) : (
+                      {p.status === "live" ? (
                         <Pencil className="h-3.5 w-3.5" />
+                      ) : (
+                        <Link2 className="h-3.5 w-3.5" />
                       )}
                     </button>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (
-                          confirm(
-                            `Take down "${p.title}"? It goes back to your available pins and its products are detached.`,
-                          )
-                        )
-                          remove.mutate(p);
-                      }}
-                      aria-label="Delete"
-                      className="grid h-8 w-8 place-items-center rounded-full bg-transparent text-white transition hover:bg-white/20 hover:text-red-300"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
+                    {/* Take-down returns a published or drafted pin to the
+                        available pool. An untouched import is already there, so
+                        the control would be a no-op dressed as a delete. */}
+                    {p.status !== "new" && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          takeDown(p);
+                        }}
+                        aria-label="Delete"
+                        className="grid h-8 w-8 place-items-center rounded-full bg-transparent text-white transition hover:bg-white/20 hover:text-red-300"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    )}
                   </div>
                 </div>
               </article>
@@ -468,24 +591,41 @@ function FilterChip({
   );
 }
 
-function EmptyPins({ canCreate }: { canCreate: boolean }) {
+function EmptyPins({
+  canCreate,
+  pinterestConnected,
+}: {
+  canCreate: boolean;
+  pinterestConnected: boolean;
+}) {
   return (
     <div className="rounded-2xl border border-dashed border-border bg-surface/40 p-12 text-center">
       <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-gradient-primary shadow-glow">
         <PinIcon className="h-6 w-6 text-primary-foreground" />
       </div>
       <h3 className="mt-4 font-display text-xl font-semibold">No pins here</h3>
+      {/* Empty because nothing was ever imported is a different problem from
+          empty because nothing is monetised yet, and it has a different fix.
+          Saying "attach a product to a pin" to someone with no Pins at all sends
+          them looking for a button that can't help them. */}
       <p className="mx-auto mt-2 max-w-md text-sm text-muted-foreground">
-        {canCreate
-          ? "Attach a product to a pin and start earning."
-          : "Add a storefront and a product first."}
+        {!pinterestConnected
+          ? "Your Pins live on Pinterest. Connect it and we'll import them here — or create one from scratch."
+          : canCreate
+            ? "Attach a product to a pin and start earning."
+            : "Add a storefront and a product first."}
       </p>
+      {!pinterestConnected && (
+        <div className="mx-auto mt-5 max-w-sm text-left">
+          <PinterestSyncBanner />
+        </div>
+      )}
       {canCreate && (
         <Link
           to="/pins/attach"
           className="mt-6 inline-flex items-center gap-2 rounded-full bg-gradient-primary px-6 py-3.5 text-base font-semibold text-primary-foreground shadow-glow"
         >
-          <Plus className="h-5 w-5" /> Attach products
+          <Plus className="h-5 w-5" /> Attach product links to pins
         </Link>
       )}
     </div>
@@ -780,9 +920,9 @@ export function PinDetailDialog({
     try {
       const text = await navigator.clipboard.readText();
       if (text.trim()) setManualUrl(text.trim());
-      else toast.error("Clipboard is empty");
+      else notifyProblem("Clipboard is empty");
     } catch {
-      toast.error("Couldn't read clipboard — paste manually");
+      notifyProblem("Couldn't read clipboard — paste manually");
     }
   };
 
@@ -799,7 +939,7 @@ export function PinDetailDialog({
 
   const goToPreview = () => {
     if (checked.size === 0 && confirmedAIPicks.length === 0 && !manualUrl.trim()) {
-      toast.error("Pick a product or paste a product link first.");
+      notifyProblem("Pick a product or paste a product link first.");
       return;
     }
     setPreviewLoading(true);
@@ -816,7 +956,15 @@ export function PinDetailDialog({
     } catch {
       /* ignore quota */
     }
-    onClose();
+    // Record the open dialog on the CURRENT entry (replace, not push) before
+    // pushing preview: back from preview then returns to whichever page the
+    // user came from — /pins or /pins/attach — with this pin reopened.
+    void navigate({
+      search: (s: Record<string, unknown>) => ({ ...s, pinId: pin.id }),
+      replace: true,
+    } as never);
+    // No onClose() here: leaving the route unmounts the dialog, and calling it
+    // would strip the ?pinId stamp we just wrote.
     navigate({ to: "/pins/preview", search: { pinId: pin.id } });
   };
 
@@ -848,7 +996,7 @@ export function PinDetailDialog({
       qc.invalidateQueries({ queryKey: ["pins"] });
       onClose();
     },
-    onError: (e: Error) => toast.error(e.message),
+    onError: (e: Error) => notifyProblem(e.message),
   });
 
   const addProduct = useMutation({
@@ -909,9 +1057,9 @@ export function PinDetailDialog({
         return next;
       });
       setManualUrl("");
-      toast.success(duplicate ? "Already selected" : "Added");
+      notifyDone(duplicate ? "Already selected" : "Added");
     },
-    onError: (e: Error) => toast.error(e.message),
+    onError: (e: Error) => notifyProblem(e.message),
   });
 
   const handleCancel = () => {
@@ -948,20 +1096,26 @@ export function PinDetailDialog({
           onClick={(e) => e.stopPropagation()}
           className="relative flex h-[92dvh] w-full flex-col overflow-hidden rounded-t-2xl border border-border bg-surface shadow-elevate sm:h-auto sm:max-h-[90vh] sm:max-w-2xl sm:rounded-2xl"
         >
-          {/* Compact header. The "Visual match" label fades out as you scroll
-            into the results, while the pin fades/scales into the top-centre as
-            the big preview below collapses — so the pin stays in view while
-            freeing the space it used to take. */}
+          {/* Compact header. "Monetize pins" is the screen's name and stays put;
+            the scan/match status above it fades out as you scroll into the
+            results, while the pin fades/scales into the top-centre as the big
+            preview below collapses — so the pin stays in view while freeing the
+            space it used to take. */}
           <div className="relative flex items-center gap-3 border-b border-border/60 bg-surface px-4 py-3">
-            <motion.div
-              style={{ opacity: morph.heroOpacity }}
-              className="flex min-w-0 items-center gap-1.5"
-            >
-              <Sparkles className="h-3 w-3 shrink-0 text-primary" />
-              <span className="truncate text-micro font-semibold uppercase tracking-wide text-primary">
-                {aiLoading && suggestions.length === 0 ? "Scanning pin…" : "Visual match"}
-              </span>
-            </motion.div>
+            <div className="flex min-w-0 flex-col">
+              <motion.span
+                style={{ opacity: morph.heroOpacity }}
+                className="flex min-w-0 items-center gap-1.5"
+              >
+                <Sparkles className="h-3 w-3 shrink-0 text-primary" />
+                <span className="truncate text-micro font-semibold uppercase tracking-wide text-primary">
+                  {aiLoading && suggestions.length === 0 ? "Scanning pin…" : "Visual match"}
+                </span>
+              </motion.span>
+              <h2 className="truncate font-display text-sm font-bold leading-tight">
+                Monetize pins
+              </h2>
+            </div>
 
             {pin.image_url && (
               <motion.div
@@ -1489,10 +1643,10 @@ function NewPinDialog({
 
   async function handleUpload(file: File) {
     if (!file.type.startsWith("image/")) {
-      return toast.error("Please choose an image file");
+      return notifyProblem("Please choose an image file");
     }
     if (file.size > 10 * 1024 * 1024) {
-      return toast.error("Max file size is 10 MB");
+      return notifyProblem("Max file size is 10 MB");
     }
     setUploading(true);
     try {
@@ -1510,9 +1664,9 @@ function NewPinDialog({
         .createSignedUrl(path, 60 * 60 * 24 * 365 * 10);
       if (signErr || !signed) throw signErr ?? new Error("Could not sign URL");
       setImageUrl(signed.signedUrl);
-      toast.success("Image uploaded");
+      notifyDone("Image uploaded");
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Upload failed");
+      notifyProblem(e instanceof Error ? e.message : "Upload failed");
     } finally {
       setUploading(false);
     }
@@ -1537,10 +1691,10 @@ function NewPinDialog({
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["pins"] });
-      toast.success("Pin created");
+      notifyDone("Pin created");
       onClose();
     },
-    onError: (e: Error) => toast.error(e.message),
+    onError: (e: Error) => notifyProblem(e.message),
   });
 
   return (

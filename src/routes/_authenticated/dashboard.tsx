@@ -2,7 +2,6 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { AppShell } from "@/components/app-shell";
-import { NewUserCta } from "@/components/new-user-cta";
 import { ContinueMonetizing } from "@/components/continue-monetizing";
 import { BrandsSection } from "@/components/brand-card";
 import { BEST_SELLING_BRANDS } from "@/lib/brands";
@@ -15,17 +14,18 @@ import {
 } from "@/components/affiliate-link-dialog";
 import { supabase } from "@/integrations/supabase/client";
 import { getPinterestAnalytics } from "@/lib/pinterest.functions";
+import { PinterestSyncBanner } from "@/components/pinterest-sync-banner";
+import { usePinterestConnection } from "@/hooks/use-pinterest-connect";
 import { getFriendlyMessage } from "@/lib/friendly-error";
 import { GRADIENTS } from "./pins";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { toast } from "sonner";
+import { notifyDone, notifyProblem } from "@/lib/notify";
 import {
   MousePointerClick,
   Coins,
   Rocket,
   ImagePlus,
-  FolderPlus,
   Link2,
   Link as LinkIcon,
   Store,
@@ -167,11 +167,20 @@ function FeatureCarousel() {
 }
 
 function Dashboard() {
+  // Home is where a creator who skipped authorization lands, so it is where the
+  // offer to connect has to live. Rendered only when there is something to say —
+  // never connected, or connected and broken — so a working account doesn't
+  // carry a permanent banner about a connection that is fine.
+  const { usable: pinterestUsable } = usePinterestConnection();
   return (
     // `greetingName` renders "Hi, {name}" in place of the title block, so the
     // subtitle this used to pass was never on screen.
     <AppShell title="Dashboard" greetingName>
-      <NewUserCta />
+      {!pinterestUsable && (
+        <div className="mb-5">
+          <PinterestSyncBanner />
+        </div>
+      )}
 
       {/* Feature carousel */}
       <FeatureCarousel />
@@ -182,19 +191,14 @@ function Dashboard() {
       {/* Quick actions */}
       <div className="mt-8">
         <h2 className="mb-4 font-display text-lg font-semibold">Quick actions</h2>
-        {/* 2×2. Collection creation has no route of its own — it's a dialog on
-            the storefront — so this deep-links with ?new=1, which that page
-            reads to open the dialog on arrival. */}
+        {/* 2×2, in the order a creator actually meets them: monetise what's
+            already on Pinterest, then make something new, then tune it, then
+            the store it all feeds. */}
         <div className="grid grid-cols-2 gap-3 sm:gap-4">
-          <QuickAction to="/pins/attach" icon={Link2} label="Attach" />
+          <QuickAction to="/pins/attach" icon={Link2} label="Monetise pin" />
           <QuickAction to="/pins/create" icon={Plus} label="Create pin" />
           <QuickAction to="/boost" icon={Rocket} label="Pinterest SEO" />
-          <QuickAction
-            to="/storefront"
-            search={{ new: 1 }}
-            icon={FolderPlus}
-            label="New collection"
-          />
+          <QuickAction to="/storefront" icon={Store} label="My store" />
         </div>
       </div>
 
@@ -269,13 +273,13 @@ function AffiliateLinkMaker() {
     onSuccess: (inserted) => {
       qc.invalidateQueries({ queryKey: ["all-products"] });
       qc.invalidateQueries({ queryKey: ["storefront-products"] });
-      toast.success("Affiliate link created");
+      notifyDone("Affiliate link created");
       setCreatedProduct(inserted);
       setUrl("");
       setUrlError(null);
     },
     onError: (e: Error) => {
-      toast.error(getFriendlyMessage(e));
+      notifyProblem(getFriendlyMessage(e));
       if (
         e.message === "Paste a product link first" ||
         e.message === "That doesn't look like a valid URL"
@@ -291,15 +295,15 @@ function AffiliateLinkMaker() {
       const t = await navigator.clipboard.readText();
       if (t) setUrl(t.trim());
     } catch {
-      toast.error("Clipboard access blocked");
+      notifyProblem("Clipboard access blocked");
     }
   }
 
   async function copyLink() {
     if (!createdProduct) return;
     const ok = await copyToClipboard(createdProduct.affiliate_url);
-    if (ok) toast.success("Link copied");
-    else toast.error("Could not copy link");
+    if (ok) notifyDone("Link copied");
+    else notifyProblem("Could not copy link");
   }
 
   function resetLinkFlow() {
@@ -310,7 +314,7 @@ function AffiliateLinkMaker() {
 
   return (
     <>
-      <h2 className="mt-8 mb-4 font-display text-lg font-semibold">Create affiliate link</h2>
+      <h2 className="mt-8 mb-4 font-display text-lg font-semibold">Create affiliate links</h2>
       <div className="overflow-hidden rounded-2xl bg-primary text-primary-foreground shadow-elevate">
         <div className="p-4">
           <form
@@ -345,7 +349,7 @@ function AffiliateLinkMaker() {
               disabled={create.isPending || !url.trim()}
               className="mt-3 flex w-full items-center justify-center gap-2 rounded-full bg-surface px-4 py-3 text-sm font-semibold text-foreground shadow-sm transition disabled:opacity-60"
             >
-              {/* The heading above says "Create affiliate link" — the button
+              {/* The heading above says "Create affiliate links" — the button
                   under the input doesn't need to say it a second time. */}
               {create.isPending ? (
                 <>
@@ -404,7 +408,7 @@ function AffiliateLinkMaker() {
                   product={createdProduct}
                   onDone={(collectionId) => {
                     resetLinkFlow();
-                    navigate({ to: "/storefront", search: { collection: collectionId } as never });
+                    navigate({ to: "/collections/$id", params: { id: collectionId } });
                   }}
                 />
               ) : (
@@ -519,10 +523,11 @@ function MonetizePins() {
       <div className="mb-4 flex items-end justify-between gap-3">
         <div className="min-w-0">
           <h2 className="font-display text-lg font-semibold">Turn pins into income</h2>
+          {/* The promise, not the inventory count. The strip below already
+              shows how many pins are waiting; what a creator can't tell from
+              looking at it is how little work turning one into income is. */}
           <p className="mt-0.5 text-xs text-muted-foreground">
-            {isLoading
-              ? "Loading…"
-              : `${pins.length} pin${pins.length === 1 ? "" : "s"} with views, nothing to sell`}
+            Monetize your pins in one click with our AI
           </p>
         </div>
         <Link
@@ -682,11 +687,9 @@ function MonetizeBoards() {
     <div className="mt-8">
       <div className="mb-4 flex items-end justify-between gap-3">
         <div className="min-w-0">
-          <h2 className="font-display text-lg font-semibold">Monetise a whole board</h2>
+          <h2 className="font-display text-lg font-semibold">Monetize boards in one click</h2>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            {isLoading
-              ? "Loading…"
-              : `${boards.length} board${boards.length === 1 ? "" : "s"} ready`}
+            Attach affiliate product links to every pin in a board at once
           </p>
         </div>
         <Link

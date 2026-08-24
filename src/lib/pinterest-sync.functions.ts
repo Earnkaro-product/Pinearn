@@ -3,6 +3,7 @@ import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { getServiceSupabase } from "@/integrations/supabase/service-client";
 import {
+  emptyPinFilterStats,
   getBoard,
   getPinAnalytics,
   getUserAccount,
@@ -184,6 +185,28 @@ function resolveField(
   return l === b ? i || null : (local ?? null);
 }
 
+/**
+ * Who owns `pins.external_url`.
+ *
+ * Pinterest's `link` owns it right up until the pin is monetized — `goLivePin`
+ * then writes the creator's storefront URL into that same column, and from that
+ * moment the sync must leave it alone. The old code overwrote it unconditionally
+ * on the stated grounds that "nothing in ShopMyPin edits" the link, which was
+ * simply untrue, and because an authored pin's Pinterest `link` is usually null
+ * the overwrite blanked it: 29 of 32 monetized pins on live data had lost their
+ * URL before this was fixed.
+ *
+ * Returns the value to WRITE, not a should-write flag, so the caller always
+ * emits the same column set — PostgREST rejects an upsert batch of mixed shapes.
+ */
+export function resolveExternalUrl(
+  status: string,
+  local: string | null,
+  incoming: string | null,
+): string | null {
+  return status === "live" ? local : incoming;
+}
+
 /* ---------------- The sync ---------------- */
 
 async function runSync(userId: string, opts: { analytics: boolean }): Promise<PinterestSyncResult> {
@@ -258,14 +281,21 @@ async function runSync(userId: string, opts: { analytics: boolean }): Promise<Pi
   //   GET /pins     the safety net for those, resolved back to their board by id
   //
   // Walking boards alone is what produced "connected Pinterest, found 0 pins".
-  const [listedBoards, accountPins] = await Promise.all([
+  const [boardListing, accountListing] = await Promise.all([
     withPinterestToken(userId, (t) => listBoards(t)),
     withPinterestToken(userId, (t) => listUserPins(t)).catch((e) => {
       if (e instanceof PinterestAuthError) throw e;
       console.error("[pinterest-sync] account pin listing failed", e);
-      return [] as PinterestPin[];
+      return { pins: [] as PinterestPin[], stats: emptyPinFilterStats() };
     }),
   ]);
+  const listedBoards = boardListing.boards;
+  const accountPins = accountListing.pins;
+  // Every save Pinterest handed us and we chose not to import, deduped across
+  // both discovery passes. This is what turns "0 pins imported" from a mystery
+  // into a sentence the UI can show.
+  const savedPinIds = new Set(accountListing.stats.savedIds);
+  result.boards.nonPublicSkipped += boardListing.nonPublicSkipped;
 
   // Any board a pin claims to live on, that the listing didn't mention, is
   // fetched by id — that's how the unlisted board gets picked up.
@@ -328,6 +358,7 @@ async function runSync(userId: string, opts: { analytics: boolean }): Promise<Pi
     storefrontId,
     boards,
     accountPins,
+    savedPinIds,
     collectionIdByBoard,
     syncColumns,
     now,
@@ -620,6 +651,7 @@ async function reconcilePins({
   storefrontId,
   boards,
   accountPins,
+  savedPinIds,
   collectionIdByBoard,
   syncColumns,
   now,
@@ -632,6 +664,9 @@ async function reconcilePins({
   /** The account-wide listing — authored, non-protected pins only — the safety
    * net for anything the per-board walk can't see. */
   accountPins: PinterestPin[];
+  /** Ids of pins the ownership gate rejected, accumulated across every listing
+   * walk. Mutated here as the per-board walks add theirs. */
+  savedPinIds: Set<string>;
   collectionIdByBoard: Map<string, string>;
   syncColumns: boolean;
   now: string;
@@ -668,6 +703,8 @@ async function reconcilePins({
   // anything, so a pin found only in the account-wide listing still lands on its
   // real board, and a pin seen twice is written once.
   const pinsByBoard = new Map<string, Map<string, PinterestPin>>();
+  // Bucket key for authored pins Pinterest reports with no board.
+  const NO_BOARD = "__no_board__";
   const addPin = (boardId: string, pin: PinterestPin) => {
     let bucket = pinsByBoard.get(boardId);
     if (!bucket) {
@@ -681,9 +718,13 @@ async function reconcilePins({
   for (const board of boards) {
     if (!collectionIdByBoard.get(board.id)) continue;
     try {
-      for (const p of await withPinterestToken(userId, (t) => listBoardPins(t, board.id))) {
-        addPin(board.id, p);
-      }
+      const listing = await withPinterestToken(userId, (t) => listBoardPins(t, board.id));
+      for (const p of listing.pins) addPin(board.id, p);
+      // `GET /boards/{id}/pins` takes no server-side repin filter, so this walk
+      // is where an account of pure saves reveals itself. Verified live: a board
+      // reporting 21 pins yields 21 rejections here and 0 from
+      // `pin_filter=exclude_repins` on the account listing.
+      for (const id of listing.stats.savedIds) savedPinIds.add(id);
     } catch (e) {
       if (e instanceof PinterestAuthError) throw e;
       console.error("[pinterest-sync] board pins failed", board.id, e);
@@ -691,15 +732,38 @@ async function reconcilePins({
   }
   for (const p of accountPins) {
     if (p.boardId && collectionIdByBoard.has(p.boardId)) addPin(p.boardId, p);
+    // No board at all. Pinterest allows this — a Pin created from the phone
+    // gallery without picking a board, and Idea Pins that live on the profile
+    // rather than in a board, both come back with `board_id: null`. Every one of
+    // them used to be dropped right here, because this merge only kept pins it
+    // could resolve to a known board: the creator saw "0 imported" for Pins they
+    // had just made. They now import unfiled, which the app already models
+    // (pins.collection_id is nullable and the picker groups them as
+    // "Unassigned").
+    //
+    // A pin that DOES name a board we don't hold is still skipped, deliberately:
+    // that board was either non-public or failed recovery above, and importing
+    // its pins would smuggle in exactly the content the public-only rule
+    // excludes.
+    else if (!p.boardId) addPin(NO_BOARD, p);
   }
 
-  let skippedSaves = 0;
+  // Every bucket that has a home to write to: one per imported board, plus the
+  // unfiled pins, whose home is `collection_id: null`.
+  const targets: { key: string; label: string; collectionId: string | null }[] = [
+    ...boards
+      .map((b) => ({
+        key: b.id,
+        label: `board ${b.id}`,
+        collectionId: collectionIdByBoard.get(b.id) ?? null,
+      }))
+      .filter((t) => t.collectionId !== null),
+    { key: NO_BOARD, label: "no board", collectionId: null },
+  ];
 
-  for (const board of boards) {
-    const collectionId = collectionIdByBoard.get(board.id);
-    if (!collectionId) continue;
-
-    const pins = [...(pinsByBoard.get(board.id)?.values() ?? [])];
+  for (const { key, label, collectionId } of targets) {
+    const pins = [...(pinsByBoard.get(key)?.values() ?? [])];
+    if (pins.length === 0) continue;
 
     // Creator app: only pins the user authored, never repins of other people's
     // content. Counted rather than silently dropped — an account whose boards are
@@ -711,7 +775,7 @@ async function reconcilePins({
     // rule is "no saved pin ever reaches the database", and enforcing it where the
     // write happens means a future third discovery path cannot bypass it.
     const ownerPins = pins.filter(isCreatedByUser);
-    skippedSaves += pins.length - ownerPins.length;
+    for (const p of pins) if (!isCreatedByUser(p)) savedPinIds.add(p.id);
     const inserts: Record<string, unknown>[] = [];
     const updates: Record<string, unknown>[] = [];
 
@@ -766,12 +830,17 @@ async function reconcilePins({
       );
       // A live pin sits in its own monetized collection on purpose — never drag
       // it back to the board's collection.
-      const rehome = existing.status !== "live" && existing.collection_id !== collectionId;
+      const monetized = existing.status === "live";
+      // Unfiled pins never re-home anything: `collectionId` is null here, and
+      // moving an already-filed pin out of its collection because Pinterest
+      // stopped naming its board would lose the creator's organisation.
+      const rehome = collectionId !== null && !monetized && existing.collection_id !== collectionId;
+      const externalUrl = resolveExternalUrl(existing.status, existing.external_url, p.link);
       const changed =
         title !== existing.title ||
         description !== existing.description ||
         p.imageUrl !== existing.image_url ||
-        p.link !== existing.external_url;
+        externalUrl !== existing.external_url;
 
       if (changed || rehome || syncColumns) {
         updates.push({
@@ -779,10 +848,11 @@ async function reconcilePins({
           user_id: userId,
           title,
           description,
-          // Image and link are Pinterest's alone — nothing in ShopMyPin edits them,
-          // so they track the source unconditionally.
+          // The image is Pinterest's alone — nothing here edits it, so it tracks
+          // the source unconditionally and picks up CDN URL rotation. The link
+          // is not: see resolveExternalUrl.
           image_url: p.imageUrl,
-          external_url: p.link,
+          external_url: externalUrl,
           is_owner: true,
           ...(rehome ? { collection_id: collectionId, storefront_id: storefrontId } : {}),
           ...(syncColumns
@@ -806,7 +876,7 @@ async function reconcilePins({
         continue;
       }
       if (!isDuplicateKey(error)) {
-        console.error("[pinterest-sync] pin insert failed", board.id, error.message);
+        console.error("[pinterest-sync] pin insert failed", label, error.message);
         continue;
       }
       // One already-claimed pin id used to take its entire batch down with it —
@@ -818,12 +888,12 @@ async function reconcilePins({
         const { error: rowErr } = await supabase.from("pins").insert(row as never);
         if (!rowErr) landed++;
         else if (isDuplicateKey(rowErr)) blocked++;
-        else console.error("[pinterest-sync] pin insert failed", board.id, rowErr.message);
+        else console.error("[pinterest-sync] pin insert failed", label, rowErr.message);
       }
       result.pins.created += landed;
       if (blocked > 0) {
         console.warn(
-          `[pinterest-sync] ${blocked} pin(s) on board ${board.id} are already imported under a different ShopMyPin account — apply 20260803140000_pinterest_ids_per_user.sql to allow per-user copies`,
+          `[pinterest-sync] ${blocked} pin(s) on ${label} are already imported under a different ShopMyPin account — apply 20260803140000_pinterest_ids_per_user.sql to allow per-user copies`,
         );
       }
     }
@@ -835,15 +905,15 @@ async function reconcilePins({
     for (const group of [withHome, withoutHome]) {
       for (const batch of chunked(group)) {
         const { error } = await supabase.from("pins").upsert(batch as never, { onConflict: "id" });
-        if (error) console.error("[pinterest-sync] pin update failed", board.id, error.message);
+        if (error) console.error("[pinterest-sync] pin update failed", label, error.message);
       }
     }
   }
 
-  result.pins.savedSkipped = skippedSaves;
-  if (skippedSaves > 0 && result.pins.created + result.pins.updated === 0) {
+  result.pins.savedSkipped = savedPinIds.size;
+  if (savedPinIds.size > 0 && result.pins.created + result.pins.updated === 0) {
     console.info(
-      `[pinterest-sync] every pin on this account (${skippedSaves}) is a save/repin — nothing to import for a creator app`,
+      `[pinterest-sync] every pin on this account (${savedPinIds.size}) is a save/repin — nothing to import for a creator app`,
     );
   }
 
@@ -985,6 +1055,10 @@ export type PinterestSyncState = {
   lastSyncedAt: string | null;
   lastError: string | null;
   counts: { boards: number; pins: number };
+  /** How many pins the last sync found on Pinterest and deliberately left there
+   * because they were saved from someone else. Surfaced so a storefront showing
+   * zero pins can say why, long after the sync's toast has gone. */
+  savedSkipped: number;
 };
 
 /** What the UI needs to decide between "Synced 4m ago", "Syncing…", and
@@ -1018,9 +1092,10 @@ export const getPinterestSyncState = createServerFn({ method: "POST" })
     let lastSyncedAt: string | null = null;
     let needsReconnect = false;
     let lastError: string | null = null;
+    let savedSkipped = 0;
     const { data: state } = await supabase
       .from("pinterest_connections")
-      .select("last_synced_at, needs_reauth, last_sync_error")
+      .select("last_synced_at, needs_reauth, last_sync_error, last_sync_summary")
       .eq("user_id", userId)
       .maybeSingle();
     if (state) {
@@ -1028,10 +1103,12 @@ export const getPinterestSyncState = createServerFn({ method: "POST" })
         last_synced_at: string | null;
         needs_reauth: boolean | null;
         last_sync_error: string | null;
+        last_sync_summary: { pins?: { savedSkipped?: number } } | null;
       };
       lastSyncedAt = s.last_synced_at ?? null;
       needsReconnect = !!s.needs_reauth;
       lastError = s.last_sync_error ?? null;
+      savedSkipped = Number(s.last_sync_summary?.pins?.savedSkipped ?? 0) || 0;
     }
 
     return {
@@ -1041,5 +1118,6 @@ export const getPinterestSyncState = createServerFn({ method: "POST" })
       lastSyncedAt,
       lastError,
       counts: { boards: boardCount ?? 0, pins: pinCount ?? 0 },
+      savedSkipped,
     };
   });

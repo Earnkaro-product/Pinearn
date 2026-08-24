@@ -154,7 +154,7 @@ export function ApproveAllSheet({
   cards: BaseFixCard[];
   unitLabel: string; // "pins" | "boards"
   // Coin cost of this batch, and the balance it's charged against. Omitted by
-  // flows that don't cost coins (board structure), which then render no
+  // flows that don't cost coins (board SEO), which then render no
   // cost row at all rather than a misleading "0 coins".
   costCoins?: number;
   balance?: number | null;
@@ -286,11 +286,16 @@ export function GuideSheet({
   title,
   criteria,
   steps,
+  extra,
   onClose,
 }: {
   title: string;
   criteria: string;
   steps: string[];
+  /** An optional second explainer block, for a flow whose ORDER is as much a
+   * claim as its pass criteria — the pin picker ranks by modelled impact, and a
+   * ranking nobody can audit is one nobody trusts. */
+  extra?: { title: string; body?: string; bullets: string[] };
   onClose: () => void;
 }) {
   return (
@@ -310,6 +315,25 @@ export function GuideSheet({
         </p>
         <p className="mt-1 text-body leading-relaxed text-foreground/80">{criteria}</p>
       </div>
+
+      {extra && (
+        <div className="mt-4 rounded-2xl bg-surface-2/70 p-3.5 ring-1 ring-border">
+          <p className="flex items-center gap-1.5 text-mini font-bold uppercase tracking-wide text-primary">
+            <Sparkles className="h-3.5 w-3.5" /> {extra.title}
+          </p>
+          {extra.body && (
+            <p className="mt-1 text-body leading-relaxed text-foreground/80">{extra.body}</p>
+          )}
+          <ul className="mt-2 space-y-1.5">
+            {extra.bullets.map((b, i) => (
+              <li key={i} className="flex items-start gap-2">
+                <span className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-primary/60" />
+                <p className="text-mini leading-snug text-foreground/75">{b}</p>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <div className="mt-4">
         <p className="text-mini font-bold uppercase tracking-wide text-muted-foreground">

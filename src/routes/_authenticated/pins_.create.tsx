@@ -24,7 +24,7 @@ import { PinScanOverlay } from "@/components/pin-scan-overlay";
 import { useScanPhase } from "@/hooks/use-scan-phase";
 import { CollectionAddFlow, AddFromCollectionButton } from "@/components/collection-picker";
 import { draftPinSeo, type DraftSeoResult } from "@/lib/pin-seo.functions";
-import { toast } from "sonner";
+import { notifyDone, notifyProblem } from "@/lib/notify";
 import {
   SuggestionCard,
   ProgressiveSuggestionCard,
@@ -34,9 +34,12 @@ import {
 import { EducationalLoader, HINTS } from "@/components/rotating-hint";
 import { useVisualSearch } from "@/hooks/use-visual-search";
 import { AppShell } from "@/components/app-shell";
+import { FlowIntroGate } from "@/components/flow-intro";
 import { supabase } from "@/integrations/supabase/client";
 import { hostBrand, estimateCommissionPct } from "@/lib/brands";
 import { getFriendlyMessage } from "@/lib/friendly-error";
+import { PinterestConnectPanel } from "@/components/pinterest-gate";
+import { usePinterestConnection } from "@/hooks/use-pinterest-connect";
 import {
   createPinterestBoard,
   createPinterestPin,
@@ -65,8 +68,55 @@ export const Route = createFileRoute("/_authenticated/pins_/create")({
   validateSearch: (s: Record<string, unknown>): { board?: string } => ({
     board: typeof s.board === "string" ? s.board : undefined,
   }),
-  component: CreatePinWizard,
+  component: CreatePinRoute,
 });
+
+/**
+ * The one screen in the app that cannot exist without Pinterest.
+ *
+ * Everything here ends in a real POST to pinterest.com — the board list comes
+ * from the account, and step 4 publishes — so this is gated at the door rather
+ * than at the Publish button: letting someone upload an image, write a title and
+ * pick products, only to be stopped at the end, would waste all of it.
+ *
+ * The gate is a panel, not a redirect. It keeps the creator where they navigated
+ * to, says why, and offers the connection plus a way back to Home.
+ */
+function CreatePinRoute() {
+  const { usable, isLoading } = usePinterestConnection();
+
+  if (isLoading) {
+    // Deliberately a spinner and not the gate: flashing "connect Pinterest" at
+    // a connected creator for the length of one query is its own bug.
+    return (
+      <AppShell title="Create pin" backButton backTo="/pins" hideBottomNav>
+        <div className="grid place-items-center py-24">
+          <Loader2 className="h-6 w-6 animate-spin text-primary" />
+        </div>
+      </AppShell>
+    );
+  }
+
+  if (!usable) {
+    return (
+      <AppShell title="Create pin" backButton backTo="/pins" hideBottomNav>
+        <PinterestConnectPanel
+          title="Connect Pinterest to create a Pin"
+          reason="A new Pin is published to your Pinterest account, and its board comes from there too — so this is the one flow that can't run without authorization."
+          bullets={[
+            "We only publish the Pin you build here, when you press Publish.",
+            "Your existing Pins and boards are imported, never changed.",
+            "The rest of ShopMyPin — your store, products and links — stays open without it.",
+          ]}
+          backTo="/pins"
+          backLabel="Back to Pins"
+        />
+      </AppShell>
+    );
+  }
+
+  return <CreatePinWizard />;
+}
 
 type Step = 1 | 2 | 3 | 4;
 
@@ -218,8 +268,8 @@ function CreatePinWizard() {
   }, [selectedProducts, storefrontId]);
 
   async function handleUpload(file: File) {
-    if (!file.type.startsWith("image/")) return toast.error("Please choose an image file");
-    if (file.size > 10 * 1024 * 1024) return toast.error("Max file size is 10 MB");
+    if (!file.type.startsWith("image/")) return notifyProblem("Please choose an image file");
+    if (file.size > 10 * 1024 * 1024) return notifyProblem("Max file size is 10 MB");
     setUploading(true);
     try {
       const { data: userRes } = await supabase.auth.getUser();
@@ -236,9 +286,9 @@ function CreatePinWizard() {
         .createSignedUrl(path, 60 * 60 * 24 * 365 * 10);
       if (signErr || !signed) throw signErr ?? new Error("Could not sign URL");
       setImageUrl(signed.signedUrl);
-      toast.success("Image uploaded");
+      notifyDone("Image uploaded");
     } catch (e) {
-      toast.error(getFriendlyMessage(e));
+      notifyProblem(getFriendlyMessage(e));
     } finally {
       setUploading(false);
     }
@@ -267,21 +317,21 @@ function CreatePinWizard() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["pins"] });
-      toast.success("Pin published to Pinterest");
+      notifyDone("Pin published to Pinterest");
       navigate({ to: "/pins" });
     },
-    onError: (e: Error) => toast.error(getFriendlyMessage(e)),
+    onError: (e: Error) => notifyProblem(getFriendlyMessage(e)),
   });
 
   function next() {
-    if (step === 1 && !imageUrl) return toast.error("Upload an image to continue");
+    if (step === 1 && !imageUrl) return notifyProblem("Upload an image to continue");
     if (step === 2 && !title.trim()) {
       setTitleError("Add a title");
       titleInputRef.current?.focus();
-      return toast.error("Add a title");
+      return notifyProblem("Add a title");
     }
     if (step === 3 && selectedProductIds.length === 0)
-      return toast.error("Pick at least one product");
+      return notifyProblem("Pick at least one product");
     setStep((s) => (s < 4 ? ((s + 1) as Step) : s));
   }
 
@@ -304,6 +354,8 @@ function CreatePinWizard() {
           e.target.value = "";
         }}
       />
+
+      <FlowIntroGate flow="create-pin" />
 
       {/* Stepper — labelled dots so each step is named, not just numbered. */}
       <div className="mx-auto mb-6 flex max-w-2xl items-start gap-2">
@@ -823,10 +875,10 @@ function BoardPickerSheet({
     onSuccess: (b) => {
       qc.invalidateQueries({ queryKey: ["pinterest-boards"] });
       qc.invalidateQueries({ queryKey: ["board-pin-covers"] });
-      toast.success(`Board "${b.name}" created on Pinterest`);
+      notifyDone(`Board "${b.name}" created on Pinterest`);
       onPick(b.id);
     },
-    onError: (e: Error) => toast.error(getFriendlyMessage(e)),
+    onError: (e: Error) => notifyProblem(getFriendlyMessage(e)),
   });
 
   return (
@@ -1334,9 +1386,9 @@ function StepProducts({
     try {
       const text = await navigator.clipboard.readText();
       if (text.trim()) setManualUrl(text.trim());
-      else toast.error("Clipboard is empty");
+      else notifyProblem("Clipboard is empty");
     } catch {
-      toast.error("Couldn't read clipboard — paste manually");
+      notifyProblem("Couldn't read clipboard — paste manually");
     }
   };
 
@@ -1354,7 +1406,7 @@ function StepProducts({
     if (aiProductIds[s.link] || insertingLinksRef.current.has(s.link)) return;
     const targetStorefront = preferredStorefrontId || storefronts[0]?.id;
     if (!targetStorefront) {
-      toast.error("Create a storefront first.");
+      notifyProblem("Create a storefront first.");
       return;
     }
     insertingLinksRef.current.add(s.link);
@@ -1379,7 +1431,7 @@ function StepProducts({
       toggle(inserted.id as string);
       qc.invalidateQueries({ queryKey: ["all-products"] });
     } catch (e) {
-      toast.error(getFriendlyMessage(e));
+      notifyProblem(getFriendlyMessage(e));
     } finally {
       insertingLinksRef.current.delete(s.link);
     }
@@ -1461,10 +1513,10 @@ function StepProducts({
       setManualProductIds((prev) => new Set(prev).add(id));
       setManualUrl("");
       setProductUrlError(null);
-      toast.success(duplicate ? "Already in Your products — selected" : "Added to Your products");
+      notifyDone(duplicate ? "Already in Your products — selected" : "Added to Your products");
     },
     onError: (e: Error) => {
-      toast.error(getFriendlyMessage(e));
+      notifyProblem(getFriendlyMessage(e));
       setProductUrlError(e.message);
       manualUrlInputRef.current?.focus();
     },

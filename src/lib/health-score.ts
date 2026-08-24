@@ -200,7 +200,7 @@ export const SUB_SCORE_WEIGHTS: Record<SubScoreKey, number> = {
 
 export const SUB_SCORE_LABELS: Record<SubScoreKey, string> = {
   pinSeo: "Pin SEO",
-  boardStructure: "Board Structure",
+  boardStructure: "Board SEO",
   profile: "Profile SEO",
   freshness: "Content SEO",
 };
@@ -232,10 +232,10 @@ export function pointsLabel(points: number): string {
 // explainer so the heuristics are auditable rather than a black box. Built
 // from the exported constants so copy and logic can't drift apart.
 export const SCORE_CRITERIA: Record<SubScoreKey, string> = {
-  pinSeo: `Title ${PIN_TITLE_MIN}–${PIN_TITLE_MAX} characters, description ${PIN_DESC_MIN}–${PIN_DESC_MAX}, neither generic ("IMG_1234").`,
-  boardStructure: "A specific name — not a placeholder — plus a description.",
-  profile: `Bio, photo, website and a connected account. A quarter of the ${maxPointsFor("profile")} pts each, all fixed on Pinterest.`,
-  freshness: `A pin on the board in the last ${FRESH_DAYS} days.`,
+  pinSeo: `Title ${PIN_TITLE_MIN}–${PIN_TITLE_MAX} chars, description ${PIN_DESC_MIN}–${PIN_DESC_MAX}, neither generic.`,
+  boardStructure: "A real name, not a placeholder — plus a description.",
+  profile: "Bio, photo, website, connected account. Equal weight, all on Pinterest.",
+  freshness: `Every board pinned to in the last ${FRESH_DAYS} days.`,
 };
 
 // Named after the fields as Pinterest labels them, so the sheet's rows and the

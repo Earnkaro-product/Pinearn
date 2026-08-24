@@ -10,15 +10,23 @@ export const Route = createFileRoute("/_authenticated")({
       throw redirect({ to: "/auth", search: { redirect: location.href } });
     }
 
-    // Gate onboarding: everything except /onboarding requires Pinterest to be
-    // connected AND onboarding_completed. Pinterest sync is compulsory for all users.
+    // Gate onboarding, and ONLY onboarding. Pinterest is deliberately not part
+    // of this check: authorization is skippable at the door, so a creator who
+    // skipped it has `pinterest_connected: false` and still belongs inside the
+    // app. Requiring it here was what made skipping impossible — the redirect
+    // fired again on the very next navigation, so any "skip" button would have
+    // bounced straight back to this screen.
+    //
+    // What replaces it is per-action gating: the handful of things that genuinely
+    // need Pinterest ask for authorization at the moment they are used, and
+    // cannot be skipped there. See components/pinterest-gate.tsx.
     if (location.pathname !== "/onboarding") {
       const { data: profile } = await supabase
         .from("profiles")
-        .select("onboarding_completed,pinterest_connected")
+        .select("onboarding_completed")
         .eq("id", data.user.id)
         .maybeSingle();
-      if (!profile?.onboarding_completed || !profile?.pinterest_connected) {
+      if (!profile?.onboarding_completed) {
         throw redirect({ to: "/onboarding" });
       }
     }

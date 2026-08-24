@@ -68,7 +68,7 @@ async function fetchHealthData(): Promise<HealthData> {
       // groupings — including one auto-created per pin that goes live, named
       // from the pin title or "Pin collection". Only the former are boards
       // that exist on Pinterest and can rank there, so only those belong in
-      // the Board Structure score and the Board Boost deck. Scoring the
+      // the Board SEO score and the Board Boost deck. Scoring the
       // per-pin containers as undescribed "boards" was both wrong and a
       // permanent drag on the score.
       .select("id, name, description, cover_image_url")

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { toast } from "sonner";
+import { notifyDone, notifyProblem } from "@/lib/notify";
 import { HEALTH_SCORE_QUERY_KEY, useHealthScore, type HealthData } from "./use-health-score";
 import { saveLastSeenScore, type SubScoreKey } from "@/lib/health-score";
 
@@ -146,7 +146,7 @@ export function useFixFlow<C extends BaseFixCard>(opts: {
       });
       const slot = cards.findIndex((c) => c.id === card.id);
       if (slot >= 0) setIndex((i) => Math.min(i, slot));
-      toast.error("Couldn't save that change — it's back in the queue");
+      notifyProblem("Couldn't save that change — it's back in the queue");
       return;
     }
     await opts.onApplied?.(card.id);
@@ -160,7 +160,7 @@ export function useFixFlow<C extends BaseFixCard>(opts: {
     patch(card.id, original);
     const { error } = await opts.persist(card.id, original);
     if (error) {
-      toast.error("Couldn't undo that change");
+      notifyProblem("Couldn't undo that change");
       return;
     }
     await opts.onReverted?.(card.id);
@@ -270,7 +270,7 @@ export function useFixFlow<C extends BaseFixCard>(opts: {
     // Stay on the done screen (done is derived from index >= total) — resetting
     // the cursor to 0 would eject the user back into the deck mid-celebration.
     await Promise.all(applied.map((c) => revertFix(c)));
-    toast.success("All changes reverted");
+    notifyDone("All changes reverted");
   };
 
   const revertOne = async (card: C) => {

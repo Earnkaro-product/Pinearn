@@ -187,7 +187,9 @@ function RootComponent() {
       <MotionConfig reducedMotion="user">
         <Outlet />
         <MonetizationFloater />
-        <Toaster theme={theme} position="top-right" richColors closeButton duration={2500} />
+        {/* No global `closeButton`: whether a notification can be dismissed is a
+            property of what it says, and src/lib/notify.tsx decides it per kind. */}
+        <Toaster theme={theme} position="top-right" richColors duration={2500} />
       </MotionConfig>
     </QueryClientProvider>
   );

@@ -70,11 +70,13 @@ export const importPinterestBoards = createServerFn({ method: "POST" })
     if (sErr) throw new Error(sErr.message);
     if (!storefront) throw new Error("No storefront found for user");
 
-    const boards = [...(await withPinterestToken(userId, (t) => listBoards(t)))].sort((a, b) => {
-      const at = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-      const bt = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-      return bt - at; // newest board first
-    });
+    const boards = [...(await withPinterestToken(userId, (t) => listBoards(t))).boards].sort(
+      (a, b) => {
+        const at = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const bt = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+        return bt - at; // newest board first
+      },
+    );
 
     let boardsCreated = 0;
     let pinsCreated = 0;
@@ -222,7 +224,7 @@ export const importPinterestBoards = createServerFn({ method: "POST" })
           );
       }
 
-      const pins = await withPinterestToken(userId, (t) => listBoardPins(t, board.id));
+      const { pins } = await withPinterestToken(userId, (t) => listBoardPins(t, board.id));
       if (pins.length === 0) continue;
 
       // This is a creator app — only sync pins the user actually authored,

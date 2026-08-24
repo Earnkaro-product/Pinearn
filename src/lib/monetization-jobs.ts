@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 import type { QueryClient } from "@tanstack/react-query";
-import { toast } from "sonner";
+import { notifyDone } from "@/lib/notify";
 
 import { priceCentsOf } from "./product-price";
 
@@ -193,17 +193,17 @@ async function runJob(opts: StartBoardMonetizationOptions): Promise<void> {
     }
 
     patch(collectionId, { approved, status: "done" });
-    notifyDone(collectionId, approved);
+    announceMonetizeDone(collectionId, approved);
   } catch {
     patch(collectionId, { status: "error" });
   }
 }
 
 // The "we'll ping you" promise, kept even when the user is on another screen.
-function notifyDone(id: string, approved: number) {
+function announceMonetizeDone(id: string, approved: number) {
   const job = jobs.find((j) => j.id === id);
   const name = job?.boardName ? `“${job.boardName}”` : "your board";
-  toast.success(
+  notifyDone(
     approved > 0
       ? `${approved} pin${approved === 1 ? "" : "s"} in ${name} are now live 🎉`
       : `Finished monetising ${name}`,

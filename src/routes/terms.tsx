@@ -1,6 +1,8 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { ChevronLeft } from "lucide-react";
 
+import { useGoBack } from "@/hooks/use-go-back";
+
 export const Route = createFileRoute("/terms")({
   head: () => ({
     meta: [
@@ -16,14 +18,19 @@ export const Route = createFileRoute("/terms")({
 });
 
 function TermsAndConditions() {
+  // Reached from the landing page, auth, onboarding and each other — back
+  // returns to whichever of those the reader came from.
+  const goBack = useGoBack({ to: "/" });
+
   return (
     <div className="mx-auto max-w-3xl px-6 py-10 text-sm leading-relaxed text-foreground">
-      <Link
-        to="/"
+      <button
+        type="button"
+        onClick={goBack}
         className="mb-8 inline-flex items-center gap-1.5 text-sm font-medium text-muted-foreground hover:text-foreground"
       >
         <ChevronLeft className="h-4 w-4" /> Back
-      </Link>
+      </button>
 
       <h1 className="font-display text-3xl font-bold">Terms and Conditions</h1>
       <p className="mt-2 text-muted-foreground">
