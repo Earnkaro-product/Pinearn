@@ -26,6 +26,7 @@ import {
 import { supabase } from "@/integrations/supabase/client";
 import { pickPlaceholderImage } from "@/lib/placeholder-image";
 import { getPinterestAnalytics } from "@/lib/pinterest.functions";
+import { usePinterestConnection } from "@/hooks/use-pinterest-connect";
 import { syncPinterestAccount } from "@/lib/pinterest-sync.functions";
 import { PinterestSyncBanner } from "@/components/pinterest-sync-banner";
 import { ALL_BRANDS, hostBrand, type Brand } from "@/lib/brands";
@@ -365,10 +366,17 @@ function Analytics() {
   // Real Pinterest data — Impressions/Pin clicks/account totals genuinely
   // come from Pinterest's API for the selected range (see pinterest.functions.ts).
   const qc = useQueryClient();
+  // Orders, sales and earnings are ShopMyPin's own numbers and are shown to
+  // everyone. Only the Pinterest half — impressions, Pin clicks, account totals —
+  // needs authorization, so it is the only half that waits for one. Firing these
+  // without a connection produced a guaranteed failure per page view, and the
+  // banner above already offers the fix.
+  const { usable: pinterestUsable } = usePinterestConnection();
   const runGetAnalytics = useServerFn(getPinterestAnalytics);
   const { data: pinterestData } = useQuery({
     queryKey: ["pinterest-analytics", range],
     queryFn: () => runGetAnalytics({ data: { range } }),
+    enabled: pinterestUsable,
     retry: false,
     // No default staleTime means every window focus/remount refetches from
     // Pinterest's rate-limited API — a minute-long grace period is plenty
@@ -393,11 +401,11 @@ function Analytics() {
   });
   const syncStartedRef = useRef(false);
   useEffect(() => {
-    if (syncStartedRef.current) return;
+    if (!pinterestUsable || syncStartedRef.current) return;
     syncStartedRef.current = true;
     syncMutation.mutate();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [pinterestUsable]);
 
   // Live pins straight from our own DB — the same query the Pins page uses.
   // getPinterestAnalytics only returns pins with a pinterest_pin_id and comes

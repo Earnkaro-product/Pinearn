@@ -1,6 +1,15 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowRight, Check, ChevronDown, Coins, Info, Search, Sparkles, X } from "lucide-react";
+import {
+  ArrowRight,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  Info,
+  Search,
+  Sparkles,
+  X,
+} from "lucide-react";
 import { LiveScorePill } from "@/components/health-widgets";
 import { pointsLabel } from "@/lib/health-score";
 
@@ -94,6 +103,7 @@ export function PickerHeader({
   points,
   maxPoints,
   gainPoints,
+  note,
   onGuide,
 }: {
   heading: string;
@@ -103,29 +113,41 @@ export function PickerHeader({
   maxPoints: number;
   /** Pts still recoverable from everything on this screen. */
   gainPoints: number;
+  /** Optional one-or-two-sentence brief: what this screen is deciding, and on
+   * what basis. Worth the height on a surface whose ORDER is the product — a
+   * ranked list nobody can see the rule behind reads as an arbitrary one. */
+  note?: ReactNode;
   onGuide: () => void;
 }) {
   return (
     // The eyebrow ("Pin SEO") went: the app bar directly above already says
     // which flow this is, so it was the same words twice, one line apart.
-    <header className="flex items-center gap-3.5 rounded-3xl border border-border bg-surface p-4 shadow-sm">
-      <ScoreRing points={points} maxPoints={maxPoints} />
-      <div className="min-w-0 flex-1">
-        <h2 className="font-display text-[22px] font-bold leading-tight tracking-tight">
-          {heading}
-        </h2>
-        <p className="mt-0.5 text-mini font-bold text-primary">
-          +{pointsLabel(gainPoints)} pts to win
-        </p>
+    <header className="rounded-3xl border border-border bg-surface p-4 shadow-sm">
+      <div className="flex items-center gap-3.5">
+        <ScoreRing points={points} maxPoints={maxPoints} />
+        <div className="min-w-0 flex-1">
+          <h2 className="font-display text-[22px] font-bold leading-tight tracking-tight">
+            {heading}
+          </h2>
+          <p className="mt-0.5 text-mini font-bold text-primary">
+            +{pointsLabel(gainPoints)} pts on the table
+          </p>
+          {/* Labelled, not an info glyph — same call as the score hero. */}
+          <button
+            type="button"
+            onClick={onGuide}
+            className="mt-1 inline-flex items-center gap-0.5 text-micro font-semibold text-muted-foreground transition hover:text-primary"
+          >
+            How it works
+            <ChevronRight className="h-3 w-3" />
+          </button>
+        </div>
       </div>
-      <button
-        type="button"
-        onClick={onGuide}
-        aria-label="How boosting works"
-        className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-surface-2 text-muted-foreground ring-1 ring-border transition hover:text-primary"
-      >
-        <Info className="h-4.5 w-4.5" />
-      </button>
+      {note && (
+        <p className="mt-3 border-t border-border/70 pt-3 text-mini leading-relaxed text-muted-foreground">
+          {note}
+        </p>
+      )}
     </header>
   );
 }
@@ -309,6 +331,8 @@ export function SelectionBar({
   emptyLabel,
   selectedPoints,
   coins,
+  reward,
+  emptyAction,
   onStart,
   onClear,
 }: {
@@ -318,10 +342,35 @@ export function SelectionBar({
   emptyLabel: string;
   selectedPoints: number;
   coins?: number;
+  /** The headline win of this run, already formatted ("≈ +142 views"). Leads
+   * the receipt line when present — it's the number that answers "why tap
+   * this", so it must not live in a caption below the button. */
+  reward?: string;
+  /** What the bar offers to DO while nothing is queued. "Select pins" asks a
+   * creator staring at hundreds of thumbnails to make the exact decision they
+   * opened the screen unable to make; a flow that can rank them should just
+   * make the pick, and let it be unpicked. Omit to keep the inert label. */
+  emptyAction?: { label: string; onClick: () => void };
   onStart: () => void;
   onClear: () => void;
 }) {
   const has = selectedCount > 0;
+  const empty = !has && emptyAction;
+
+  // One quiet receipt line INSIDE the button: reward, then score, then price.
+  // These used to be two pill badges crowding the label — "+0.8\npts" wrapped
+  // into a two-line blob at button font size — plus a red caption below for
+  // the most persuasive number of the three. Same facts, one whisper.
+  const receipt = has
+    ? [
+        reward,
+        selectedPoints > 0 ? `+${pointsLabel(selectedPoints)} pts` : null,
+        coins !== undefined ? `${coins} ${coins === 1 ? "coin" : "coins"}` : null,
+      ]
+        .filter(Boolean)
+        .join("  ·  ")
+    : "";
+
   return (
     <div className="shrink-0">
       <div
@@ -349,43 +398,51 @@ export function SelectionBar({
 
         <motion.button
           type="button"
-          whileTap={has ? { scale: 0.98 } : undefined}
-          onClick={onStart}
-          disabled={!has}
-          className={`inline-flex flex-1 items-center justify-center gap-2 rounded-2xl px-4 py-3.5 text-lead font-extrabold transition ${
+          whileTap={has || empty ? { scale: 0.98 } : undefined}
+          onClick={has ? onStart : emptyAction?.onClick}
+          disabled={!has && !empty}
+          className={`flex flex-1 items-center justify-center rounded-2xl px-4 transition ${
+            receipt ? "py-2.5" : "py-3.5"
+          } ${
             has
               ? "bg-gradient-primary text-primary-foreground shadow-glow"
-              : "bg-surface-2 text-muted-foreground ring-1 ring-inset ring-border"
+              : empty
+                ? "bg-foreground text-background"
+                : "bg-surface-2 text-muted-foreground ring-1 ring-inset ring-border"
           }`}
         >
           {has ? (
-            <>
+            <span className="flex min-w-0 flex-col items-center">
+              {/* The action, and only the action, at button weight. */}
+              <span className="inline-flex items-center gap-2 text-lead font-extrabold">
+                <Sparkles className="h-4 w-4" />
+                Boost{" "}
+                <motion.span
+                  key={selectedCount}
+                  initial={{ y: -6, opacity: 0 }}
+                  animate={{ y: 0, opacity: 1 }}
+                  transition={{ duration: 0.18 }}
+                  className="tabular-nums"
+                >
+                  {selectedCount}
+                </motion.span>{" "}
+                {selectedCount === 1 ? unit : unitPlural}
+                <ArrowRight className="h-4 w-4" strokeWidth={2.75} />
+              </span>
+              {receipt && (
+                <span className="mt-0.5 max-w-full truncate text-mini font-semibold tabular-nums text-primary-foreground/85">
+                  {receipt}
+                </span>
+              )}
+            </span>
+          ) : empty ? (
+            <span className="inline-flex items-center gap-2 text-lead font-extrabold">
               <Sparkles className="h-4 w-4" />
-              Boost{" "}
-              <motion.span
-                key={selectedCount}
-                initial={{ y: -6, opacity: 0 }}
-                animate={{ y: 0, opacity: 1 }}
-                transition={{ duration: 0.18 }}
-                className="tabular-nums"
-              >
-                {selectedCount}
-              </motion.span>{" "}
-              {selectedCount === 1 ? unit : unitPlural}
-              {selectedPoints > 0 && (
-                <span className="rounded-full bg-white/20 px-2 py-0.5 text-mini font-bold">
-                  +{pointsLabel(selectedPoints)} pts
-                </span>
-              )}
-              {coins !== undefined && (
-                <span className="inline-flex items-center gap-1 rounded-full bg-white/20 px-2 py-0.5 text-mini font-bold tabular-nums">
-                  <Coins className="h-3 w-3" /> {coins}
-                </span>
-              )}
+              {emptyAction.label}
               <ArrowRight className="h-4 w-4" strokeWidth={2.75} />
-            </>
+            </span>
           ) : (
-            <>{emptyLabel}</>
+            <span className="text-lead font-extrabold">{emptyLabel}</span>
           )}
         </motion.button>
       </div>

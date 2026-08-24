@@ -1,9 +1,10 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { AppShell } from "@/components/app-shell";
+import { FlowIntroGate } from "@/components/flow-intro";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { supabase } from "@/integrations/supabase/client";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Trash2,
   Loader2,
@@ -34,13 +35,14 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { SharePopover } from "@/components/share-popover";
 import { collectionShareUrl, storeShareUrl } from "@/lib/share-links";
 import { Skeleton } from "@/components/ui/skeleton";
-import { toast } from "sonner";
+import { notifyCancellable, notifyDone, notifyProblem } from "@/lib/notify";
 import { takeDownCollection } from "@/lib/pinterest.functions";
 import { fetchLinkPreviews } from "@/lib/link-preview.functions";
 import { syncPinterestAccount } from "@/lib/pinterest-sync.functions";
 import { usePinterestSync } from "@/hooks/use-pinterest-sync";
+import { usePinterestGate } from "@/components/pinterest-gate";
+import { useGoBack } from "@/hooks/use-go-back";
 import { PinterestSyncModal } from "@/components/pinterest-sync-modal";
-import { SuggestionCard, realProductPrice } from "@/components/suggestion-card";
 import {
   CollectionAddFlow,
   AddFromCollectionButton,
@@ -140,19 +142,30 @@ function StorefrontPage() {
   const [tab, setTab] = useState<"collections" | "boards">("collections");
   const [reorderOpen, setReorderOpen] = useState(false);
   const [showNewCollection, setShowNewCollection] = useState(false);
+  // True when the new-collection dialog was opened by a ?new=1 deep link
+  // (dashboard tile, speed dial) rather than by a button on this page. Those
+  // arrivals never chose to be on My Store, so cancelling returns them to the
+  // page they came from instead of dropping them here.
+  const cameForNewCollection = useRef(false);
   const [showNewBoard, setShowNewBoard] = useState(false);
   const [showEditStore, setShowEditStore] = useState(false);
   const [coverPickerFor, setCoverPickerFor] = useState<string | null>(null);
-  const [viewCollectionFor, setViewCollectionFor] = useState<string | null>(
-    search.collection ?? null,
-  );
   const [viewBoardFor, setViewBoardFor] = useState<string | null>(null);
   const [syncOpen, setSyncOpen] = useState(false);
   const bgInputRef = useRef<HTMLInputElement>(null);
 
+  const openCollection = useCallback(
+    (collectionId: string) => navigate({ to: "/collections/$id", params: { id: collectionId } }),
+    [navigate],
+  );
+
+  // A collection used to open as a sheet on this page, so links from elsewhere
+  // pointed at ?collection=<id>. They now land on the collection's own page;
+  // the param is honoured rather than dropped so older links and bookmarks
+  // still arrive somewhere correct.
   useEffect(() => {
-    if (search.collection) setViewCollectionFor(search.collection);
-  }, [search.collection]);
+    if (search.collection) void openCollection(search.collection);
+  }, [search.collection, openCollection]);
 
   // Deep-linked from the Health Score: open the edit dialog immediately.
   useEffect(() => {
@@ -166,13 +179,27 @@ function StorefrontPage() {
     if (!search.new) return;
     setTab("collections");
     setShowNewCollection(true);
+    cameForNewCollection.current = true;
     void navigate({ search: (s) => ({ ...s, new: undefined }), replace: true });
   }, [search.new, navigate]);
+
+  // Cancelling a deep-linked new-collection dialog leaves the page too, back to
+  // wherever the tile was tapped (dashboard, or any page via the speed dial);
+  // opened from a button here it just closes, as always.
+  const goBack = useGoBack({ to: "/dashboard" });
+  const closeNewCollection = () => {
+    setShowNewCollection(false);
+    if (cameForNewCollection.current) {
+      cameForNewCollection.current = false;
+      goBack();
+    }
+  };
 
   // The unified reconcile — same call the connect flow and the auto-sync use, so
   // "Sync boards & pins" here can't drift from what happens elsewhere.
   const importBoards = useServerFn(syncPinterestAccount);
   const { invalidateAll: invalidatePinterestData } = usePinterestSync();
+  const pinterestGate = usePinterestGate();
 
   const { data: profile } = useQuery({
     queryKey: ["me-profile"],
@@ -293,7 +320,9 @@ function StorefrontPage() {
       qc.invalidateQueries({ queryKey: ["storefront-pins", storefront?.id] });
       invalidatePinterestData();
       if (!r.ok) {
-        toast.error(r.needsReconnect ? "Pinterest needs reconnecting" : (r.error ?? "Sync failed"));
+        notifyProblem(
+          r.needsReconnect ? "Pinterest needs reconnecting" : (r.error ?? "Sync failed"),
+        );
         return;
       }
       // A re-sync now also pulls edits and deletions, not just new boards, so the
@@ -302,20 +331,36 @@ function StorefrontPage() {
       const created = r.boards.created + r.pins.created;
       const changed = r.boards.updated + r.pins.updated + r.pins.rehomed + r.pins.removed;
       if (created === 0 && changed === 0) {
-        toast("Your store is already up to date");
+        notifyDone("Your store is already up to date");
       } else if (created > 0) {
-        toast.success(`Imported ${r.boards.created} boards, ${r.pins.created} pins`);
+        notifyDone(`Imported ${r.boards.created} boards, ${r.pins.created} pins`);
       } else {
-        toast.success(`Updated ${changed} ${changed === 1 ? "item" : "items"} from Pinterest`);
+        notifyDone(`Updated ${changed} ${changed === 1 ? "item" : "items"} from Pinterest`);
       }
     },
-    onError: (e: Error) => toast.error(e.message),
+    onError: (e: Error) => notifyProblem(e.message),
   });
 
+  /**
+   * Importing boards reads the live Pinterest account, so it is one of the few
+   * actions that genuinely can't proceed unauthorized — the gate asks first and
+   * only then runs the import. It used to fire regardless and fail inside the
+   * progress sheet, which read as "the sync is broken" rather than "we need
+   * access".
+   */
   const startSync = () => {
-    setSyncOpen(true);
-    runImport.reset();
-    runImport.mutate();
+    pinterestGate.run(
+      {
+        action: "Import your boards and Pins",
+        reason:
+          "Importing reads the boards and Pins on your Pinterest account. Nothing on Pinterest is changed — this only copies them into your store.",
+      },
+      () => {
+        setSyncOpen(true);
+        runImport.reset();
+        runImport.mutate();
+      },
+    );
   };
 
   const runFetchLinkPreviews = useServerFn(fetchLinkPreviews);
@@ -414,9 +459,10 @@ function StorefrontPage() {
       qc.invalidateQueries({ queryKey: ["collection-products"] });
       qc.invalidateQueries({ queryKey: ["all-products"] });
       setShowNewCollection(false);
-      toast.success("Collection created");
+      cameForNewCollection.current = false;
+      notifyDone("Collection created");
     },
-    onError: (e: Error) => toast.error(e.message),
+    onError: (e: Error) => notifyProblem(e.message),
   });
 
   const runTakeDownCollection = useServerFn(takeDownCollection);
@@ -432,10 +478,40 @@ function StorefrontPage() {
       qc.invalidateQueries({ queryKey: ["collections", storefront?.id] });
       qc.invalidateQueries({ queryKey: ["pins", storefront?.id] });
       setCoverPickerFor(null);
-      toast.success("Taken down — pins back in available to attach");
+      // The cancellable toast that scheduled this already said so, six seconds
+      // ago — a second confirmation on commit would land with no context.
     },
-    onError: (e: Error) => toast.error(e.message),
   });
+
+  /**
+   * Collections whose take-down has been announced but not yet written.
+   *
+   * Same shape as the pins page: the card leaves the grid at once, the write is
+   * held for the length of the toast, and Undo simply never sends it. Nothing
+   * here is recoverable once it lands — the collection row is deleted and its
+   * products detach — which is exactly why the window exists.
+   */
+  const [pendingRemoval, setPendingRemoval] = useState<Set<string>>(new Set());
+  const holdRemoval = (id: string, held: boolean) =>
+    setPendingRemoval((prev) => {
+      const next = new Set(prev);
+      if (held) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+
+  const takeDownCollectionSoon = (id: string, name: string) => {
+    holdRemoval(id, true);
+    notifyCancellable({
+      message: `“${name}” taken down — pins back in available to attach`,
+      run: () => hideCollection.mutateAsync(id),
+      onCancel: () => holdRemoval(id, false),
+      onError: (e) => {
+        holdRemoval(id, false);
+        notifyProblem(e instanceof Error ? e.message : "Couldn't take that collection down");
+      },
+    });
+  };
 
   const setCollectionCover = useMutation({
     mutationFn: async ({ id, url }: { id: string; url: string | null }) => {
@@ -447,9 +523,9 @@ function StorefrontPage() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["collections", storefront?.id] });
-      toast.success("Cover updated");
+      notifyDone("Cover updated");
     },
-    onError: (e: Error) => toast.error(e.message),
+    onError: (e: Error) => notifyProblem(e.message),
   });
 
   const saveCollectionOrder = useMutation({
@@ -459,7 +535,7 @@ function StorefrontPage() {
       );
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["collections", storefront?.id] }),
-    onError: (e: Error) => toast.error(e.message),
+    onError: (e: Error) => notifyProblem(e.message),
   });
 
   const saveBoardOrder = useMutation({
@@ -469,7 +545,7 @@ function StorefrontPage() {
       );
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["boards", storefront?.id] }),
-    onError: (e: Error) => toast.error(e.message),
+    onError: (e: Error) => notifyProblem(e.message),
   });
 
   const setBackground = useMutation({
@@ -484,9 +560,9 @@ function StorefrontPage() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["my-storefront"] });
-      toast.success("Background updated");
+      notifyDone("Background updated");
     },
-    onError: (e: Error) => toast.error(e.message),
+    onError: (e: Error) => notifyProblem(e.message),
   });
 
   const createBoard = useMutation({
@@ -524,9 +600,9 @@ function StorefrontPage() {
       qc.invalidateQueries({ queryKey: ["boards", storefront?.id] });
       qc.invalidateQueries({ queryKey: ["board-collections", storefront?.id] });
       setShowNewBoard(false);
-      toast.success("Board created");
+      notifyDone("Board created");
     },
-    onError: (e: Error) => toast.error(e.message),
+    onError: (e: Error) => notifyProblem(e.message),
   });
 
   const hideBoard = useMutation({
@@ -539,7 +615,7 @@ function StorefrontPage() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["boards", storefront?.id] });
-      toast.success("Board removed from storefront");
+      notifyDone("Board removed from storefront");
     },
   });
 
@@ -577,9 +653,9 @@ function StorefrontPage() {
       qc.invalidateQueries({ queryKey: ["my-storefront"] });
       qc.invalidateQueries({ queryKey: ["me-profile"] });
       setShowEditStore(false);
-      toast.success("Store updated");
+      notifyDone("Store updated");
     },
-    onError: (e: Error) => toast.error(e.message),
+    onError: (e: Error) => notifyProblem(e.message),
   });
 
   const collectionsByBoard = useMemo(() => {
@@ -615,18 +691,39 @@ function StorefrontPage() {
     () =>
       collections.filter(
         (c) =>
-          pinsWithProduct.some((p) => p.collection_id === c.id) || productsByCollection.has(c.id),
+          !pendingRemoval.has(c.id) &&
+          (pinsWithProduct.some((p) => p.collection_id === c.id) || productsByCollection.has(c.id)),
       ),
-    [collections, pinsWithProduct, productsByCollection],
+    [collections, pinsWithProduct, productsByCollection, pendingRemoval],
   );
   const storefrontCollectionIds = useMemo(
     () => new Set(storefrontCollections.map((c) => c.id)),
     [storefrontCollections],
   );
 
+  // A board earns its place only once one of its collections is actually in the
+  // storefront. An imported Pinterest board whose pins were never monetized has
+  // nothing to show, and a Boards tab full of those (or an empty-state where
+  // boards should be) reads as a broken feature rather than an unused one — so
+  // the tab itself is absent until there is a board with something in it.
+  const monetizedBoards = useMemo(
+    () =>
+      boards.filter((b) =>
+        (collectionsByBoard.get(b.id) ?? []).some((cid) => storefrontCollectionIds.has(cid)),
+      ),
+    [boards, collectionsByBoard, storefrontCollectionIds],
+  );
+
+  // The tab can vanish under a creator standing in it (the last board's
+  // collection was taken down) — move them back rather than leave them on a tab
+  // that no longer renders.
+  useEffect(() => {
+    if (monetizedBoards.length === 0) setTab("collections");
+  }, [monetizedBoards.length]);
+
   if (sfLoading) {
     return (
-      <AppShell title="My Store" backButton backTo="/dashboard">
+      <AppShell title="My Store" backButton backTo="/dashboard" hideWallet>
         <SkeletonRows />
       </AppShell>
     );
@@ -634,7 +731,7 @@ function StorefrontPage() {
 
   if (!storefront) {
     return (
-      <AppShell title="My Store" backButton backTo="/dashboard">
+      <AppShell title="My Store" backButton backTo="/dashboard" hideWallet>
         <div className="rounded-2xl border border-dashed border-border bg-surface/40 p-12 text-center">
           <p className="text-sm text-muted-foreground">
             Your storefront is being set up. Refresh in a moment.
@@ -654,6 +751,7 @@ function StorefrontPage() {
       backButton
       backTo="/dashboard"
       inlineActions
+      hideWallet
       actions={
         <Link
           to="/s/$slug"
@@ -664,6 +762,8 @@ function StorefrontPage() {
         </Link>
       }
     >
+      <FlowIntroGate flow="store" />
+
       {/* Background band */}
       <div className="relative -mx-4 mb-4 h-40 overflow-hidden sm:-mx-6">
         <div
@@ -758,36 +858,40 @@ function StorefrontPage() {
         </div>
       </div>
 
-      {/* Tabs */}
-      <div className="mb-4 flex items-center justify-center gap-1 rounded-full border border-border bg-surface p-1">
-        <button
-          onClick={() => setTab("collections")}
-          className={`flex-1 rounded-full px-4 py-2 text-sm font-semibold transition ${
-            tab === "collections"
-              ? "bg-foreground text-background"
-              : "text-muted-foreground hover:text-foreground"
-          }`}
-        >
-          Collections
-        </button>
-        <button
-          onClick={() => setTab("boards")}
-          className={`flex-1 rounded-full px-4 py-2 text-sm font-semibold transition ${
-            tab === "boards"
-              ? "bg-foreground text-background"
-              : "text-muted-foreground hover:text-foreground"
-          }`}
-        >
-          Boards
-        </button>
-      </div>
+      {/* Tabs. A single-tab switcher is just a label, so the strip only appears
+          once there is a board to switch to — see monetizedBoards. */}
+      {monetizedBoards.length > 0 && (
+        <div className="mb-4 flex items-center justify-center gap-1 rounded-full border border-border bg-surface p-1">
+          <button
+            onClick={() => setTab("collections")}
+            className={`flex-1 rounded-full px-4 py-2 text-sm font-semibold transition ${
+              tab === "collections"
+                ? "bg-foreground text-background"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            Collections
+          </button>
+          <button
+            onClick={() => setTab("boards")}
+            className={`flex-1 rounded-full px-4 py-2 text-sm font-semibold transition ${
+              tab === "boards"
+                ? "bg-foreground text-background"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            Boards
+          </button>
+        </div>
+      )}
 
       {/* Section header */}
       <section>
         <div className="mb-4 flex items-center justify-between">
           <h3 className="font-display text-base font-semibold">{"\n"}</h3>
           <div className="flex items-center gap-2">
-            {(tab === "collections" ? storefrontCollections.length : boards.length) >= 2 && (
+            {(tab === "collections" ? storefrontCollections.length : monetizedBoards.length) >=
+              2 && (
               <button
                 onClick={() => setReorderOpen(true)}
                 className="inline-flex items-center gap-1 rounded-full border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground transition hover:text-foreground"
@@ -867,7 +971,7 @@ function StorefrontPage() {
                     brandColor={brandColor}
                     shareUrl={collectionShareUrl(storefront.slug, c.slug)}
                     storeName={storefront.name}
-                    onOpen={() => setViewCollectionFor(c.id)}
+                    onOpen={() => void openCollection(c.id)}
                     onEditCover={() => setCoverPickerFor(c.id)}
                     onRemove={() => {
                       if (
@@ -875,7 +979,7 @@ function StorefrontPage() {
                           `Remove "${c.name}" from storefront? Its pins go back to available-to-attach and their products are detached.`,
                         )
                       ) {
-                        hideCollection.mutate(c.id);
+                        takeDownCollectionSoon(c.id, c.name);
                       }
                     }}
                   />
@@ -883,25 +987,9 @@ function StorefrontPage() {
               })}
             </div>
           )
-        ) : boards.length === 0 ? (
-          <div className="rounded-2xl border border-dashed border-border bg-surface/40 p-10 text-center">
-            <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-gradient-primary shadow-glow">
-              <Layers className="h-6 w-6 text-primary-foreground" />
-            </div>
-            <h4 className="mt-4 font-display text-base font-semibold">No boards yet</h4>
-            <p className="mx-auto mt-2 max-w-xs text-sm text-muted-foreground">
-              Boards group your collections — like Pinterest folders.
-            </p>
-            <button
-              onClick={() => setShowNewBoard(true)}
-              className="mt-5 inline-flex items-center gap-1.5 rounded-full bg-gradient-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-glow"
-            >
-              <Plus className="h-3.5 w-3.5" /> New board
-            </button>
-          </div>
         ) : (
           <div className="grid grid-cols-2 gap-4">
-            {boards.map((b) => {
+            {monetizedBoards.map((b) => {
               const memberIds = collectionsByBoard.get(b.id) ?? [];
               const memberCollections = collections.filter(
                 (c) => memberIds.includes(c.id) && storefrontCollectionIds.has(c.id),
@@ -954,7 +1042,7 @@ function StorefrontPage() {
       {/* Dialogs */}
       {showNewCollection && (
         <NewCollectionDialog
-          onCancel={() => setShowNewCollection(false)}
+          onCancel={closeNewCollection}
           onCreate={(v) => createCollection.mutate(v)}
           pending={createCollection.isPending}
         />
@@ -983,23 +1071,10 @@ function StorefrontPage() {
               const url = await uploadCover(file, "collections");
               setCollectionCover.mutate({ id: coverPickerFor, url });
             } catch (e) {
-              toast.error((e as Error).message);
+              notifyProblem((e as Error).message);
             }
           }}
           onClose={() => setCoverPickerFor(null)}
-        />
-      )}
-
-      {viewCollectionFor && collections.find((c) => c.id === viewCollectionFor) && (
-        <CollectionPinsDialog
-          collection={collections.find((c) => c.id === viewCollectionFor)!}
-          pins={pins.filter((p) => p.collection_id === viewCollectionFor)}
-          onClose={() => {
-            setViewCollectionFor(null);
-            if (search.collection) {
-              navigate({ search: { collection: undefined } as never, replace: true });
-            }
-          }}
         />
       )}
 
@@ -1013,7 +1088,7 @@ function StorefrontPage() {
           brandColor={brandColor}
           onOpenCollection={(id) => {
             setViewBoardFor(null);
-            setViewCollectionFor(id);
+            void openCollection(id);
           }}
           onCreateCollection={() => {
             setViewBoardFor(null);
@@ -1090,7 +1165,7 @@ function StorefrontPage() {
                     coverColor: c.cover_color,
                   };
                 })
-              : boards.map((b) => {
+              : monetizedBoards.map((b) => {
                   const memberIds = collectionsByBoard.get(b.id) ?? [];
                   const memberCollections = collections.filter(
                     (c) => memberIds.includes(c.id) && storefrontCollectionIds.has(c.id),
@@ -1127,6 +1202,7 @@ function StorefrontPage() {
           onClose={() => setReorderOpen(false)}
         />
       )}
+      {pinterestGate.gate}
     </AppShell>
   );
 }
@@ -1566,7 +1642,7 @@ function NewCollectionDialog({
         setLinkError(null);
       }
     } catch {
-      toast.error("Clipboard access blocked — paste with ⌘/Ctrl+V");
+      notifyProblem("Clipboard access blocked — paste with ⌘/Ctrl+V");
     }
   };
 
@@ -2112,104 +2188,6 @@ function ModalShell({ children, onClose }: { children: React.ReactNode; onClose:
       onClick={onClose}
     >
       <div onClick={(e) => e.stopPropagation()}>{children}</div>
-    </div>
-  );
-}
-
-function CollectionPinsDialog({
-  collection,
-  pins,
-  onClose,
-}: {
-  collection: Collection;
-  pins: Pin[];
-  onClose: () => void;
-}) {
-  const { data: products = [] } = useQuery({
-    queryKey: ["collection-products", collection.id],
-    queryFn: async () => {
-      const { data: userRes } = await supabase.auth.getUser();
-      const userId = userRes.user?.id;
-      if (!userId) return [];
-      const { data, error } = await supabase
-        .from("storefront_products")
-        .select("id,title,image_url,affiliate_url,price_cents,commission_pct")
-        .eq("collection_id", collection.id)
-        .eq("user_id", userId)
-        .order("created_at", { ascending: false });
-      if (error) throw error;
-      return data as {
-        id: string;
-        title: string;
-        image_url: string | null;
-        affiliate_url: string;
-        price_cents: number | null;
-        commission_pct: number | null;
-      }[];
-    },
-  });
-
-  const totalItems = pins.length + products.length;
-
-  return (
-    <div
-      className="fixed inset-0 z-[60] flex items-end justify-center bg-black/50 p-0 sm:items-center sm:p-4"
-      onClick={onClose}
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-lg overflow-hidden rounded-t-2xl border border-border bg-surface shadow-xl sm:rounded-2xl"
-      >
-        <div className="flex items-center justify-between border-b border-border/60 px-4 py-3">
-          <div>
-            <h3 className="text-sm font-semibold">{collection.name}</h3>
-            <p className="text-mini text-muted-foreground">
-              {totalItems} item{totalItems === 1 ? "" : "s"}
-            </p>
-          </div>
-          <button onClick={onClose} className="text-xs text-muted-foreground hover:text-foreground">
-            Close
-          </button>
-        </div>
-        <div className="max-h-[70vh] overflow-y-auto p-4">
-          {totalItems === 0 ? (
-            <div className="rounded-xl border border-dashed border-border bg-surface-2/40 p-6 text-center">
-              <p className="text-xs text-muted-foreground">No items in this collection yet.</p>
-              <Link
-                to="/collections/$id/attach"
-                params={{ id: collection.id }}
-                className="mt-3 inline-flex items-center gap-1.5 rounded-full bg-gradient-primary px-4 py-2 text-xs font-medium text-primary-foreground shadow-glow"
-              >
-                <Sparkles className="h-3.5 w-3.5" /> Attach products
-              </Link>
-            </div>
-          ) : (
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-              {products.map((p) => (
-                <SuggestionCard
-                  key={`prod-${p.id}`}
-                  title={p.title}
-                  thumbnail={p.image_url}
-                  source={hostBrand(p.affiliate_url)}
-                  link={p.affiliate_url}
-                  price={realProductPrice(p.price_cents)}
-                  commissionPct={p.commission_pct}
-                />
-              ))}
-              {pins.map((p) => (
-                <SuggestionCard
-                  key={`pin-${p.id}`}
-                  title={p.title}
-                  thumbnail={p.image_url}
-                  source={hostBrand(p.external_url ?? "")}
-                  link={p.external_url ?? ""}
-                  price={null}
-                />
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
     </div>
   );
 }

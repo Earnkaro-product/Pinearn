@@ -11,7 +11,6 @@ import {
   ExternalLink,
   Hand,
   ImagePlus,
-  Info,
   LayoutGrid,
   Link2,
   MousePointerClick,
@@ -35,6 +34,9 @@ import {
   hasAnalyzedThisSession,
   markAnalyzedThisSession,
 } from "@/components/boost-analyzer";
+import { FlowIntro } from "@/components/flow-intro";
+import { PinterestConnectPanel } from "@/components/pinterest-gate";
+import { usePinterestConnection } from "@/hooks/use-pinterest-connect";
 import { useHealthScore, type HealthData } from "@/hooks/use-health-score";
 import type { PinterestProfileSnapshot } from "@/lib/pinterest-profile.functions";
 import {
@@ -72,6 +74,11 @@ const SUB_ICONS: Record<SubScoreKey, typeof Type> = {
 function BoostPinsPage() {
   const navigate = useNavigate();
   const { report, data, isLoading, refetch, isFetching } = useHealthScore();
+  // Every input to this score — Pin copy, board structure, the Pinterest profile,
+  // how recently anything was posted — is read from Pinterest. Without the
+  // connection there is nothing to score, so the screen asks for it instead of
+  // rendering a 0 and blaming the creator for it.
+  const { usable: pinterestUsable, isLoading: connectionLoading } = usePinterestConnection();
 
   // A fix flow stashes the score the user last saw; climb from it so the
   // improvement is felt the moment they land back here.
@@ -82,11 +89,14 @@ function BoostPinsPage() {
   // rather than dumping the user straight into the deck.
   const [briefingKey, setBriefingKey] = useState<SubScoreKey | null>(null);
 
-  // The "analysing your Pinterest" choreography — once per session, and never
+  // The pre-score sequence: "intro" is the three education screens (the
+  // problem, what the AI does, the CTA), "scan" is the analyzer choreography
+  // the CTA triggers, null is the score itself. Once per session, and never
   // when returning from a fix flow (the climbing score IS that moment).
-  const [analyzing, setAnalyzing] = useState(
-    () => animateFrom == null && !hasAnalyzedThisSession(),
+  const [introPhase, setIntroPhase] = useState<"intro" | "scan" | null>(() =>
+    animateFrom == null && !hasAnalyzedThisSession() ? "intro" : null,
   );
+  const analyzing = introPhase !== null;
 
   // Record the score for the dashboard's "since last visit" delta — once the
   // real number is on screen.
@@ -136,14 +146,30 @@ function BoostPinsPage() {
     <AppShell title="Pinterest SEO" backButton backTo="/dashboard">
       <div className="mx-auto max-w-2xl">
         <AnimatePresence mode="wait">
-          {analyzing ? (
+          {/* `report.isEmpty` is the deciding half: a creator who connected once
+              and later disconnected still has real imported Pins to score, and
+              gating those behind a reconnect prompt would hide work they can
+              still act on. Only an empty score AND no connection is a gate. */}
+          {!connectionLoading && !pinterestUsable && (report?.isEmpty ?? true) ? (
+            <PinterestConnectPanel
+              key="gate"
+              title="Connect Pinterest to get your SEO score"
+              reason="Your score is built from your real Pins, boards and Pinterest profile — the titles, descriptions and how recently you posted. Without access to them there is nothing here to measure."
+              bullets={[
+                "Read-only to begin with: we score what's already on your account.",
+                "Nothing on Pinterest is edited unless you apply a fix yourself.",
+              ]}
+            />
+          ) : introPhase === "intro" ? (
+            <FlowIntro key="intro" flow="pinterest-seo" onDone={() => setIntroPhase("scan")} />
+          ) : introPhase === "scan" ? (
             <BoostAnalyzer
               key="analyzer"
               counts={data ? { pins: data.pins.length, boards: data.boards.length } : null}
               ready={!!report}
               onDone={() => {
                 markAnalyzedThisSession();
-                setAnalyzing(false);
+                setIntroPhase(null);
               }}
             />
           ) : isLoading || !report ? (
@@ -163,19 +189,10 @@ function BoostPinsPage() {
                   aria-hidden
                   className="pointer-events-none absolute -top-28 left-1/2 h-72 w-72 -translate-x-1/2 rounded-full bg-primary/10 blur-3xl"
                 />
-                {/* Quiet, icon-only controls — the scoring explainer and the
-                    recheck, kept out of the main composition. A full-width
-                    "How your score works" row used to sit under the hero;
-                    as an icon it costs no line of text. */}
-                <div className="absolute right-3 top-3 z-10 flex items-center gap-0.5">
-                  <button
-                    type="button"
-                    onClick={() => setScoringSheet(true)}
-                    aria-label="How your score works"
-                    className="grid h-9 w-9 place-items-center rounded-full text-muted-foreground/60 transition hover:bg-surface-2 hover:text-primary"
-                  >
-                    <Info className="h-4 w-4" />
-                  </button>
+                {/* Recheck stays an icon in the corner; the scoring explainer
+                    moved to a small pill in the hero footer, where a label
+                    reads clearer than an info glyph. */}
+                <div className="absolute right-3 top-3 z-10">
                   <button
                     type="button"
                     onClick={() => refetch()}
@@ -188,12 +205,20 @@ function BoostPinsPage() {
 
                 <div className="relative flex flex-col items-center text-center">
                   <ScoreRing score={report.overall} from={animateFrom} />
+                  <button
+                    type="button"
+                    onClick={() => setScoringSheet(true)}
+                    className="mt-4 inline-flex items-center gap-1 rounded-full border border-border/70 bg-surface/80 px-3 py-1.5 text-xs font-medium text-muted-foreground transition hover:border-primary/40 hover:text-primary"
+                  >
+                    How your score works
+                    <ChevronRight className="h-3.5 w-3.5" />
+                  </button>
                 </div>
               </div>
 
               {/* ---- One prioritized plan (grid + list merged) ---- */}
               <div className="mt-5">
-                <h2 className="mb-3 font-display text-lg font-semibold">Biggest wins first</h2>
+                <h2 className="mb-3 font-display text-lg font-semibold">Fix your Pinterest now</h2>
                 <div className="grid gap-2.5">
                   {ranked.map((s, i) => (
                     <BoostRow key={s.key} sub={s} rank={i} onFix={() => setBriefingKey(s.key)} />
@@ -912,7 +937,6 @@ function ScoreRing({ score, from }: { score: number; from?: number | null }) {
 
 function BoostRow({ sub, rank, onFix }: { sub: SubScore; rank: number; onFix: () => void }) {
   const tone = scoreTone(sub.score);
-  const Icon = SUB_ICONS[sub.key];
   const optimized = sub.score >= 100;
 
   // Points earned out of this area's max contribution to the overall score,
@@ -924,9 +948,15 @@ function BoostRow({ sub, rank, onFix }: { sub: SubScore; rank: number; onFix: ()
   if (optimized) {
     return (
       <div className="flex items-center gap-3.5 rounded-2xl border border-border bg-surface/60 px-4 py-4">
-        <div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-emerald-500/10 text-emerald-500">
-          <Icon className="h-5 w-5" />
+        <div className="flex w-16 shrink-0 flex-col items-center">
+          <span className="text-base font-extrabold tabular-nums leading-tight text-emerald-500">
+            {totalPts}/{totalPts}
+          </span>
+          <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+            pts
+          </span>
         </div>
+        <div className="h-9 w-px shrink-0 bg-border" />
         <p className="min-w-0 flex-1 truncate text-lead font-semibold">{sub.label}</p>
         <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-500" />
       </div>
@@ -950,25 +980,24 @@ function BoostRow({ sub, rank, onFix }: { sub: SubScore; rank: number; onFix: ()
           : "border-border bg-surface hover:bg-surface-2/60"
       }`}
     >
-      <div
-        className={`grid h-11 w-11 shrink-0 place-items-center rounded-xl ${tone.bg} ${tone.text}`}
-      >
-        <Icon className="h-5 w-5" />
+      <div className="flex w-16 shrink-0 flex-col items-center">
+        <span className={`text-base font-extrabold tabular-nums leading-tight ${tone.text}`}>
+          {earnedPts}/{totalPts}
+        </span>
+        <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+          pts
+        </span>
       </div>
+      <div className="h-9 w-px shrink-0 bg-border" />
       <div className="min-w-0 flex-1">
         <p className="truncate text-lead font-semibold">{sub.label}</p>
-        <div className="mt-2 flex items-center gap-2.5">
-          <div className="h-2 flex-1 overflow-hidden rounded-full bg-surface-2">
-            <motion.div
-              className={`h-full rounded-full ${tone.bar}`}
-              initial={false}
-              animate={{ width: `${sub.score}%` }}
-              transition={{ duration: 0.9, ease: [0.22, 1, 0.36, 1] }}
-            />
-          </div>
-          <span className={`shrink-0 text-right text-xs font-extrabold tabular-nums ${tone.text}`}>
-            {earnedPts}/{totalPts} pts
-          </span>
+        <div className="mt-2 h-2 overflow-hidden rounded-full bg-surface-2">
+          <motion.div
+            className={`h-full rounded-full ${tone.bar}`}
+            initial={false}
+            animate={{ width: `${sub.score}%` }}
+            transition={{ duration: 0.9, ease: [0.22, 1, 0.36, 1] }}
+          />
         </div>
       </div>
       <ChevronRight className="h-5 w-5 shrink-0 text-muted-foreground/50 transition group-hover:translate-x-0.5 group-hover:text-muted-foreground" />
@@ -981,21 +1010,26 @@ function BoostRow({ sub, rank, onFix }: { sub: SubScore; rank: number; onFix: ()
 // Ranked by weight, so the sheet reads in the order the pts actually matter.
 const SCORING_ORDER: SubScoreKey[] = ["pinSeo", "boardStructure", "freshness", "profile"];
 
-// One colour per area, reused by the split bar and its legend. Four distinct
-// hues rather than four shades of one, so a 10-pt segment is still tellable
-// apart from a 40-pt one at the 10px height the bar is drawn at.
-const WEIGHT_COLORS = ["bg-rose-500", "bg-violet-400", "bg-amber-400", "bg-sky-400"];
+// One colour per area. Four distinct hues rather than four shades of one, so a
+// 10-pt segment is still tellable apart from a 40-pt one at the height the bar
+// is drawn at. `track` is the same hue unbanked, so a segment reads as
+// "earned of held" on its own — which is what retired the text legend.
+const WEIGHT_COLORS: { fill: string; track: string; dot: string }[] = [
+  { fill: "bg-rose-500", track: "bg-rose-500/15", dot: "bg-rose-500" },
+  { fill: "bg-violet-400", track: "bg-violet-400/15", dot: "bg-violet-400" },
+  { fill: "bg-amber-400", track: "bg-amber-400/15", dot: "bg-amber-400" },
+  { fill: "bg-sky-400", track: "bg-sky-400/15", dot: "bg-sky-400" },
+];
 
 /**
  * The scoring model, end to end: what the 100 pts are, how they're split, how
  * each slice is earned, and what moves it.
  *
- * The accordion this replaced could only afford four stacked paragraphs of
- * criteria, which answered "what are the rules" but never "where did MY 26 pts
- * come from". Here the split is drawn as one 100-pt bar, every area shows the
- * pts it has banked against the pts it holds, and the bulb is one tap away —
- * so the same sheet works for a first-timer and for someone auditing a number
- * they think is wrong.
+ * Carried by one graphic rather than prose. The 100-pt bar shows both the split
+ * (segment width = pts held) and the standing (solid = pts banked), which let
+ * its text legend go; each area is then one row — number first, criteria as a
+ * caption — so the sheet answers "where did MY 13 pts come from" at a glance
+ * and only rewards reading if you're auditing a number you think is wrong.
  */
 function HowScoringSheet({
   report,
@@ -1019,8 +1053,9 @@ function HowScoringSheet({
                 How your score works
               </h2>
               <p className="mt-1 text-mini font-semibold text-muted-foreground">
-                <span className="font-bold text-foreground">{report.overall}</span> of 100 pts, over
-                four areas
+                <span className="font-bold text-foreground">{report.overall}</span> of 100 pts
+                banked · <span className="font-bold text-foreground">{100 - report.overall}</span>{" "}
+                still on the table
               </p>
             </div>
             <button
@@ -1033,80 +1068,81 @@ function HowScoringSheet({
             </button>
           </div>
 
-          {/* The split, drawn once. Four segments sized by the pts they carry —
-              the fastest possible answer to "which of these is worth my time". */}
-          <div className="mt-4 flex h-2.5 gap-0.5 overflow-hidden rounded-full">
-            {SCORING_ORDER.map((k, i) => (
-              <motion.span
-                key={k}
-                className={`${WEIGHT_COLORS[i]} first:rounded-l-full last:rounded-r-full`}
-                initial={{ width: 0 }}
-                animate={{ width: `${maxPointsFor(k)}%` }}
-                transition={{ duration: 0.6, delay: 0.08 + i * 0.05, ease: [0.22, 1, 0.36, 1] }}
-              />
-            ))}
-          </div>
-          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
-            {SCORING_ORDER.map((k, i) => (
-              <span
-                key={k}
-                className="inline-flex items-center gap-1.5 text-micro font-semibold text-muted-foreground"
-              >
-                <span className={`h-1.5 w-1.5 rounded-full ${WEIGHT_COLORS[i]}`} />
-                {SUB_SCORE_LABELS[k]}
-                <span className="font-bold text-foreground/70">{maxPointsFor(k)} pts</span>
-              </span>
-            ))}
+          {/* The whole model in one graphic: segment width is the pts an area
+              holds, the solid part is what's banked. Naming the segments used
+              to cost two wrapped lines of legend — the cards below carry the
+              same colour as a dot, so the bar can stay wordless. */}
+          <div className="mt-4 flex h-3 items-stretch gap-1">
+            {SCORING_ORDER.map((k, i) => {
+              const maxPts = maxPointsFor(k);
+              const pct = Math.round((pointsEarned(k, subByKey(k).score) / maxPts) * 100);
+              return (
+                <div
+                  key={k}
+                  style={{ flex: `${maxPts} 1 0%` }}
+                  className={`relative overflow-hidden rounded-full ${WEIGHT_COLORS[i].track}`}
+                >
+                  <motion.span
+                    className={`absolute inset-y-0 left-0 rounded-full ${WEIGHT_COLORS[i].fill}`}
+                    initial={{ width: 0 }}
+                    animate={{ width: `${pct}%` }}
+                    transition={{ duration: 0.6, delay: 0.1 + i * 0.06, ease: [0.22, 1, 0.36, 1] }}
+                  />
+                </div>
+              );
+            })}
           </div>
         </div>
 
-        <div className="no-scrollbar min-h-0 flex-1 space-y-2.5 overflow-y-auto px-5 pb-3">
-          {SCORING_ORDER.map((k) => {
-            const sub = subByKey(k);
-            const Icon = SUB_ICONS[k];
-            const maxPts = maxPointsFor(k);
-            const nowPts = pointsEarned(k, sub.score);
-            const tone = scoreTone(sub.score);
-            return (
-              <div key={k} className="rounded-2xl border border-border bg-surface p-3.5">
-                <div className="flex items-center gap-3">
+        {/* One row per area, on the divided-list pattern rather than four
+            bordered cards — the criteria line is a caption on its row, so the
+            eye lands on "0.4 / 40" before it lands on any prose. */}
+        <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto px-5 pb-3">
+          <div className="divide-y divide-border/60 overflow-hidden rounded-2xl border border-border bg-surface">
+            {SCORING_ORDER.map((k, i) => {
+              const sub = subByKey(k);
+              const Icon = SUB_ICONS[k];
+              const maxPts = maxPointsFor(k);
+              const nowPts = pointsEarned(k, sub.score);
+              const tone = scoreTone(sub.score);
+              return (
+                <div key={k} className="flex items-center gap-3 p-3.5">
                   <span
-                    className={`grid h-9 w-9 shrink-0 place-items-center rounded-xl ${tone.bg} ${tone.text}`}
+                    className={`relative grid h-9 w-9 shrink-0 place-items-center rounded-xl ${tone.bg} ${tone.text}`}
                   >
                     <Icon className="h-4 w-4" />
+                    {/* The dot the bar above dropped its legend for. */}
+                    <span
+                      className={`absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full ring-2 ring-surface ${WEIGHT_COLORS[i].dot}`}
+                    />
                   </span>
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-body font-bold leading-tight">
-                      {SUB_SCORE_LABELS[k]}
-                    </p>
-                    <p className={`mt-0.5 text-mini font-bold tabular-nums ${tone.text}`}>
-                      {pointsLabel(nowPts)}
-                      <span className="font-semibold text-muted-foreground">/{maxPts} pts</span>
+                    <p className="text-body font-bold leading-tight">{SUB_SCORE_LABELS[k]}</p>
+                    <p className="mt-0.5 text-micro leading-snug text-muted-foreground">
+                      {SCORE_CRITERIA[k]}
                     </p>
                   </div>
+                  <p className={`shrink-0 text-body font-bold tabular-nums ${tone.text}`}>
+                    {pointsLabel(nowPts)}
+                    <span className="text-mini font-semibold text-muted-foreground">/{maxPts}</span>
+                  </p>
                   <SeoInsightButton label={SUB_SCORE_LABELS[k]} onClick={() => onExplain(k)} />
                 </div>
-                <p className="mt-2.5 text-mini leading-relaxed text-muted-foreground">
-                  {SCORE_CRITERIA[k]}
-                </p>
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
 
           {/* The one rule that isn't per-area, and the one thing people get
-              wrong: the pts are a share, not a checklist you complete. Two
-              paragraphs of reassurance became two lines — the rule, then the
-              safety net. */}
-          <div className="rounded-2xl bg-surface-2/60 p-3.5 ring-1 ring-inset ring-border/60">
-            <p className="text-mini font-bold uppercase tracking-[0.12em] text-muted-foreground">
-              How pts are earned
+              wrong: pts are a share, not a checklist you complete. Two
+              paragraphs under a heading became two labelled lines. */}
+          <div className="mt-2.5 space-y-2 rounded-2xl bg-surface-2/60 p-3.5 ring-1 ring-inset ring-border/60">
+            <p className="text-mini leading-snug text-foreground/80">
+              <span className="font-bold text-foreground">Pts are a share.</span> Half your pins
+              passing banks half of Pin SEO&rsquo;s {maxPointsFor("pinSeo")}.
             </p>
-            <p className="mt-1.5 text-mini leading-relaxed text-foreground/80">
-              Each area pays out its pts in proportion to what passes — half your pins passing banks
-              half of Pin SEO's {maxPointsFor("pinSeo")} pts.
-            </p>
-            <p className="mt-1.5 text-mini leading-relaxed text-foreground/80">
-              Nothing is deducted for trying, and every fix is undoable.
+            <p className="text-mini leading-snug text-foreground/80">
+              <span className="font-bold text-foreground">Nothing is deducted.</span> Every fix is
+              undoable.
             </p>
           </div>
         </div>

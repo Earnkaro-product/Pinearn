@@ -1,7 +1,7 @@
 import { useCallback, useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { toast } from "sonner";
+import { notifyDone, notifyProblem } from "@/lib/notify";
 import {
   getPinterestSyncState,
   syncPinterestAccount,
@@ -62,7 +62,10 @@ export function usePinterestSyncState() {
     queryKey: PINTEREST_SYNC_STATE_KEY,
     queryFn: () => load({ data: undefined as unknown as never }),
     staleTime: 60_000,
-    retry: false,
+    // One retry, not zero: every Pinterest gate in the app reads this answer,
+    // and a single hiccup used to leave a connected account looking
+    // unconnected until something else forced a refetch.
+    retry: 1,
   });
 }
 
@@ -178,26 +181,29 @@ export function lastSyncedLabel(state: PinterestSyncState | null): string {
   return `Synced ${Math.round(hrs / 24)}d ago`;
 }
 
-/** Shared toast for a manual sync, so every button reports the same way. */
+/**
+ * What a manual "Sync now" reports back.
+ *
+ * Only the things that are true *because the creator just pressed the button*
+ * get a toast. The two conditions that used to be announced here — a dead
+ * connection, and an account holding nothing but saved Pins — are standing
+ * facts about the account, and {@link PinterestSyncBanner} states both of them
+ * for as long as they hold. Toasting them as well meant the same sentence
+ * appeared twice and then half of it disappeared.
+ */
 export function reportSyncResult(result: PinterestSyncResult) {
-  if (result.needsReconnect) {
-    toast.error("Pinterest needs reconnecting");
-    return;
-  }
+  // Silence is correct here: the banner this button sits in re-renders into its
+  // "Pinterest needs reconnecting" state, with the Reconnect action attached.
+  if (result.needsReconnect) return;
   if (!result.ok) {
-    toast.error(result.error ?? "Pinterest sync failed");
+    notifyProblem(result.error ?? "Pinterest sync failed");
     return;
   }
   const bits: string[] = [];
   const { pins, boards } = result;
-  // Nothing imported, but the account isn't empty — the pins are all saves.
-  if (pins.created + pins.updated + pins.rehomed === 0 && pins.savedSkipped > 0) {
-    toast.info(
-      `${pins.savedSkipped} saved ${pins.savedSkipped === 1 ? "pin" : "pins"} found — ShopMyPin only works on Pins you created.`,
-      { duration: 7000 },
-    );
-    return;
-  }
+  // Nothing imported and the account is all saves — the banner explains that in
+  // full, and it will still be explaining it after a toast would have gone.
+  if (pins.created + pins.updated + pins.rehomed === 0 && pins.savedSkipped > 0) return;
   if (pins.created) bits.push(`${pins.created} new ${pins.created === 1 ? "pin" : "pins"}`);
   if (pins.updated) bits.push(`${pins.updated} updated`);
   if (pins.removed) bits.push(`${pins.removed} removed`);
@@ -205,5 +211,5 @@ export function reportSyncResult(result: PinterestSyncResult) {
     bits.push(`${boards.created} new ${boards.created === 1 ? "board" : "boards"}`);
   if (boards.updated)
     bits.push(`${boards.updated} board ${boards.updated === 1 ? "edit" : "edits"}`);
-  toast.success(bits.length ? `Pinterest synced — ${bits.join(", ")}` : "Pinterest is up to date");
+  notifyDone(bits.length ? `Pinterest synced — ${bits.join(", ")}` : "Pinterest is up to date");
 }

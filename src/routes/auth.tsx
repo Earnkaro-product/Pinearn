@@ -4,7 +4,7 @@ import { z } from "zod";
 import { motion } from "framer-motion";
 import { supabase } from "@/integrations/supabase/client";
 import { Checkbox } from "@/components/ui/checkbox";
-import { toast } from "sonner";
+import { notifyDone, notifyProblem } from "@/lib/notify";
 import { ArrowRight, BarChart3, Loader2, Lock, Phone, Quote, Sparkles, Wand2 } from "lucide-react";
 
 const searchSchema = z.object({
@@ -96,7 +96,7 @@ function AuthPage() {
     const currentPhone = phoneRef.current?.value ?? localPhone;
     const digits = currentPhone.replace(/[^\d]/g, "").slice(0, 10);
     if (digits.length !== 10) {
-      return toast.error("Enter a valid 10-digit phone number");
+      return notifyProblem("Enter a valid 10-digit phone number");
     }
     const p = `${country.dial}${digits}`;
     setLocalPhone(digits);
@@ -158,11 +158,11 @@ function AuthPage() {
         if (error) throw error;
       }
       if (!data.user) throw new Error("Verification failed");
-      toast.success("Signed in");
+      notifyDone("Signed in");
       await routeAfterAuth(navigate, fallback, data.user.id);
     } catch (err) {
       setOtpError(true);
-      toast.error(err instanceof Error ? err.message : "Invalid code");
+      notifyProblem(err instanceof Error ? err.message : "Invalid code");
     } finally {
       setVerifying(false);
     }
@@ -267,11 +267,13 @@ function AuthPage() {
             <h1 className="font-display text-[1.6rem] font-semibold leading-tight tracking-tight">
               {step === "phone" ? "Welcome to ShopMyPin" : "Enter the code"}
             </h1>
-            <p className="mt-2 text-sm text-muted-foreground">
-              {step === "phone"
-                ? "Sign in with your phone number to continue."
-                : `We sent a code to ${phone}`}
-            </p>
+            {/* Only the OTP step gets a sub-line, and only because the number
+                the code went to is information the heading can't carry. On the
+                phone step it restated the heading, the field's placeholder and
+                the button, all of which are on screen at once. */}
+            {step === "otp" && (
+              <p className="mt-2 text-sm text-muted-foreground">We sent a code to {phone}</p>
+            )}
 
             {step === "phone" ? (
               <form onSubmit={sendCode} className="mt-5">
@@ -390,9 +392,9 @@ function AuthPage() {
                     Incorrect OTP. Please try again.
                   </div>
                 )}
-                <p className="mb-2.5 text-center text-sm text-muted-foreground">
-                  Enter 6-digit code
-                </p>
+                {/* Six boxes under "Enter the code" don't need a line telling
+                    you to enter six digits. The dummy-OTP hint stays: no SMS is
+                    actually sent in this build, so it is the only way in. */}
                 <p className="mb-3 text-center text-xs text-muted-foreground/70">
                   Dummy OTP is 123456
                 </p>
@@ -467,10 +469,6 @@ function AuthPage() {
               </form>
             )}
           </div>
-
-          <p className="mt-6 text-center text-xs text-muted-foreground">
-            Free for Pinterest creators.
-          </p>
         </motion.div>
       </div>
     </div>

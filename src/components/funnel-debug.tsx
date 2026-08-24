@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { toast } from "sonner";
+import { notifyDone, notifyProblem } from "@/lib/notify";
 import {
   AlertTriangle,
   Check,
@@ -295,8 +295,8 @@ function Header({
             onClick={() => {
               void navigator.clipboard
                 .writeText(JSON.stringify(trace, null, 2))
-                .then(() => toast.success("Trace copied as JSON"))
-                .catch(() => toast.error("Couldn't reach the clipboard"));
+                .then(() => notifyDone("Trace copied as JSON"))
+                .catch(() => notifyProblem("Couldn't reach the clipboard"));
             }}
             title="Copy the whole trace as JSON"
             className="grid h-9 w-9 place-items-center rounded-xl border border-border text-muted-foreground transition hover:text-foreground"

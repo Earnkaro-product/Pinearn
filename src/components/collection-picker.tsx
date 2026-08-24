@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, ChevronLeft, Image as ImageIcon, Loader2, Plus, Store } from "lucide-react";
-import { toast } from "sonner";
+import { notifyProblem } from "@/lib/notify";
 
 import { useOverlayChrome } from "@/components/app-sheet";
 import { supabase } from "@/integrations/supabase/client";
@@ -179,7 +179,7 @@ function CollectionsScreen({
       setName("");
       onCreated(id);
     },
-    onError: (e: Error) => toast.error(getFriendlyMessage(e)),
+    onError: (e: Error) => notifyProblem(getFriendlyMessage(e)),
   });
 
   return (

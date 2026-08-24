@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { useState } from "react";
 import { Loader2, Link2, Plus, Store, ArrowRight } from "lucide-react";
-import { toast } from "sonner";
+import { notifyDone, notifyProblem } from "@/lib/notify";
 import { SuggestionCard, realProductPrice } from "@/components/suggestion-card";
 import { AppShell } from "@/components/app-shell";
 import { supabase } from "@/integrations/supabase/client";
@@ -12,7 +12,7 @@ import { fetchLinkPreviews } from "@/lib/link-preview.functions";
 import { getFriendlyMessage } from "@/lib/friendly-error";
 import { Skeleton } from "@/components/ui/skeleton";
 
-export const Route = createFileRoute("/_authenticated/collections_/$id/attach")({
+export const Route = createFileRoute("/_authenticated/collections_/$id_/attach")({
   component: AttachToCollectionPage,
   errorComponent: ({ error }) => (
     <div className="p-6 text-sm text-destructive">{getFriendlyMessage(error)}</div>
@@ -137,9 +137,9 @@ function AttachToCollectionPage() {
       qc.invalidateQueries({ queryKey: ["collection", id] });
       qc.invalidateQueries({ queryKey: ["collections"] });
       setManualUrl("");
-      toast.success("Product added to collection");
+      notifyDone("Product added to collection");
     },
-    onError: (e: Error) => toast.error(getFriendlyMessage(e)),
+    onError: (e: Error) => notifyProblem(getFriendlyMessage(e)),
   });
 
   if (isLoading) {

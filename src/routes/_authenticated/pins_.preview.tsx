@@ -6,7 +6,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import { ArrowRight, CheckCheck, Loader2, Rocket, Sparkles } from "lucide-react";
-import { toast } from "sonner";
+import { notifyProblem } from "@/lib/notify";
 import {
   SuggestionCard,
   realProductPrice,
@@ -163,7 +163,7 @@ function PinPreviewPage() {
       }
       setLiveDone(true);
     },
-    onError: (e: Error) => toast.error(getFriendlyMessage(e)),
+    onError: (e: Error) => notifyProblem(getFriendlyMessage(e)),
   });
 
   const productCount = selectedProducts.length + stash.aiPicks.length;
@@ -180,18 +180,21 @@ function PinPreviewPage() {
 
   if (liveDone) {
     return (
-      <AppShell title="You're live" hideBottomNav>
+      <AppShell title="Monetization started" hideBottomNav>
         <LiveSuccess
           imageUrl={pin?.image_url ?? null}
           count={productCount}
-          onSeePins={() => navigate({ to: "/pins", search: {} as never })}
+          onSeePins={() => navigate({ to: "/pins", search: { filter: "all" } as never })}
         />
       </AppShell>
     );
   }
 
   return (
-    <AppShell title="Preview" backButton backTo="/pins/attach" backSearch={{ pinId }} hideBottomNav>
+    // Back normally returns to the page the dialog was opened on (real
+    // history). `backTo` is only the deep-link fallback: /pins with this pin
+    // reopened, since a directly-opened preview has nowhere to go back to.
+    <AppShell title="Preview" backButton backTo="/pins" backSearch={{ pinId }} hideBottomNav>
       {pinLoading || !pin ? (
         <div className="mx-auto max-w-xs pb-24 md:pb-8">
           <div className="overflow-hidden rounded-2xl border border-border bg-surface shadow-sm">
@@ -457,7 +460,7 @@ function LiveSuccess({
         transition={{ delay: 0.2 }}
         className="relative z-10 mt-7 font-display text-2xl font-extrabold leading-tight tracking-tight"
       >
-        You've started monetising!
+        Monetization started!
       </motion.h2>
       <motion.p
         initial={{ opacity: 0, y: 10 }}
@@ -465,8 +468,8 @@ function LiveSuccess({
         transition={{ delay: 0.3 }}
         className="relative z-10 mx-auto mt-2 max-w-[17rem] text-sm font-medium text-muted-foreground"
       >
-        Your pin is live
-        {count > 0 ? ` with ${count} product${count === 1 ? "" : "s"} attached` : ""} — every tap
+        Your shoppable link is live on this pin
+        {count > 0 ? `, with ${count} product${count === 1 ? "" : "s"} attached` : ""} — every tap
         can now earn you a commission.
       </motion.p>
 
@@ -477,7 +480,7 @@ function LiveSuccess({
         onClick={onSeePins}
         className="relative z-10 mt-8 inline-flex items-center justify-center gap-2 rounded-2xl bg-gradient-primary px-6 py-3.5 text-sm font-bold text-primary-foreground shadow-glow transition active:scale-[0.97]"
       >
-        See live pins <ArrowRight className="h-4 w-4" />
+        Check all the shoppable pins <ArrowRight className="h-4 w-4" />
       </motion.button>
     </div>
   );

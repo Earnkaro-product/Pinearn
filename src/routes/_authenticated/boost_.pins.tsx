@@ -2,26 +2,30 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { toast } from "sonner";
+import { notifyBlocked, notifyProblem } from "@/lib/notify";
 import {
   Check,
   CheckCheck,
+  ChevronDown,
+  Clock3,
   Coins,
   Eye,
+  EyeOff,
+  Flame,
   Image as ImageIcon,
   LayoutGrid,
   Loader2,
   MousePointerClick,
   Pencil,
   RefreshCw,
+  ShieldCheck,
   Sparkles,
-  Trophy,
+  TrendingUp,
   X,
 } from "lucide-react";
 import { GRADIENTS } from "./pins";
 import { AppShell } from "@/components/app-shell";
 import {
-  FilterChipRow,
   LaunchScreen,
   PickerHeader,
   QueueToolbar,
@@ -29,7 +33,6 @@ import {
   SelectDot,
   SelectionBar,
 } from "@/components/boost-picker-kit";
-import { useLongPress } from "@/hooks/use-long-press";
 import { metricLabel } from "@/lib/boost-picker";
 import {
   ApproveAllSheet,
@@ -56,7 +59,6 @@ import {
 import type { HealthData } from "@/hooks/use-health-score";
 import {
   boardIdOf,
-  byIssueCountDesc,
   maxPointsFor,
   PIN_DESC_MAX,
   PIN_DESC_MIN,
@@ -68,13 +70,24 @@ import {
   SCORE_CRITERIA,
   SUB_SCORE_WEIGHTS,
 } from "@/lib/health-score";
+import {
+  ANALYTICS_WINDOW_DAYS,
+  buildImpactContext,
+  ctrLabel,
+  DIAGNOSIS_META,
+  GROUP_META,
+  IMPACT_CRITERIA,
+  reachLabel,
+  scorePins,
+  type PinImpact,
+} from "@/lib/pin-impact";
 
 // How to drive the deck — surfaced any time via the header's info button. Each
 // step is one action, not a sentence explaining it: the reader is mid-flow with
 // the controls in front of them, so naming the control is the whole instruction.
 const PIN_GUIDE_STEPS = [
+  "Start with High impact — that's where the reach is.",
   "Tap pins to queue them, then Boost.",
-  "Hold a pin to see what it's worth.",
   "Apply keeps the rewrite, Skip moves on.",
   "Edit the wording, or undo, anytime.",
 ];
@@ -84,13 +97,12 @@ const PIN_GUIDE_STEPS = [
 const NAV_SLOT = 72; // px per pin slot (56px pin + spacing + room to enlarge)
 const NAV_VISIBLE = 4; // whole pins visible at once
 
-// Picker sizing. The deck can be hundreds of pins, so the grid reveals a page
-// at a time instead of mounting every card the moment the screen opens — a
-// 300-card grid built in one commit is a visible jank on a phone. The Suggested
-// rail is deliberately short: it's a shortcut, not another backlog.
-const SUGGESTED_COUNT = 10;
-const SUGGESTED_BOARDS_COUNT = 6;
-const PIN_GRID_PAGE_SIZE = 15;
+// Picker sizing. The deck can be hundreds of pins, so every section reveals a
+// page at a time instead of mounting all of them the moment the screen opens —
+// a 300-card grid built in one commit is a visible jank on a phone. The
+// shortlist needs no cap here: pin-impact.ts caps the high tier itself.
+const PIN_GRID_PAGE_SIZE = 14;
+const BOARD_LIST_PAGE_SIZE = 8;
 
 export const Route = createFileRoute("/_authenticated/boost_/pins")({
   component: FixPinSeoPage,
@@ -105,6 +117,10 @@ type PinFixCard = BaseFixCard & {
   boardId: string | null;
   boardName: string | null;
   createdAt: string;
+  /** Why this pin is worth rewriting, and how much. Computed once at deck
+   * build so the picker, the ranking and the review header all read the same
+   * verdict — see lib/pin-impact.ts. */
+  impact: PinImpact;
 };
 
 /** A card is applyable only once every field holds real copy. Cards start
@@ -124,35 +140,60 @@ function hasCopy(card: BaseFixCard): boolean {
  * in it can't be mistaken for a result, and Apply stays disabled until there
  * genuinely is one. */
 function buildDeck(data: HealthData): PinFixCard[] {
-  // EVERY pin, not just the failing ones. A title inside the length bands can
-  // still be ranking for nothing, so the deck offers a keyword-grounded rewrite
-  // for all of them — with the worst first so the biggest wins come first, and
-  // a before/after score on each card so an already-good pin is never
-  // "improved" into something weaker.
+  // ONLY the failing pins. A pin that already passes has no points to give,
+  // and offering to "fix" it reads as noise (or worse, as an invitation to
+  // break something that's working) — so it simply isn't on this screen. When
+  // nothing fails, the deck is empty and the page shows the optimized state.
   const boardNames = new Map(data.boards.map((b) => [b.id, b.name]));
-  return byIssueCountDesc(data.pins, pinSeoIssues).map((p) => ({
+
+  // Context comes from EVERY pin, not just the failing ones. The yardsticks are
+  // "what does reach look like on this account" and "what does a pin on this
+  // board get when it lands" — and the pins that answer those questions best
+  // are precisely the healthy ones this deck excludes.
+  const impactPins = data.pins.map((p) => ({
     id: p.id,
-    title: p.title?.trim() || "Untitled pin",
-    issues: pinSeoIssues(p),
-    image_url: p.image_url,
+    title: p.title,
+    description: p.description,
     impressions: p.impressions ?? 0,
     clicks: p.clicks ?? 0,
     boardId: boardIdOf(p),
-    boardName: boardIdOf(p) ? (boardNames.get(boardIdOf(p) as string) ?? null) : null,
     createdAt: p.created_at,
-    fields: [
-      { key: "title", label: "Title", value: "", min: PIN_TITLE_MIN, max: PIN_TITLE_MAX },
-      {
-        key: "description",
-        label: "Description",
-        value: "",
-        min: PIN_DESC_MIN,
-        max: PIN_DESC_MAX,
-        multiline: true,
-      },
-    ],
-    original: { title: p.title, description: p.description },
   }));
+  const impacts = scorePins(impactPins, buildImpactContext(impactPins));
+
+  // Ranked by opportunity, not by how broken the copy is. Issue count was the
+  // old sort and it's the wrong signal on its own: three failing checks on a
+  // pin nobody sees is worth less than one on a pin with 5K views behind it,
+  // and a pin that's already converting belongs at the BOTTOM however many
+  // bands it technically misses. Ties break newest-first (the array arrives
+  // sorted that way) so a run always opens on the freshest of equals.
+  return data.pins
+    .filter((p) => pinSeoIssues(p).length > 0)
+    .map((p) => ({
+      id: p.id,
+      title: p.title?.trim() || "Untitled pin",
+      issues: pinSeoIssues(p),
+      image_url: p.image_url,
+      impressions: p.impressions ?? 0,
+      clicks: p.clicks ?? 0,
+      boardId: boardIdOf(p),
+      boardName: boardIdOf(p) ? (boardNames.get(boardIdOf(p) as string) ?? null) : null,
+      createdAt: p.created_at,
+      impact: impacts.get(p.id)!,
+      fields: [
+        { key: "title", label: "Title", value: "", min: PIN_TITLE_MIN, max: PIN_TITLE_MAX },
+        {
+          key: "description",
+          label: "Description",
+          value: "",
+          min: PIN_DESC_MIN,
+          max: PIN_DESC_MAX,
+          multiline: true,
+        },
+      ],
+      original: { title: p.title, description: p.description },
+    }))
+    .sort((a, b) => b.impact.score - a.impact.score);
 }
 
 function FixPinSeoPage() {
@@ -191,7 +232,7 @@ function FixPinSeoPage() {
       if (charged) setCoinsSpent((n) => n + COINS_PER_PIN_BOOST);
       // The rewrite is already live on the pin, so a billing failure is a
       // bookkeeping problem, not a reason to roll the creator's fix back.
-      else toast.error("Rewrite saved, but the coin couldn't be charged");
+      else notifyProblem("Rewrite saved, but the coin couldn't be charged");
     },
     onReverted: async (id) => {
       const refunded = await wallet.refundForPin(id);
@@ -259,6 +300,13 @@ function FixPinSeoPage() {
 
   const backToScore = () => navigate({ to: "/boost" });
   const paused = editing || confirming;
+  // Analytics sync in batches and `impressions` defaults to 0, so an all-zero
+  // account means "not synced yet", not "nobody looked". The picker has to say
+  // which, because without reach the ranking is copy quality alone.
+  const hasAnalytics = useMemo(
+    () => (flow.data?.pins ?? []).some((p) => (p.impressions ?? 0) > 0),
+    [flow.data],
+  );
   const remaining = flow.cards.slice(flow.index);
   const current = flow.current;
   const currentPending = !!current && flow.pendingIds.has(current.id);
@@ -310,8 +358,12 @@ function FixPinSeoPage() {
     // Everything else is marked skipped rather than written blank or written free.
     await flowRef.current.approveAll((c) => inBudget.has(c.id) && hasCopy(c));
     if (covered.length < queued.length) {
-      toast.info(
-        `Boosted ${covered.length} of ${queued.length} — you're out of coins until the weekly refill`,
+      // A run that stopped short has to stay on screen: the pins it couldn't
+      // reach are still sitting in the deck, and a creator who missed a 2.5s
+      // toast reads that as the bulk button having half-failed.
+      notifyBlocked(
+        `Boosted ${covered.length} of ${queued.length} pins`,
+        "That's every pin this week's coins cover. The rest stay queued until the refill.",
       );
     }
   };
@@ -369,7 +421,7 @@ function FixPinSeoPage() {
       // never spend a coin the wallet doesn't have.
       if (e.key === "ArrowRight" && !currentPending && currentReady) {
         if (!canAffordOne) {
-          toast.error("You're out of coins — boosting a pin costs 1 coin");
+          notifyProblem("You're out of coins — boosting a pin costs 1 coin");
           return;
         }
         flow.decide(current, "approved");
@@ -413,8 +465,10 @@ function FixPinSeoPage() {
         ) : mode === "picker" ? (
           <PinBoostPicker
             cards={flow.cards}
+            totalPins={flow.data?.pins.length ?? flow.cards.length}
             score={flow.score}
             statusById={flow.statusById}
+            hasAnalytics={hasAnalytics}
             onStart={startRun}
             onGuide={() => setGuide(true)}
           />
@@ -590,6 +644,14 @@ function FixPinSeoPage() {
             criteria={SCORE_CRITERIA.pinSeo}
             steps={PIN_GUIDE_STEPS}
             onClose={() => setGuide(false)}
+            // Passing the check is one thing; being worth a rewrite is another,
+            // and the ranking on this page is the second one. It has to be
+            // auditable or the order reads as arbitrary.
+            extra={{
+              title: "How we rank them",
+              body: `Every failing pin gets an impact score out of 100. Views are from the last ${ANALYTICS_WINDOW_DAYS} days.`,
+              bullets: IMPACT_CRITERIA,
+            }}
           />
         )}
         {boardOpen && (
@@ -607,31 +669,52 @@ function FixPinSeoPage() {
   );
 }
 
-function pinOpportunityScore(card: PinFixCard): number {
-  const issueWeight = Math.max(1, card.issues.length) * 100_000;
-  return issueWeight + card.impressions * 2 + card.clicks * 25;
-}
-
 /* ------------------------------------------------------------------ *
  * The picker — where a run gets built.
  *
- * One interaction model, everywhere: tap anything to queue it, hold a pin
- * to flip it over and see what it's worth, then launch from the bottom bar.
- * Two tabs mirror the Select-pin screen — Pins (a compact selectable grid,
- * with a Suggested rail on top) and Boards (queue a whole board per tap).
- * The screen stays almost wordless; the CTA carries the instruction.
+ * The job of this screen is one decision: which pins get a coin and a rewrite.
+ * So the page is exactly three blocks, in the order a first-time visitor
+ * should think about them:
+ *
+ *   1. Fix these first — the top handful by modelled impact (lib/pin-impact.ts
+ *      caps the tier at HIGH_IMPACT_COUNT, so it is a real shortlist, never
+ *      277 of 289). Full-width rows, each stating its own reason.
+ *   2. All pins — the full inventory as a grid, with search and sort for
+ *      anyone hunting a specific pin.
+ *   3. Already working — collapsed, hands-off: these convert above the
+ *      account's own median, and rewriting them risks resetting that.
+ *
+ * A previous iteration added a three-tile summary, six diagnosis filter
+ * chips, and four collapsible tiers on top of this. All of it was navigation
+ * for a decision the ranking had already made — six rows of chrome before the
+ * first pin. Tap to queue, one CTA at the bottom. That's the page.
  * ------------------------------------------------------------------ */
 
 // Fixing one failing pin moves Pin SEO by 1/total of its 100 points, and Pin
-// SEO is worth SUB_SCORE_WEIGHTS.pinSeo of the overall score. A pin that
-// already passes is worth zero points — its rewrite is a keyword play, not a
-// score play, and the flip side says exactly that instead of inventing a number.
+// SEO is worth SUB_SCORE_WEIGHTS.pinSeo of the overall score. `totalPins` is
+// ALL pins on the account, not just the failing ones on this screen — the
+// pass rate is measured against everything, so the denominator must be too.
+//
+// Note this is deliberately FLAT per pin: the Boost Score is a pass rate, so
+// every pin that flips from fail to pass is worth exactly as much as any other.
+// The thing that varies pin to pin is the traffic, which is what the impact
+// score and the modelled reach lift are for. Presenting the pts as if they
+// varied would be the easy lie; showing both numbers is the honest version.
 function overallPointsFor(failingCount: number, totalPins: number): number {
   if (totalPins === 0) return 0;
   return SUB_SCORE_WEIGHTS.pinSeo * (failingCount / totalPins) * 100;
 }
 
-type SortKey = "opportunity" | "impressions" | "clicks" | "fixes" | "newest";
+/** Reach a rewrite is modelled to unlock across a set of pins. Null when the
+ * account has no analytics at all, so the UI can stay quiet instead of
+ * printing a confident zero. */
+function liftOf(cards: PinFixCard[]): number | null {
+  const known = cards.filter((c) => c.impact.reachLift !== null);
+  if (known.length === 0) return null;
+  return known.reduce((sum, c) => sum + (c.impact.reachLift ?? 0), 0);
+}
+
+type SortKey = "impact" | "reach" | "impressions" | "clicks" | "newest";
 
 const SORT_OPTIONS: {
   key: SortKey;
@@ -639,17 +722,21 @@ const SORT_OPTIONS: {
   compare: (a: PinFixCard, b: PinFixCard) => number;
 }[] = [
   {
-    key: "opportunity",
+    key: "impact",
     label: "Biggest win",
-    compare: (a, b) => pinOpportunityScore(b) - pinOpportunityScore(a),
+    compare: (a, b) => b.impact.score - a.impact.score,
+  },
+  {
+    key: "reach",
+    label: "Most views to gain",
+    compare: (a, b) => (b.impact.reachLift ?? -1) - (a.impact.reachLift ?? -1),
   },
   {
     key: "impressions",
-    label: "Most impressions",
+    label: "Most views today",
     compare: (a, b) => b.impressions - a.impressions,
   },
   { key: "clicks", label: "Most clicks", compare: (a, b) => b.clicks - a.clicks },
-  { key: "fixes", label: "Most to fix", compare: (a, b) => b.issues.length - a.issues.length },
   {
     key: "newest",
     label: "Newest first",
@@ -657,61 +744,80 @@ const SORT_OPTIONS: {
   },
 ];
 
-/** Lenses over the grid — "the ones with no description", "the ones already
- * getting traffic" — one tap instead of scrolling 300 cards. Counts live on
- * the chips so an empty bucket is obvious before it's tapped. */
-type QueueFilter = "all" | "title" | "description" | "traffic";
+const DIAGNOSIS_ICON: Record<PinImpact["diagnosis"], typeof Eye> = {
+  untapped: TrendingUp,
+  audition: Clock3,
+  invisible: EyeOff,
+  working: ShieldCheck,
+};
 
-const QUEUE_FILTERS: { key: QueueFilter; label: string; match: (c: PinFixCard) => boolean }[] = [
-  { key: "all", label: "All", match: () => true },
-  { key: "title", label: "Weak title", match: (c) => c.issues.some((i) => /title/i.test(i)) },
-  {
-    key: "description",
-    label: "Weak description",
-    match: (c) => c.issues.some((i) => /description/i.test(i)),
-  },
-  { key: "traffic", label: "Getting traffic", match: (c) => c.impressions > 0 || c.clicks > 0 },
-];
-
-/** Every pin grouped under the board it actually lives on, worst board first.
- * Queueing a board is the shortest path from "this board is a mess" to a run
- * that fixes it end to end. */
+/** Every pin grouped under the board it actually lives on, best opportunity
+ * first. Queueing a board is the shortest path from "this board is a mess" to a
+ * run that fixes it end to end. */
 type BoardLane = {
   id: string;
   name: string;
   cards: PinFixCard[];
   fixes: number;
   impressions: number;
+  /** Pins in this board's queue that are the account's top opportunities. */
+  highCount: number;
+  /** Modelled reach a full-board rewrite unlocks. */
+  lift: number | null;
   images: string[];
 };
 
 function buildBoardLanes(cards: PinFixCard[]): BoardLane[] {
-  const byId = new Map<string, BoardLane>();
+  const byId = new Map<string, PinFixCard[]>();
   for (const c of cards) {
     if (!c.boardId || !c.boardName) continue;
-    let lane = byId.get(c.boardId);
-    if (!lane) {
-      lane = { id: c.boardId, name: c.boardName, cards: [], fixes: 0, impressions: 0, images: [] };
-      byId.set(c.boardId, lane);
-    }
-    lane.cards.push(c);
-    lane.fixes += c.issues.length;
-    lane.impressions += c.impressions;
-    if (c.image_url && lane.images.length < 3) lane.images.push(c.image_url);
+    const bucket = byId.get(c.boardId);
+    if (bucket) bucket.push(c);
+    else byId.set(c.boardId, [c]);
   }
-  return [...byId.values()].sort((a, b) => b.fixes - a.fixes || b.impressions - a.impressions);
+  return (
+    [...byId.entries()]
+      .map(([id, group]) => ({
+        id,
+        name: group[0].boardName as string,
+        cards: group,
+        fixes: group.reduce((n, c) => n + c.issues.length, 0),
+        impressions: group.reduce((n, c) => n + c.impressions, 0),
+        highCount: group.filter((c) => c.impact.group === "high").length,
+        lift: liftOf(group),
+        images: group
+          .map((c) => c.image_url)
+          .filter(Boolean)
+          .slice(0, 3) as string[],
+      }))
+      // Boards where the wins are, not boards with the most broken fields.
+      .sort(
+        (a, b) =>
+          b.highCount - a.highCount ||
+          (b.lift ?? 0) - (a.lift ?? 0) ||
+          b.impressions - a.impressions,
+      )
+  );
 }
 
 function PinBoostPicker({
   cards,
+  totalPins,
   score,
   statusById,
+  hasAnalytics,
   onStart,
   onGuide,
 }: {
   cards: PinFixCard[];
+  /** Every pin on the account — the denominator the pass rate is scored on.
+   * `cards` is only the failing subset. */
+  totalPins: number;
   score: number;
   statusById: Record<string, "approved" | "skipped">;
+  /** False when no pin carries a reach reading, i.e. analytics haven't synced.
+   * The page says so rather than presenting default zeros as measurements. */
+  hasAnalytics: boolean;
   onStart: (ids: string[]) => void;
   onGuide: () => void;
 }) {
@@ -720,45 +826,30 @@ function PinBoostPicker({
   const { balance } = useWallet();
   const [tab, setTab] = useState<"pins" | "boards">("pins");
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
-  const [flippedId, setFlippedId] = useState<string | null>(null);
-  const [sort, setSort] = useState<SortKey>("opportunity");
-  const [filter, setFilter] = useState<QueueFilter>("all");
+  const [sort, setSort] = useState<SortKey>("impact");
   const [query, setQuery] = useState("");
   const [limit, setLimit] = useState(PIN_GRID_PAGE_SIZE);
+  const [boardLimit, setBoardLimit] = useState(BOARD_LIST_PAGE_SIZE);
+  const [workingOpen, setWorkingOpen] = useState(false);
 
-  // Ranked once — the run order for everything on this screen, so "biggest
-  // win first" holds whether the creator queued a board, a lens, or the lot.
-  const ranked = useMemo(
-    () => [...cards].sort((a, b) => pinOpportunityScore(b) - pinOpportunityScore(a)),
-    [cards],
-  );
-  const failingTotal = useMemo(() => ranked.filter((p) => p.issues.length > 0).length, [ranked]);
+  // Ranked once — the run order for everything on this screen, so "biggest win
+  // first" holds whether the creator queued the shortlist, a search result, a
+  // board, or a mix.
+  const ranked = useMemo(() => [...cards].sort((a, b) => b.impact.score - a.impact.score), [cards]);
   const lanes = useMemo(() => buildBoardLanes(ranked), [ranked]);
-  const suggested = useMemo(() => {
-    const failing = ranked.filter((c) => c.issues.length > 0);
-    return (failing.length > 0 ? failing : ranked).slice(0, SUGGESTED_COUNT);
-  }, [ranked]);
-  // Boards worth suggesting = the ones with something to fix, worst first
-  // (lanes already sort that way). The full list lives in the Boards tab.
-  const suggestedLanes = useMemo(
-    () => lanes.filter((l) => l.fixes > 0).slice(0, SUGGESTED_BOARDS_COUNT),
-    [lanes],
-  );
 
-  const counts = useMemo(
-    () =>
-      Object.fromEntries(
-        QUEUE_FILTERS.map((f) => [f.key, ranked.filter(f.match).length]),
-      ) as Record<QueueFilter, number>,
-    [ranked],
-  );
+  // The three blocks. `rest` keeps the shortlist pins too — "All pins" is the
+  // inventory, and an inventory with silent holes reads as a bug.
+  const best = useMemo(() => ranked.filter((c) => c.impact.group === "high"), [ranked]);
+  const working = useMemo(() => ranked.filter((c) => c.impact.protect), [ranked]);
+  const rest = useMemo(() => ranked.filter((c) => !c.impact.protect), [ranked]);
+
+  const searching = query.trim().length > 0;
 
   const visible = useMemo(() => {
-    const match = QUEUE_FILTERS.find((f) => f.key === filter)!.match;
     const compare = SORT_OPTIONS.find((o) => o.key === sort)!.compare;
     const q = query.trim().toLowerCase();
-    return ranked
-      .filter(match)
+    return rest
       .filter(
         (c) =>
           !q ||
@@ -766,23 +857,19 @@ function PinBoostPicker({
           (c.boardName ?? "").toLowerCase().includes(q),
       )
       .sort(compare);
-  }, [ranked, filter, sort, query]);
+  }, [rest, sort, query]);
 
   const shown = visible.slice(0, limit);
   const hidden = visible.length - shown.length;
 
   // Selection is a set of ids; every list on the page reads and writes it, and
-  // the run is always played back in ranked order regardless of how it was
-  // built (grid order, board order, or a mix).
+  // the run is always played back in impact order regardless of how it was
+  // built.
   const selectedIds = useMemo(
     () => ranked.filter((c) => selected.has(c.id)).map((c) => c.id),
     [ranked, selected],
   );
-  const selectedFailing = useMemo(
-    () => ranked.filter((c) => selected.has(c.id) && c.issues.length > 0).length,
-    [ranked, selected],
-  );
-
+  const selectedCards = useMemo(() => ranked.filter((c) => selected.has(c.id)), [ranked, selected]);
   const toggleOne = useCallback((id: string) => {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -803,9 +890,17 @@ function PinBoostPicker({
     });
   }, []);
 
-  const visibleIds = visible.map((c) => c.id);
-  const allVisibleSelected = visible.length > 0 && visibleIds.every((id) => selected.has(id));
-  const perPinPoints = overallPointsFor(1, ranked.length);
+  const perPinPoints = overallPointsFor(1, totalPins);
+
+  // The queue's own summary, which is what the bottom bar and its caption say.
+  const selectedLift = liftOf(selectedCards);
+  const protectedInQueue = selectedCards.filter((c) => c.impact.protect).length;
+
+  // The empty CTA is an ACTION, not a label. "Select pins" told a creator
+  // staring at 289 thumbnails to make the exact decision they'd opened the
+  // page unable to make; this makes it for them, off the same ranking the page
+  // is sorted by, and they can still unpick it.
+  const headlineIds = best.map((c) => c.id);
 
   return (
     <motion.div
@@ -816,13 +911,22 @@ function PinBoostPicker({
       transition={{ duration: 0.38, ease: [0.22, 1, 0.36, 1] }}
       className="flex min-h-0 flex-1 flex-col"
     >
-      <div className="no-scrollbar min-h-0 flex-1 space-y-4 overflow-y-auto px-1 pb-2">
+      <div className="no-scrollbar min-h-0 flex-1 space-y-5 overflow-y-auto px-1 pb-2">
         <PickerHeader
           heading="Pick pins to boost"
           points={pointsEarned("pinSeo", score)}
           maxPoints={maxPointsFor("pinSeo")}
-          gainPoints={overallPointsFor(failingTotal, ranked.length)}
+          gainPoints={overallPointsFor(ranked.length, totalPins)}
           onGuide={onGuide}
+          note={
+            best.length > 0 ? (
+              <>
+                Pinterest finds pins by their words, and {ranked.length} of your {totalPins}{" "}
+                aren&apos;t giving it enough. Start with the {best.length} below — they&apos;re
+                where the reach is.
+              </>
+            ) : undefined
+          }
         />
 
         {/* Pinterest-style tabs — same pattern as the Select pin screen. */}
@@ -843,108 +947,154 @@ function PinBoostPicker({
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: 10 }}
               transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
-              className="space-y-4"
+              className="space-y-5"
             >
-              {suggested.length > 0 && (
-                <SuggestedRail
-                  cards={suggested}
-                  selected={selected}
-                  onToggle={toggleOne}
-                  onQueueAll={setMany}
-                  flippedId={flippedId}
-                  onFlip={(id) => setFlippedId((cur) => (cur === id ? null : id))}
-                  statusById={statusById}
-                  perPinPoints={perPinPoints}
-                  score={score}
-                />
-              )}
+              {!hasAnalytics && <NoAnalyticsNote />}
 
-              <QueueToolbar
-                query={query}
-                onQuery={(v) => {
-                  setQuery(v);
-                  setLimit(PIN_GRID_PAGE_SIZE);
-                }}
-                placeholder="Search pins…"
-                sort={sort}
-                onSort={setSort}
-                options={SORT_OPTIONS}
-                neutralSort="opportunity"
-              />
-
-              <FilterChipRow
-                filters={QUEUE_FILTERS}
-                active={filter}
-                counts={counts}
-                onFilter={(key) => {
-                  setFilter(key);
-                  setLimit(PIN_GRID_PAGE_SIZE);
-                }}
-                allSelected={allVisibleSelected}
-                onToggleAll={() => setMany(visibleIds, !allVisibleSelected)}
-                toggleDisabled={visible.length === 0}
-              />
-
-              {/* The grid was unlabelled, which left the suggested rail and 300
-                  more cards running together as one undifferentiated scroll.
-                  Naming it is what makes the rail above read as a shortcut. */}
-              {/* The count sat on the right of this row, but the filter chip
-                  directly above already carries it — same number, twice. */}
-              {shown.length > 0 && (
-                <h3 className="pt-1 font-display text-lead font-bold tracking-tight">
-                  {filter === "all"
-                    ? "All pins"
-                    : QUEUE_FILTERS.find((f) => f.key === filter)?.label}
-                </h3>
-              )}
-
-              {shown.length === 0 ? (
-                <p className="rounded-2xl border border-dashed border-border py-10 text-center text-xs text-muted-foreground">
-                  No pins match that.
-                </p>
-              ) : (
-                <div className="grid grid-cols-2 gap-x-2.5 gap-y-1">
-                  {shown.map((card, i) => (
-                    <PinPickCard
-                      key={card.id}
-                      card={card}
-                      index={i}
-                      selected={selected.has(card.id)}
-                      flipped={flippedId === card.id}
-                      boosted={statusById[card.id] === "approved"}
-                      points={card.issues.length > 0 ? perPinPoints : 0}
-                      pointsNow={pointsEarned("pinSeo", score)}
-                      onToggle={() => toggleOne(card.id)}
-                      onFlip={() => setFlippedId((cur) => (cur === card.id ? null : card.id))}
+              {/* 1 — the shortlist. Hidden while searching: a search means the
+                  creator knows what they want, and the shortlist reshuffling
+                  above their results is noise. */}
+              {best.length > 0 && !searching && (
+                <section
+                  aria-label={GROUP_META.high.label}
+                  className="overflow-hidden rounded-3xl border-2 border-primary/40 bg-gradient-to-b from-primary/[0.06] to-surface p-3.5"
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <h3 className="flex items-center gap-1.5 font-display text-[17px] font-bold leading-tight tracking-tight">
+                        <Flame className="h-4 w-4 text-primary" strokeWidth={2.5} />
+                        {GROUP_META.high.label}
+                      </h3>
+                      <p className="mt-0.5 text-mini text-muted-foreground">
+                        {GROUP_META.high.blurb}
+                      </p>
+                    </div>
+                    <QueueAllButton
+                      ids={headlineIds}
+                      selected={selected}
+                      onQueueMany={setMany}
+                      hero
                     />
-                  ))}
-                </div>
+                  </div>
+                  <div className="mt-3 space-y-2">
+                    {best.map((card, i) => (
+                      <ImpactRow
+                        key={card.id}
+                        card={card}
+                        index={i}
+                        selected={selected.has(card.id)}
+                        boosted={statusById[card.id] === "approved"}
+                        points={perPinPoints}
+                        onToggle={() => toggleOne(card.id)}
+                      />
+                    ))}
+                  </div>
+                </section>
               )}
 
-              {(hidden > 0 || limit > PIN_GRID_PAGE_SIZE) && (
-                <div className="flex gap-2">
-                  {hidden > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => setLimit((l) => l + PIN_GRID_PAGE_SIZE)}
-                      className="inline-flex min-h-10 flex-1 items-center justify-center gap-1.5 rounded-2xl border border-dashed border-border bg-surface/70 text-xs font-bold text-primary transition hover:bg-primary/[0.04]"
-                    >
-                      Show
-                      <span className="font-semibold tabular-nums text-muted-foreground">
-                        {hidden} more
-                      </span>
-                    </button>
-                  )}
-                  {limit > PIN_GRID_PAGE_SIZE && (
-                    <button
-                      type="button"
-                      onClick={() => setLimit(PIN_GRID_PAGE_SIZE)}
-                      className="inline-flex min-h-10 shrink-0 items-center justify-center rounded-2xl border border-border bg-surface px-3.5 text-xs font-bold text-muted-foreground transition hover:text-foreground"
-                    >
-                      Collapse
-                    </button>
-                  )}
+              {/* 2 — the inventory. */}
+              <section aria-label="All pins">
+                <div className="mb-2 flex items-baseline justify-between gap-3">
+                  <h3 className="font-display text-lead font-bold tracking-tight">
+                    {searching ? "Results" : "All pins"}{" "}
+                    <span className="text-mini font-semibold text-muted-foreground tabular-nums">
+                      {visible.length}
+                    </span>
+                  </h3>
+                  <QueueAllButton
+                    ids={visible.map((c) => c.id)}
+                    selected={selected}
+                    onQueueMany={setMany}
+                  />
                 </div>
+
+                <div className="mb-3">
+                  <QueueToolbar
+                    query={query}
+                    onQuery={(v) => {
+                      setQuery(v);
+                      setLimit(PIN_GRID_PAGE_SIZE);
+                    }}
+                    placeholder="Search pins…"
+                    sort={sort}
+                    onSort={(v) => {
+                      setSort(v);
+                      setLimit(PIN_GRID_PAGE_SIZE);
+                    }}
+                    options={SORT_OPTIONS}
+                    neutralSort="impact"
+                  />
+                </div>
+
+                {shown.length === 0 ? (
+                  <EmptyNote>No pins match that.</EmptyNote>
+                ) : (
+                  <PinGrid
+                    cards={shown}
+                    selected={selected}
+                    statusById={statusById}
+                    perPinPoints={perPinPoints}
+                    onToggle={toggleOne}
+                  />
+                )}
+
+                <ShowMore
+                  hidden={hidden}
+                  expanded={limit > PIN_GRID_PAGE_SIZE}
+                  onMore={() => setLimit((l) => l + PIN_GRID_PAGE_SIZE * 2)}
+                  onCollapse={() => setLimit(PIN_GRID_PAGE_SIZE)}
+                />
+              </section>
+
+              {/* 3 — hands-off. Collapsed, and with no queue-all: the whole
+                  point of the group is that we're advising against it. */}
+              {working.length > 0 && !searching && (
+                <section aria-label={GROUP_META.working.label}>
+                  <button
+                    type="button"
+                    onClick={() => setWorkingOpen((v) => !v)}
+                    aria-expanded={workingOpen}
+                    className="flex w-full items-center gap-2 rounded-2xl border border-emerald-500/25 bg-emerald-500/[0.06] p-3 text-left"
+                  >
+                    <ShieldCheck className="h-4 w-4 shrink-0 text-emerald-700" strokeWidth={2.5} />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-body font-bold text-emerald-900">
+                        {GROUP_META.working.label}{" "}
+                        <span className="font-semibold tabular-nums opacity-70">
+                          {working.length}
+                        </span>
+                      </p>
+                      <p className="text-mini text-emerald-900/70">{GROUP_META.working.blurb}</p>
+                    </div>
+                    <ChevronDown
+                      className={`h-4 w-4 shrink-0 text-emerald-700 transition-transform ${
+                        workingOpen ? "rotate-180" : ""
+                      }`}
+                    />
+                  </button>
+                  <AnimatePresence initial={false}>
+                    {workingOpen && (
+                      <motion.div
+                        key="working-grid"
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: "auto", opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }}
+                        transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
+                        className="overflow-hidden"
+                      >
+                        <div className="pt-3">
+                          <PinGrid
+                            cards={working}
+                            selected={selected}
+                            statusById={statusById}
+                            perPinPoints={perPinPoints}
+                            onToggle={toggleOne}
+                          />
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </section>
               )}
             </motion.div>
           ) : (
@@ -954,41 +1104,37 @@ function PinBoostPicker({
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: -10 }}
               transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+              className="space-y-3"
             >
               {lanes.length === 0 ? (
-                <p className="rounded-2xl border border-dashed border-border py-10 text-center text-xs text-muted-foreground">
-                  No boards yet.
-                </p>
+                <EmptyNote>No boards to fix.</EmptyNote>
               ) : (
-                <div className="space-y-4">
-                  {suggestedLanes.length > 0 && (
-                    <SuggestedBoardsRail
-                      lanes={suggestedLanes}
-                      selected={selected}
-                      onToggleMany={setMany}
-                    />
-                  )}
-                  <div>
-                    <h3 className="mb-2 pt-1 font-display text-lead font-bold tracking-tight">
-                      All boards
-                    </h3>
-                    <div className="grid grid-cols-2 gap-3">
-                      {lanes.map((lane, i) => {
-                        const ids = lane.cards.map((c) => c.id);
-                        const queued = ids.every((id) => selected.has(id));
-                        return (
-                          <BoardPickCard
-                            key={lane.id}
-                            lane={lane}
-                            index={i}
-                            queued={queued}
-                            onToggle={() => setMany(ids, !queued)}
-                          />
-                        );
-                      })}
-                    </div>
+                <>
+                  <p className="text-mini leading-snug text-muted-foreground">
+                    One tap queues every pin on a board. Best boards first.
+                  </p>
+                  <div className="space-y-2">
+                    {lanes.slice(0, boardLimit).map((lane, i) => {
+                      const ids = lane.cards.map((c) => c.id);
+                      const queued = ids.every((id) => selected.has(id));
+                      return (
+                        <BoardLaneRow
+                          key={lane.id}
+                          lane={lane}
+                          index={i}
+                          queued={queued}
+                          onToggle={() => setMany(ids, !queued)}
+                        />
+                      );
+                    })}
                   </div>
-                </div>
+                  <ShowMore
+                    hidden={lanes.length - Math.min(lanes.length, boardLimit)}
+                    expanded={boardLimit > BOARD_LIST_PAGE_SIZE}
+                    onMore={() => setBoardLimit((l) => l + BOARD_LIST_PAGE_SIZE * 2)}
+                    onCollapse={() => setBoardLimit(BOARD_LIST_PAGE_SIZE)}
+                  />
+                </>
               )}
             </motion.div>
           )}
@@ -1000,30 +1146,79 @@ function PinBoostPicker({
         unit="pin"
         unitPlural="pins"
         emptyLabel="Select pins"
-        selectedPoints={overallPointsFor(selectedFailing, ranked.length)}
+        selectedPoints={overallPointsFor(selectedIds.length, totalPins)}
         coins={boostCost(selectedIds.length)}
+        // The run's headline win rides the button itself: it's the answer to
+        // "why tap this", so it can't be a caption two lines away.
+        reward={
+          selectedLift !== null && selectedLift > 0
+            ? `≈ +${reachLabel(selectedLift)} views`
+            : undefined
+        }
+        emptyAction={
+          headlineIds.length > 0
+            ? {
+                label: `Boost my top ${headlineIds.length}`,
+                onClick: () => setMany(headlineIds, true),
+              }
+            : undefined
+        }
         onStart={() => selectedIds.length > 0 && onStart(selectedIds)}
         onClear={() => setSelected(new Set())}
       />
-      {/* Cost of the selection, one line, under the CTA — enough to price the tap
-          without turning the bar into a receipt. The coin count already rides
-          the CTA, so this line only has to say what's left afterwards. */}
-      {selectedIds.length > 0 && (
-        <p
-          className={`shrink-0 pb-1 text-center text-micro font-semibold ${
-            selectedIds.length > balance ? "text-amber-700" : "text-muted-foreground/80"
-          }`}
-        >
-          {selectedIds.length > balance ? (
-            <>
-              Only {balance} coins left · refills {resetCountdown()}
-            </>
-          ) : (
-            <>{balance - selectedIds.length} coins left after this</>
+
+      {/* Below the button, ONLY what the creator might change their mind over:
+          a warning, never a restatement. The wins and the price are already on
+          the button. */}
+      {selectedIds.length > 0 && (protectedInQueue > 0 || selectedIds.length > balance) && (
+        <div className="shrink-0 space-y-0.5 pb-1 text-center">
+          {protectedInQueue > 0 && (
+            <p className="text-micro font-semibold text-emerald-700">
+              {protectedInQueue} of these {protectedInQueue === 1 ? "is" : "are"} already working —
+              we&apos;d leave {protectedInQueue === 1 ? "it" : "them"} out
+            </p>
           )}
-        </p>
+          {selectedIds.length > balance && (
+            <p className="text-micro font-semibold text-amber-700">
+              Only {balance} coins left — covers {balance} of {selectedIds.length} · refills{" "}
+              {resetCountdown()}
+            </p>
+          )}
+        </div>
       )}
     </motion.div>
+  );
+}
+
+/** The one queue-many affordance, shared by the shortlist and the inventory so
+ * the page has a single vocabulary for "take all of these". */
+function QueueAllButton({
+  ids,
+  selected,
+  onQueueMany,
+  hero,
+}: {
+  ids: string[];
+  selected: Set<string>;
+  onQueueMany: (ids: string[], on: boolean) => void;
+  hero?: boolean;
+}) {
+  if (ids.length === 0) return null;
+  const allQueued = ids.every((id) => selected.has(id));
+  return (
+    <button
+      type="button"
+      onClick={() => onQueueMany(ids, !allQueued)}
+      className={`shrink-0 rounded-full px-3 py-1.5 text-mini font-bold transition active:scale-[0.97] ${
+        allQueued
+          ? "bg-surface-2 text-muted-foreground ring-1 ring-border"
+          : hero
+            ? "bg-gradient-primary text-primary-foreground shadow-glow"
+            : "bg-primary/10 text-primary hover:bg-primary/15"
+      }`}
+    >
+      {allQueued ? "Clear" : `Queue all ${ids.length}`}
+    </button>
   );
 }
 
@@ -1056,6 +1251,180 @@ function PickerTab({
   );
 }
 
+function EmptyNote({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="rounded-2xl border border-dashed border-border py-10 text-center text-mini font-medium text-muted-foreground">
+      {children}
+    </p>
+  );
+}
+
+/** Analytics sync in batches and the impressions column defaults to zero, so
+ * "every pin has no reach" is ambiguous between "not synced yet" and "nobody
+ * looked". Saying which one it is matters here more than anywhere else on the
+ * page: without reach, the ranking is copy quality alone, and a creator who
+ * doesn't know that will read the order as a claim about their traffic. */
+function NoAnalyticsNote() {
+  return (
+    <div className="flex items-start gap-2.5 rounded-2xl border border-amber-500/25 bg-amber-500/[0.06] p-3">
+      <Eye className="mt-px h-4 w-4 shrink-0 text-amber-700" />
+      <p className="text-mini leading-snug text-amber-900/85">
+        <span className="font-bold">No view counts yet.</span> Until Pinterest analytics sync, these
+        are ranked on copy quality alone — reach and click rates will sharpen the order once they
+        land.
+      </p>
+    </div>
+  );
+}
+
+/**
+ * A shortlist pin, as a row that argues its own case.
+ *
+ * Everything on it is a number the creator can check against Pinterest: views
+ * in the window, click rate when there's enough traffic to mean anything, the
+ * diagnosis that put it in this tier, and what a rewrite is modelled to buy.
+ */
+function ImpactRow({
+  card,
+  index,
+  selected,
+  boosted,
+  points,
+  onToggle,
+}: {
+  card: PinFixCard;
+  index: number;
+  selected: boolean;
+  boosted: boolean;
+  points: number;
+  onToggle: () => void;
+}) {
+  const { impact } = card;
+  const DiagIcon = DIAGNOSIS_ICON[impact.diagnosis];
+  return (
+    <motion.button
+      type="button"
+      onClick={onToggle}
+      aria-pressed={selected}
+      aria-label={`${selected ? "Remove" : "Queue"} ${card.title}`}
+      whileTap={{ scale: 0.985 }}
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay: Math.min(index, 6) * 0.04, duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+      className={`flex w-full items-stretch gap-3 rounded-2xl border-2 bg-surface p-2 text-left transition ${
+        selected ? "border-primary shadow-sm" : "border-transparent ring-1 ring-border/70"
+      }`}
+    >
+      <div className="relative h-[86px] w-[68px] shrink-0 overflow-hidden rounded-xl bg-surface-2">
+        <PinImage card={card} />
+        {boosted && (
+          <span className="absolute inset-0 grid place-items-center bg-emerald-500/75 text-white">
+            <Check className="h-5 w-5" strokeWidth={3.5} />
+          </span>
+        )}
+      </div>
+
+      <div className="flex min-w-0 flex-1 flex-col justify-between py-0.5">
+        <div className="min-w-0">
+          <p className="line-clamp-1 text-body font-bold leading-tight">
+            {card.title?.trim() || <span className="text-muted-foreground">Untitled pin</span>}
+          </p>
+          {/* The measurement, then the reason. Two lines, and they are the
+              whole argument for spending a coin here. */}
+          <p className="mt-1 inline-flex items-center gap-1 text-mini font-bold text-foreground/80">
+            <DiagIcon className="h-3 w-3 shrink-0 text-primary" strokeWidth={2.5} />
+            <span className="truncate">{impact.headline}</span>
+          </p>
+          <p className="mt-0.5 line-clamp-2 text-micro leading-snug text-muted-foreground">
+            {impact.detail}
+          </p>
+        </div>
+
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1">
+          {impact.reachLift !== null && impact.reachLift > 0 && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-micro font-bold text-primary">
+              <TrendingUp className="h-2.5 w-2.5" /> ≈ +{reachLabel(impact.reachLift)} views
+            </span>
+          )}
+          <span className="text-micro font-semibold text-muted-foreground tabular-nums">
+            +{pointsLabel(points)} pts
+          </span>
+          <span className="ml-auto shrink-0">
+            <SelectDot on={selected} small />
+          </span>
+        </div>
+      </div>
+    </motion.button>
+  );
+}
+
+function PinGrid({
+  cards,
+  selected,
+  statusById,
+  perPinPoints,
+  onToggle,
+}: {
+  cards: PinFixCard[];
+  selected: Set<string>;
+  statusById: Record<string, string | undefined>;
+  perPinPoints: number;
+  onToggle: (id: string) => void;
+}) {
+  return (
+    <div className="grid grid-cols-2 gap-x-2.5 gap-y-2">
+      {cards.map((card, i) => (
+        <PinPickCard
+          key={card.id}
+          card={card}
+          index={i}
+          selected={selected.has(card.id)}
+          boosted={statusById[card.id] === "approved"}
+          points={perPinPoints}
+          onToggle={() => onToggle(card.id)}
+        />
+      ))}
+    </div>
+  );
+}
+
+function ShowMore({
+  hidden,
+  expanded,
+  onMore,
+  onCollapse,
+}: {
+  hidden: number;
+  expanded: boolean;
+  onMore: () => void;
+  onCollapse: () => void;
+}) {
+  if (hidden <= 0 && !expanded) return null;
+  return (
+    <div className="mt-2.5 flex gap-2">
+      {hidden > 0 && (
+        <button
+          type="button"
+          onClick={onMore}
+          className="inline-flex min-h-10 flex-1 items-center justify-center gap-1.5 rounded-2xl border border-dashed border-border bg-surface/70 text-mini font-bold text-primary transition hover:bg-primary/[0.04]"
+        >
+          Show
+          <span className="font-semibold tabular-nums text-muted-foreground">{hidden} more</span>
+        </button>
+      )}
+      {expanded && (
+        <button
+          type="button"
+          onClick={onCollapse}
+          className="inline-flex min-h-10 shrink-0 items-center justify-center rounded-2xl border border-border bg-surface px-3.5 text-mini font-bold text-muted-foreground transition hover:text-foreground"
+        >
+          Collapse
+        </button>
+      )}
+    </div>
+  );
+}
+
 function PinImage({ card, className }: { card: PinFixCard; className?: string }) {
   if (!card.image_url) {
     return (
@@ -1075,447 +1444,102 @@ function PinImage({ card, className }: { card: PinFixCard; className?: string })
   );
 }
 
-/** The best wins, as a quiet rail of pictures. Rank #1 wears the trophy, and
- * each thumb carries the numbers it was ranked by — fixes and reach. Tapping
- * queues, the same gesture as everywhere else on the page. */
-/** The shortcut, dressed as one. These are the pins worth fixing first, so the
- * rail is the page's primary action and now looks like it: a bordered, tinted
- * panel with a live pulse on the label and a one-tap "Queue top N".
+/**
+ * One pin in a grid — the compact form, for the inventory where the decision
+ * is "sweep it or don't".
  *
- * It used to be an unframed row of 78px thumbnails under a muted grey caption —
- * indistinguishable from a decorative carousel, and smaller than the grid it
- * was meant to shortcut past. Same cards as the grid now, at the same size, so
- * the eye reads them as "the same thing, pre-picked for you". */
-function SuggestedRail({
-  cards,
-  selected,
-  onToggle,
-  onQueueAll,
-  flippedId,
-  onFlip,
-  statusById,
-  perPinPoints,
-  score,
-}: {
-  cards: PinFixCard[];
-  selected: Set<string>;
-  onToggle: (id: string) => void;
-  onQueueAll: (ids: string[], on: boolean) => void;
-  flippedId: string | null;
-  onFlip: (id: string) => void;
-  statusById: Record<string, string | undefined>;
-  perPinPoints: number;
-  score: number;
-}) {
-  const ids = cards.map((c) => c.id);
-  const allQueued = ids.length > 0 && ids.every((id) => selected.has(id));
-
-  return (
-    <motion.section
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
-      aria-label="Suggested pins"
-      className="relative overflow-hidden rounded-3xl border-2 border-primary/45 bg-gradient-to-b from-primary/[0.07] via-surface to-surface p-3.5 shadow-glow"
-    >
-      {/* Breathing border — the one ambient motion on the page, and it sits on
-          the thing we want tapped. Slow and low-contrast on purpose: a hard
-          blink next to 300 thumbnails would read as an error state. */}
-      <motion.span
-        aria-hidden
-        className="pointer-events-none absolute inset-0 rounded-3xl border-2 border-primary"
-        animate={{ opacity: [0.35, 0.05, 0.35] }}
-        transition={{ duration: 2.8, repeat: Infinity, ease: "easeInOut" }}
-      />
-
-      <div className="relative mb-3 flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="flex items-center gap-1.5 text-micro font-bold uppercase tracking-[0.14em] text-primary">
-            <span className="relative grid h-1.5 w-1.5 place-items-center">
-              <span className="absolute h-full w-full animate-ping rounded-full bg-primary/70" />
-              <span className="h-full w-full rounded-full bg-primary" />
-            </span>
-            Start here
-          </p>
-          {/* The fix count lived here too, but every card in the rail already
-              wears its own fix badge — this line was the same tally again. */}
-          <h3 className="mt-1 font-display text-[17px] font-bold leading-tight tracking-tight">
-            Your {cards.length} biggest wins
-          </h3>
-        </div>
-        <button
-          type="button"
-          onClick={() => onQueueAll(ids, !allQueued)}
-          className={`relative shrink-0 overflow-hidden rounded-full px-3.5 py-2 text-mini font-bold transition active:scale-[0.97] ${
-            allQueued
-              ? "bg-surface-2 text-muted-foreground ring-1 ring-border"
-              : "bg-gradient-primary text-primary-foreground shadow-glow"
-          }`}
-        >
-          {!allQueued && (
-            <span
-              aria-hidden
-              className="animate-sheen pointer-events-none absolute inset-y-0 w-1/3 bg-gradient-to-r from-transparent via-white/30 to-transparent"
-            />
-          )}
-          {allQueued ? "Clear" : "Queue all"}
-        </button>
-      </div>
-
-      {/* Same card, same size as the grid — just laid on a horizontal track.
-          The width tracks the grid's own column width so the two never drift. */}
-      <div className="no-scrollbar -mx-1 flex snap-x gap-2.5 overflow-x-auto px-1 pb-1">
-        {cards.map((card, i) => (
-          <div
-            key={card.id}
-            className="w-[calc((100vw-5rem)/2.4)] min-w-[124px] max-w-[162px] shrink-0 snap-start"
-          >
-            <PinPickCard
-              card={card}
-              index={i}
-              rank={i + 1}
-              selected={selected.has(card.id)}
-              flipped={flippedId === card.id}
-              boosted={statusById[card.id] === "approved"}
-              points={card.issues.length > 0 ? perPinPoints : 0}
-              pointsNow={pointsEarned("pinSeo", score)}
-              onToggle={() => onToggle(card.id)}
-              onFlip={() => onFlip(card.id)}
-            />
-          </div>
-        ))}
-      </div>
-    </motion.section>
-  );
-}
-
-/** The messiest boards, one tap from being queued whole — each card carries
- * the fix count it was ranked by. */
-function SuggestedBoardsRail({
-  lanes,
-  selected,
-  onToggleMany,
-}: {
-  lanes: BoardLane[];
-  selected: Set<string>;
-  onToggleMany: (ids: string[], on: boolean) => void;
-}) {
-  const allIds = lanes.flatMap((l) => l.cards.map((c) => c.id));
-  const allQueued = allIds.length > 0 && allIds.every((id) => selected.has(id));
-
-  return (
-    // Same panel as the pins rail. Two tabs of the same page cannot present
-    // their shortcut two different ways — one bold and bordered, one a grey
-    // caption — without the quieter one reading as broken.
-    <motion.section
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
-      aria-label="Suggested boards"
-      className="relative overflow-hidden rounded-3xl border-2 border-primary/45 bg-gradient-to-b from-primary/[0.07] via-surface to-surface p-3.5 shadow-glow"
-    >
-      <motion.span
-        aria-hidden
-        className="pointer-events-none absolute inset-0 rounded-3xl border-2 border-primary"
-        animate={{ opacity: [0.35, 0.05, 0.35] }}
-        transition={{ duration: 2.8, repeat: Infinity, ease: "easeInOut" }}
-      />
-
-      <div className="relative mb-3 flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="flex items-center gap-1.5 text-micro font-bold uppercase tracking-[0.14em] text-primary">
-            <span className="relative grid h-1.5 w-1.5 place-items-center">
-              <span className="absolute h-full w-full animate-ping rounded-full bg-primary/70" />
-              <span className="h-full w-full rounded-full bg-primary" />
-            </span>
-            Start here
-          </p>
-          <h3 className="mt-1 font-display text-[17px] font-bold leading-tight tracking-tight">
-            Your {lanes.length} messiest {lanes.length === 1 ? "board" : "boards"}
-          </h3>
-        </div>
-        <button
-          type="button"
-          onClick={() => onToggleMany(allIds, !allQueued)}
-          className={`relative shrink-0 overflow-hidden rounded-full px-3.5 py-2 text-mini font-bold transition active:scale-[0.97] ${
-            allQueued
-              ? "bg-surface-2 text-muted-foreground ring-1 ring-border"
-              : "bg-gradient-primary text-primary-foreground shadow-glow"
-          }`}
-        >
-          {!allQueued && (
-            <span
-              aria-hidden
-              className="animate-sheen pointer-events-none absolute inset-y-0 w-1/3 bg-gradient-to-r from-transparent via-white/30 to-transparent"
-            />
-          )}
-          {allQueued ? "Clear" : "Queue all"}
-        </button>
-      </div>
-
-      <div className="no-scrollbar -mx-1 flex snap-x gap-2.5 overflow-x-auto px-1 pb-1">
-        {lanes.map((lane, i) => {
-          const ids = lane.cards.map((c) => c.id);
-          const on = ids.every((id) => selected.has(id));
-          const [cover, ...restImgs] = lane.images;
-          const side = restImgs.slice(0, 2);
-          return (
-            <motion.button
-              key={lane.id}
-              type="button"
-              onClick={() => onToggleMany(ids, !on)}
-              aria-pressed={on}
-              aria-label={`${on ? "Remove" : "Queue"} board ${lane.name}`}
-              whileTap={{ scale: 0.96 }}
-              initial={{ opacity: 0, x: 12 }}
-              animate={{ opacity: 1, x: 0 }}
-              transition={{
-                delay: Math.min(i, 5) * 0.04,
-                duration: 0.28,
-                ease: [0.22, 1, 0.36, 1],
-              }}
-              className="w-[calc((100vw-5rem)/2.4)] min-w-[124px] max-w-[162px] shrink-0 snap-start text-left"
-            >
-              <div
-                className={`relative overflow-hidden rounded-xl transition ${
-                  on ? "ring-2 ring-primary" : "ring-1 ring-border/60"
-                }`}
-              >
-                <div className="flex h-[104px] gap-0.5">
-                  <div
-                    className={`relative flex-[2] bg-gradient-to-br ${GRADIENTS[i % GRADIENTS.length]}`}
-                  >
-                    {cover && (
-                      <img
-                        src={cover}
-                        alt=""
-                        loading="lazy"
-                        draggable={false}
-                        className="h-full w-full object-cover"
-                      />
-                    )}
-                  </div>
-                  <div className="flex flex-1 flex-col gap-0.5">
-                    {[0, 1].map((j) => (
-                      <div
-                        key={j}
-                        className={`relative flex-1 bg-gradient-to-br ${GRADIENTS[(i + j + 1) % GRADIENTS.length]}`}
-                      >
-                        {side[j] && (
-                          <img
-                            src={side[j]}
-                            alt=""
-                            loading="lazy"
-                            draggable={false}
-                            className="h-full w-full object-cover"
-                          />
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-                <span className="absolute left-1 top-1 inline-flex items-center gap-0.5 rounded-full bg-black/45 px-1.5 py-0.5 text-nano font-bold text-white backdrop-blur-sm">
-                  <Sparkles className="h-2 w-2 text-amber-300" /> {lane.fixes}
-                </span>
-                <span className="absolute right-1 top-1">
-                  <SelectDot on={on} small />
-                </span>
-              </div>
-              <p className="mt-1.5 line-clamp-2 px-0.5 text-mini font-semibold leading-[1.35]">
-                {lane.name}
-              </p>
-              {/* The fix count is already the badge on the cover, so the caption
-                  only carries what the picture can't: how big the board is. */}
-              <p className="mt-0.5 px-0.5 text-micro font-semibold text-muted-foreground">
-                {lane.cards.length} {lane.cards.length === 1 ? "pin" : "pins"}
-              </p>
-            </motion.button>
-          );
-        })}
-      </div>
-    </motion.section>
-  );
-}
-
-/** One pin card — used BOTH in the suggested rail and in the grid below, which
- * is the point: the same pin was previously a 78px thumbnail up top and a
- * half-width card underneath, so the two read as different kinds of object and
- * the rail looked like decoration rather than the shortcut it is. One
- * component, one size, one set of affordances.
- *
- * Image-first, but no longer wordless: the title sits UNDER the photo where it
- * is always legible, rather than being the thing a shopper has to infer from a
- * cropped image. Overlaying it was never an option — half these pins are
- * photographs with text baked in.
- *
- * Hold it and the image flips to what fixing it adds to the health score. */
+ * The badge carries the diagnosis in two words, the metrics ride the photo's
+ * bottom edge, and the value of the fix is printed under the title. No hidden
+ * gestures — everything the ranking knows is on the card.
+ */
 function PinPickCard({
   card,
   index,
   selected,
-  flipped,
   boosted,
   points,
-  pointsNow,
   onToggle,
-  onFlip,
-  rank,
 }: {
   card: PinFixCard;
   index: number;
   selected: boolean;
-  flipped: boolean;
   boosted: boolean;
-  /** Pts fixing this one pin adds to the overall score. Zero when it already
-   * passes — the rewrite is then a keyword play, not a score play. */
+  /** Pts fixing this one pin adds to the overall score. Every card here is a
+   * failing pin, so this is never zero. */
   points: number;
-  /** Pin SEO's banked pts right now, so the flip side can show the move. */
-  pointsNow: number;
   onToggle: () => void;
-  onFlip: () => void;
-  /** 1-based position in the suggested rail; adds the rank pip and, at 1, the
-   * trophy. Absent in the grid, which has no meaningful order to advertise. */
-  rank?: number;
 }) {
-  const { fired, handlers } = useLongPress(onFlip);
-  const fixes = card.issues.length;
-
+  const { impact } = card;
   return (
     <motion.div
       initial={{ opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: Math.min(index, 8) * 0.03, duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
-      style={{ perspective: 800 }}
     >
-      <motion.div
-        animate={{ rotateY: flipped ? 180 : 0, scale: selected ? 0.96 : 1 }}
-        transition={{ type: "spring", stiffness: 260, damping: 26 }}
-        style={{ transformStyle: "preserve-3d" }}
-        className="relative aspect-[3/4] w-full"
+      <button
+        type="button"
+        aria-pressed={selected}
+        aria-label={`${selected ? "Remove" : "Queue"} ${card.title} — ${impact.headline}`}
+        onClick={onToggle}
+        className={`relative aspect-[3/4] w-full touch-manipulation select-none overflow-hidden rounded-xl bg-surface-2 text-left transition ${
+          selected ? "shadow-elevate ring-2 ring-primary" : "ring-1 ring-border/60"
+        }`}
       >
-        {/* Front */}
-        <button
-          type="button"
-          aria-pressed={selected}
-          aria-label={`${selected ? "Remove" : "Queue"} ${card.title}`}
-          onClick={() => {
-            if (fired.current) {
-              fired.current = false;
-              return;
-            }
-            onToggle();
-          }}
-          {...handlers}
-          style={{ backfaceVisibility: "hidden", pointerEvents: flipped ? "none" : "auto" }}
-          className={`absolute inset-0 touch-manipulation select-none overflow-hidden rounded-xl bg-surface-2 text-left transition-shadow ${
-            selected ? "shadow-elevate ring-2 ring-primary" : "ring-1 ring-border/60"
-          }`}
-        >
-          <PinImage card={card} />
-          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-black/75 via-black/25 to-transparent" />
+        <PinImage card={card} />
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-black/80 via-black/25 to-transparent" />
 
-          <span className="absolute right-2 top-2">
-            <SelectDot on={selected} />
-          </span>
+        <span className="absolute right-2 top-2">
+          <SelectDot on={selected} />
+        </span>
 
-          <div className="absolute left-2 top-2 flex items-center gap-1.5">
-            {rank !== undefined &&
-              (rank === 1 ? (
-                <span className="grid h-6 w-6 place-items-center rounded-full bg-primary text-primary-foreground shadow">
-                  <Trophy className="h-3 w-3" />
-                </span>
-              ) : (
-                <span className="grid h-6 w-6 place-items-center rounded-full bg-black/50 text-micro font-bold text-white backdrop-blur-sm">
-                  {rank}
-                </span>
-              ))}
-            {boosted ? (
-              <span className="grid h-6 w-6 place-items-center rounded-full bg-emerald-500 text-white shadow">
-                <Check className="h-3.5 w-3.5" strokeWidth={3.5} />
-              </span>
-            ) : fixes > 0 ? (
-              <span className="inline-flex items-center gap-1 rounded-full bg-black/45 px-2 py-0.5 text-micro font-bold text-white backdrop-blur-sm">
-                <Sparkles className="h-3 w-3 text-amber-300" /> {fixes}{" "}
-                {fixes === 1 ? "fix" : "fixes"}
-              </span>
-            ) : null}
-          </div>
-
-          <div className="absolute inset-x-2 bottom-2 flex items-center gap-2.5 text-mini font-bold text-white/95">
-            <span className="inline-flex items-center gap-1">
-              <Eye className="h-3 w-3 opacity-80" />
-              <span className="tabular-nums">{metricLabel(card.impressions)}</span>
+        <div className="absolute left-2 top-2">
+          {boosted ? (
+            <span className="grid h-6 w-6 place-items-center rounded-full bg-emerald-500 text-white shadow">
+              <Check className="h-3.5 w-3.5" strokeWidth={3.5} />
             </span>
-            <span className="inline-flex items-center gap-1">
-              <MousePointerClick className="h-3 w-3 opacity-80" />
-              <span className="tabular-nums">{metricLabel(card.clicks)}</span>
-            </span>
-          </div>
-        </button>
-
-        {/* Back — the score story, one glance long. */}
-        <button
-          type="button"
-          onClick={onFlip}
-          aria-label="Hide score impact"
-          style={{
-            backfaceVisibility: "hidden",
-            transform: "rotateY(180deg)",
-            pointerEvents: flipped ? "auto" : "none",
-          }}
-          className="absolute inset-0 flex flex-col items-center justify-center gap-1 overflow-hidden rounded-xl border-2 border-primary/40 bg-surface p-2 text-center"
-        >
-          {/* The unit rides the number instead of a caption line under it —
-              three lines of text on a card read in half a second was one too
-              many. */}
-          <span className="font-display text-[28px] font-bold leading-none tabular-nums text-primary">
-            {points > 0 ? `+${pointsLabel(points)}` : "+0"}
-            <span className="ml-1 text-mini font-bold uppercase tracking-wide text-muted-foreground">
-              pts
-            </span>
-          </span>
-          <span className="text-mini font-semibold leading-snug text-muted-foreground">
-            {points > 0 ? (
-              <>
-                {pointsLabel(pointsNow)} →{" "}
-                <span className="text-emerald-600">
-                  {pointsLabel(Math.min(maxPointsFor("pinSeo"), pointsNow + points))}
-                </span>
-              </>
-            ) : (
-              "Already passing"
-            )}
-          </span>
-          {fixes > 0 && (
-            <span className="line-clamp-2 px-1 text-micro font-medium leading-snug text-foreground/70">
-              {card.issues.slice(0, 2).join(" · ")}
+          ) : (
+            <span className="inline-flex max-w-[110px] items-center rounded-full bg-black/50 px-2 py-0.5 text-nano font-bold text-white backdrop-blur-sm">
+              <span className="truncate">{DIAGNOSIS_META[impact.diagnosis].label}</span>
             </span>
           )}
-        </button>
-      </motion.div>
+        </div>
 
-      {/* The copy, under the photo rather than over it. A pin's title is the
-          thing being fixed, so hiding it behind a crop made the user pick
-          blind — and half these images already have text baked in, which is
-          why an overlay was never going to be legible. `h-8` reserves two
-          lines whether or not the title fills them, so the grid stays on a
-          rhythm instead of jostling row to row. */}
-      <div className="mt-2 h-8 px-0.5">
-        <p className="line-clamp-2 text-mini font-semibold leading-[1.35] text-foreground/90">
+        <div className="absolute inset-x-2 bottom-2 flex items-center gap-2.5 text-mini font-bold text-white/95">
+          <span className="inline-flex items-center gap-1">
+            <Eye className="h-3 w-3 opacity-80" />
+            <span className="tabular-nums">{metricLabel(card.impressions)}</span>
+          </span>
+          <span className="inline-flex items-center gap-1">
+            <MousePointerClick className="h-3 w-3 opacity-80" />
+            <span className="tabular-nums">{metricLabel(card.clicks)}</span>
+          </span>
+        </div>
+      </button>
+
+      {/* Title, then what the fix is worth. Both under the photo rather than
+          over it: half these images have text baked in, so an overlay was never
+          going to be legible. `h-4` on the value line keeps the grid on a
+          rhythm whether or not a reach estimate exists. */}
+      <div className="mt-1.5 px-0.5">
+        <p className="line-clamp-2 h-8 text-mini font-semibold leading-[1.35] text-foreground/90">
           {card.title?.trim() || <span className="text-muted-foreground">Untitled pin</span>}
         </p>
+        <p className="mt-0.5 flex h-4 items-center gap-1.5 text-micro font-bold tabular-nums">
+          {impact.reachLift !== null && impact.reachLift > 0 ? (
+            <span className="text-primary">≈ +{reachLabel(impact.reachLift)} views</span>
+          ) : (
+            <span className="text-muted-foreground">+{pointsLabel(points)} pts</span>
+          )}
+        </p>
       </div>
-      {/* What's actually weak about it — the reason it is in this list at all. */}
-      <p className="mt-0.5 line-clamp-1 px-0.5 text-micro font-semibold text-amber-600/90">
-        {fixes > 0 ? card.issues.slice(0, 2).join(" · ") : " "}
-      </p>
     </motion.div>
   );
 }
 
-/** A board as a tap-to-queue card — the same cover collage boards wear on the
- * dashboard, with the same check dot the pins wear here. */
-function BoardPickCard({
+/** A board as a full-width row: cover collage, then the two numbers that decide
+ * whether to queue it — how many of the account's best opportunities live on
+ * it, and the reach a whole-board rewrite is modelled to unlock. */
+function BoardLaneRow({
   lane,
   index,
   queued,
@@ -1534,64 +1558,71 @@ function BoardPickCard({
       type="button"
       onClick={onToggle}
       aria-pressed={queued}
-      whileTap={{ scale: 0.97 }}
-      initial={{ opacity: 0, y: 12 }}
+      aria-label={`${queued ? "Remove" : "Queue"} board ${lane.name}`}
+      whileTap={{ scale: 0.985 }}
+      initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ delay: Math.min(index, 8) * 0.04, duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
-      className="group text-left"
+      transition={{ delay: Math.min(index, 8) * 0.035, duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+      className={`flex w-full items-center gap-3 rounded-2xl border-2 bg-surface p-2 text-left transition ${
+        queued ? "border-primary shadow-sm" : "border-transparent ring-1 ring-border/70"
+      }`}
     >
-      <div
-        className={`relative overflow-hidden rounded-2xl transition ${
-          queued ? "ring-2 ring-primary" : "ring-1 ring-border/60"
-        }`}
-      >
-        <div className="flex h-28 gap-0.5">
-          <div className={`relative flex-[2] bg-gradient-to-br ${grad}`}>
-            {cover && (
-              <img
-                src={cover}
-                alt=""
-                loading="lazy"
-                draggable={false}
-                className="h-full w-full object-cover transition duration-300 group-hover:scale-105"
-              />
-            )}
-          </div>
-          <div className="flex flex-1 flex-col gap-0.5">
-            {[0, 1].map((i) => (
-              <div
-                key={i}
-                className={`relative flex-1 bg-gradient-to-br ${GRADIENTS[(index + i + 1) % GRADIENTS.length]}`}
-              >
-                {side[i] && (
-                  <img
-                    src={side[i]}
-                    alt=""
-                    loading="lazy"
-                    draggable={false}
-                    className="h-full w-full object-cover"
-                  />
-                )}
-              </div>
-            ))}
-          </div>
+      <div className="flex h-16 w-[68px] shrink-0 gap-0.5 overflow-hidden rounded-xl">
+        <div className={`relative flex-[2] bg-gradient-to-br ${grad}`}>
+          {cover && (
+            <img
+              src={cover}
+              alt=""
+              loading="lazy"
+              draggable={false}
+              className="h-full w-full object-cover"
+            />
+          )}
         </div>
-        <span className="absolute right-1.5 top-1.5">
-          <SelectDot on={queued} />
-        </span>
-        {lane.impressions > 0 && (
-          <span className="absolute left-1.5 top-1.5 inline-flex items-center gap-1 rounded-full bg-black/45 px-1.5 py-0.5 text-nano font-bold text-white backdrop-blur-sm">
-            <Eye className="h-2.5 w-2.5" /> {metricLabel(lane.impressions)}
-          </span>
-        )}
+        <div className="flex flex-1 flex-col gap-0.5">
+          {[0, 1].map((i) => (
+            <div
+              key={i}
+              className={`relative flex-1 bg-gradient-to-br ${GRADIENTS[(index + i + 1) % GRADIENTS.length]}`}
+            >
+              {side[i] && (
+                <img
+                  src={side[i]}
+                  alt=""
+                  loading="lazy"
+                  draggable={false}
+                  className="h-full w-full object-cover"
+                />
+              )}
+            </div>
+          ))}
+        </div>
       </div>
-      <div className="px-0.5 pt-1.5">
-        <h4 className="line-clamp-1 text-xs font-bold">{lane.name}</h4>
-        <p className="text-micro font-medium text-muted-foreground">
-          {lane.cards.length} {lane.cards.length === 1 ? "pin" : "pins"}
-          {lane.fixes > 0 && <> · {lane.fixes} fixes</>}
+
+      <div className="min-w-0 flex-1">
+        <p className="line-clamp-1 text-body font-bold leading-tight">{lane.name}</p>
+        <p className="mt-0.5 text-mini font-semibold text-muted-foreground">
+          {lane.cards.length} to rewrite
+          {lane.impressions > 0 && <> · {metricLabel(lane.impressions)} views</>}
         </p>
+        <div className="mt-1 flex flex-wrap items-center gap-1.5">
+          {lane.highCount > 0 && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-micro font-bold text-primary">
+              <Flame className="h-2.5 w-2.5" /> {lane.highCount} top pick
+              {lane.highCount === 1 ? "" : "s"}
+            </span>
+          )}
+          {lane.lift !== null && lane.lift > 0 && (
+            <span className="text-micro font-bold text-primary tabular-nums">
+              ≈ +{reachLabel(lane.lift)} views
+            </span>
+          )}
+        </div>
       </div>
+
+      <span className="shrink-0 pr-0.5">
+        <SelectDot on={queued} />
+      </span>
     </motion.button>
   );
 }
@@ -1609,6 +1640,48 @@ function PinLaunch({ card, count }: { card: PinFixCard; count: number }) {
         </div>
       )}
     </LaunchScreen>
+  );
+}
+
+/** The one-line case for rewriting THIS pin, carried from the picker into the
+ * run: the diagnosis, the measurement behind it, and what a rewrite is
+ * modelled to unlock. A working pin gets the amber treatment instead — the run
+ * doesn't block it, but it says out loud that this one was fine. */
+function ImpactStrip({ impact }: { impact: PinImpact }) {
+  const Icon = DIAGNOSIS_ICON[impact.diagnosis];
+  const meta = DIAGNOSIS_META[impact.diagnosis];
+  return (
+    <div
+      className={`rounded-2xl p-2.5 ring-1 ${
+        impact.protect ? "bg-amber-500/[0.07] ring-amber-500/25" : "bg-surface-2/70 ring-border/70"
+      }`}
+    >
+      <div className="flex items-center gap-2">
+        <Icon
+          className={`h-3.5 w-3.5 shrink-0 ${impact.protect ? "text-amber-700" : "text-primary"}`}
+          strokeWidth={2.5}
+        />
+        <p
+          className={`min-w-0 flex-1 truncate text-mini font-bold ${
+            impact.protect ? "text-amber-900" : "text-foreground"
+          }`}
+        >
+          {meta.label} · {impact.headline}
+        </p>
+        {impact.reachLift !== null && impact.reachLift > 0 && !impact.protect && (
+          <span className="shrink-0 text-mini font-bold tabular-nums text-primary">
+            ≈ +{reachLabel(impact.reachLift)} views
+          </span>
+        )}
+      </div>
+      <p
+        className={`mt-1 text-micro leading-snug ${
+          impact.protect ? "text-amber-900/80" : "text-muted-foreground"
+        }`}
+      >
+        {impact.detail}
+      </p>
+    </div>
   );
 }
 
@@ -1641,6 +1714,12 @@ function RewriteCard({
       transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
       className="space-y-3"
     >
+      {/* Why this pin is in the run at all. The picker made the argument; the
+          review surface has to repeat it, because by the time a creator is
+          three cards deep they've lost the tier they queued from — and a
+          rewrite you can't remember the reason for is one you skip. */}
+      <ImpactStrip impact={card.impact} />
+
       {/* What the health check says about this pin as it stands. */}
       <div className="flex flex-wrap gap-1">
         <IssueChips issues={card.issues} />

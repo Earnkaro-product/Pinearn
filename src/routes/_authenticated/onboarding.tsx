@@ -2,7 +2,7 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { z } from "zod";
 import { supabase } from "@/integrations/supabase/client";
-import { toast } from "sonner";
+import { notifyDone, notifyProblem } from "@/lib/notify";
 import { getFriendlyMessage } from "@/lib/friendly-error";
 import { hasRealName, opaqueHandle, storefrontSlugFor } from "@/lib/creator-name";
 import {
@@ -10,18 +10,19 @@ import {
   ArrowRight,
   Ban,
   BarChart3,
+  ChevronRight,
   Eye,
   Loader2,
   PencilLine,
   ShieldCheck,
-  Lock,
   Layers,
   User,
 } from "lucide-react";
 import { useServerFn } from "@tanstack/react-start";
 import { syncPinterestAccount } from "@/lib/pinterest-sync.functions";
-import { startPinterestOAuth } from "@/lib/pinterest-oauth.functions";
 import { PinterestSyncModal, type SyncStatus } from "@/components/pinterest-sync-modal";
+import { PinterestFailureNotice } from "@/components/pinterest-gate";
+import { usePinterestConnect } from "@/hooks/use-pinterest-connect";
 
 const searchSchema = z.object({
   connected: z.coerce.string().optional(),
@@ -156,11 +157,13 @@ function OnboardingPage() {
   const navigate = useNavigate();
   const search = Route.useSearch();
   const runSync = useServerFn(syncPinterestAccount);
-  const runStartOAuth = useServerFn(startPinterestOAuth);
+  // Authorization lives in one hook so its failure survives on screen with a
+  // Retry attached, instead of a toast that fades and leaves a dead button.
+  const { connect, connecting: authorizing, failure: authFailure } = usePinterestConnect();
 
   const [userId, setUserId] = useState<string | null>(null);
   const [phase, setPhase] = useState<Phase>(search.connected === "1" ? "sync" : "name");
-  const [authorizing, setAuthorizing] = useState(false);
+  const [skipping, setSkipping] = useState(false);
   const [name, setName] = useState("");
   const [savingName, setSavingName] = useState(false);
 
@@ -172,6 +175,9 @@ function OnboardingPage() {
     pinsCreated: number;
   } | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
+  /** Why a successful import can still show zero pins — shown inside the sheet
+   *  rather than toasted over it. */
+  const [syncNote, setSyncNote] = useState<string | null>(null);
 
   useEffect(() => {
     supabase.auth.getUser().then(async ({ data }) => {
@@ -191,7 +197,7 @@ function OnboardingPage() {
       }
     });
     if (search.connected === "1") {
-      toast.success("Pinterest connected");
+      notifyDone("Pinterest connected");
       setTimeout(() => startSync(), 300);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -201,7 +207,7 @@ function OnboardingPage() {
     e?.preventDefault();
     if (!userId) return;
     const trimmed = name.trim();
-    if (trimmed.length < 2) return toast.error("Please enter your name");
+    if (trimmed.length < 2) return notifyProblem("Please enter your name");
     setSavingName(true);
     const { error } = await supabase
       .from("profiles")
@@ -209,7 +215,7 @@ function OnboardingPage() {
       .eq("id", userId);
     if (error) {
       setSavingName(false);
-      return toast.error(getFriendlyMessage(error));
+      return notifyProblem(getFriendlyMessage(error));
     }
     await renameStorefront(userId, trimmed);
     setSavingName(false);
@@ -218,14 +224,47 @@ function OnboardingPage() {
 
   async function authorizePinterest() {
     if (!userId) return;
-    setAuthorizing(true);
-    try {
-      const { url } = await runStartOAuth({ data: { returnTo: "/onboarding" } });
-      window.location.href = url;
-    } catch (e) {
-      setAuthorizing(false);
-      toast.error(e instanceof Error ? e.message : "Couldn't start the Pinterest connection");
+    await connect("/onboarding");
+  }
+
+  /**
+   * Leave onboarding without connecting Pinterest.
+   *
+   * All this writes is `onboarding_completed` — `pinterest_connected` stays
+   * false, which is now a perfectly valid state to be in. It is the whole reason
+   * the `_authenticated` guard no longer checks for a Pinterest connection: with
+   * that check in place this update was pointless, because the very next
+   * navigation redirected straight back here.
+   *
+   * Then a HARD navigation to Home. The guard runs in `beforeLoad`, so it has to
+   * re-read the profile row it just cached — a soft push can land back on this
+   * screen with the pre-skip snapshot.
+   *
+   * A failed write is the one case where skipping must not pretend to work: the
+   * flag wouldn't stick and the creator would be sent here again on the next
+   * boot, so it says so instead of navigating.
+   */
+  async function skipOnboarding() {
+    if (!userId || skipping) return;
+    setSkipping(true);
+    const { error } = await supabase
+      .from("profiles")
+      .update({ onboarding_completed: true })
+      .eq("id", userId);
+    if (error) {
+      setSkipping(false);
+      notifyProblem(getFriendlyMessage(error));
+      return;
     }
+    // Whatever name was typed but not submitted is still worth keeping.
+    const trimmed = name.trim();
+    if (trimmed.length >= 2) {
+      await supabase.from("profiles").update({ display_name: trimmed }).eq("id", userId);
+      await renameStorefront(userId, trimmed);
+    }
+    // Same again: the banner on the dashboard is where "Pinterest isn't
+    // connected" belongs, and it survives longer than 2.5 seconds.
+    window.location.href = "/dashboard";
   }
 
   async function startSync() {
@@ -233,6 +272,7 @@ function OnboardingPage() {
     setSyncStatus("running");
     setSyncError(null);
     setSyncResult(null);
+    setSyncNote(null);
     try {
       const r = await runSync({ data: { analytics: true } });
       if (!r.ok) {
@@ -252,18 +292,38 @@ function OnboardingPage() {
         pinsCreated: landed,
       });
       // "0 pins" with a board full of saves isn't a failure, but it looks exactly
-      // like one — say which it is.
-      if (landed === 0 && r.pins.savedSkipped > 0) {
-        toast.info(
-          `Found ${r.pins.savedSkipped} saved ${r.pins.savedSkipped === 1 ? "pin" : "pins"} on your boards. ShopMyPin works on Pins you created — create one on Pinterest and sync again.`,
-          { duration: 8000 },
-        );
-      }
+      // like one — so the sheet showing the zero says which it is. This was a
+      // toast stacked on top of the sheet, competing with the numbers it was
+      // there to explain.
+      setSyncNote(
+        landed === 0 && r.pins.savedSkipped > 0
+          ? `All ${r.pins.savedSkipped} ${r.pins.savedSkipped === 1 ? "Pin" : "Pins"} on your boards were saved from other people. ShopMyPin works on Pins you created — make one on Pinterest, then sync again.`
+          : null,
+      );
       setSyncStatus("success");
     } catch (e) {
       setSyncError(e instanceof Error ? e.message : "Sync failed");
       setSyncStatus("error");
     }
+  }
+
+  /**
+   * The import failed, but the connection itself is fine — go in anyway.
+   *
+   * Without this the failed-import sheet offered only "Retry sync" and
+   * "Cancel", and Cancel dropped the creator back onto the authorize card with
+   * its button already reading "Pinterest connected" and no way onward. The data
+   * isn't lost by continuing: every screen inside the app re-syncs on its own,
+   * and the sync banner offers the same retry from Home.
+   */
+  async function continueWithoutImport() {
+    if (!userId) return;
+    await supabase.from("profiles").update({ onboarding_completed: true }).eq("id", userId);
+    setSyncOpen(false);
+    // Nothing announced here: `window.location.href` tears the page down before
+    // a toast can paint, and the dashboard's Pinterest banner already reports an
+    // un-imported connection for as long as it's true.
+    window.location.href = "/dashboard";
   }
 
   async function finishOnboarding() {
@@ -273,7 +333,10 @@ function OnboardingPage() {
     setPhase("done");
     // Show the syncing loader for a moment before entering the dashboard
     await new Promise((r) => setTimeout(r, 2200));
-    toast.success("You're all set");
+    // No "All set" toast on arrival. The creator has just watched a full-screen
+    // sync animation and dismissed a sheet that reported the boards and pins it
+    // imported; a third confirmation, landing on top of a dashboard that is
+    // itself the evidence, told them nothing they hadn't just read twice.
     navigate({ to: "/dashboard" });
   }
 
@@ -368,12 +431,26 @@ function OnboardingPage() {
         }}
       />
       <div className="mx-auto w-full max-w-md px-4 pb-8 pt-8 sm:max-w-lg">
+        {/* The pill up here used to read "Required", with a padlock, and it was
+            the most load-bearing lie on the screen: nothing on this flow is
+            required to use the product. It is now the top-level way out — the
+            same skip as the one below the connect button, in the corner where a
+            skip is looked for. Present on the name step too, because a creator
+            who wants in should not have to answer two screens first; a name
+            typed but not submitted is carried over anyway (see skipOnboarding). */}
         <div className="mb-6 flex items-center gap-2">
           <img src="/shopmypin-logo.png" alt="" draggable={false} className="h-8 w-8" />
           <span className="font-display text-lg font-semibold">ShopMyPin</span>
-          <span className="ml-auto inline-flex items-center gap-1 rounded-full border border-primary/30 bg-primary/10 px-2.5 py-0.5 text-mini font-medium text-primary">
-            <Lock className="h-3 w-3" /> Required
-          </span>
+          <button
+            type="button"
+            onClick={skipOnboarding}
+            disabled={skipping || !userId}
+            className="ml-auto inline-flex min-h-8 items-center gap-1 rounded-full border border-border bg-surface px-3 text-mini font-semibold text-muted-foreground transition hover:border-primary/40 hover:text-foreground disabled:opacity-60"
+          >
+            {skipping ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+            {skipping ? "Skipping…" : "Skip for now"}
+            {!skipping && <ChevronRight className="h-3 w-3" />}
+          </button>
         </div>
 
         {phase === "name" ? (
@@ -384,9 +461,14 @@ function OnboardingPage() {
               </div>
               <div>
                 <h1 className="font-display text-2xl font-semibold leading-tight">
-                  What's your name?
+                  Hey, what's your name?
                 </h1>
-                <p className="text-sm text-muted-foreground">Shown on your storefront.</p>
+                {/* Says what the name is FOR. "Shown on your storefront" assumed
+                    the creator already knew they were getting a storefront —
+                    this is the screen before they've seen one. */}
+                <p className="mt-0.5 text-sm text-muted-foreground">
+                  Your digital shop will be named after you.
+                </p>
               </div>
             </div>
             {/* No "Your name" label — the heading two lines up already asked
@@ -423,9 +505,6 @@ function OnboardingPage() {
                   <h1 className="font-display text-xl font-semibold leading-tight">
                     Connect your Pinterest
                   </h1>
-                  <p className="mt-0.5 text-sm text-muted-foreground">
-                    Exactly what this gives us.
-                  </p>
                 </div>
               </div>
             </div>
@@ -515,6 +594,50 @@ function OnboardingPage() {
                 {phase === "authorize" && !authorizing && <ArrowRight className="h-4 w-4" />}
               </button>
 
+              {/* The failure, kept on screen. A connection that fails at this
+                  step used to leave a toast and a button that looked untouched,
+                  which reads as "nothing happened" — the one thing it must never
+                  read as. Retry restarts the same authorization; skipping stays
+                  available underneath, so a Pinterest outage can't wall a new
+                  creator out of the product entirely. */}
+              {authFailure && phase === "authorize" && (
+                <PinterestFailureNotice
+                  className="mt-4"
+                  failure={authFailure}
+                  onRetry={authorizePinterest}
+                  retrying={authorizing}
+                  secondary={
+                    <button
+                      type="button"
+                      onClick={skipOnboarding}
+                      disabled={skipping || !userId}
+                      className="inline-flex min-h-9 items-center rounded-full border border-border bg-surface px-4 text-xs font-semibold text-muted-foreground transition hover:text-foreground disabled:opacity-60"
+                    >
+                      {skipping ? "Skipping…" : "Skip for now"}
+                    </button>
+                  }
+                />
+              )}
+
+              {phase === "authorize" && (
+                <button
+                  type="button"
+                  onClick={skipOnboarding}
+                  disabled={skipping || !userId}
+                  className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-2xl px-4 py-3 text-sm font-semibold text-muted-foreground transition hover:text-foreground disabled:opacity-60"
+                >
+                  {skipping ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                  {skipping ? "Taking you in…" : "Skip — I'll connect later"}
+                </button>
+              )}
+
+              {phase === "authorize" && (
+                <p className="mt-1 text-center text-xs leading-snug text-muted-foreground">
+                  You can look around the whole app without this. We'll ask again — and only ask —
+                  when you do something that touches your Pinterest account.
+                </p>
+              )}
+
               {phase !== "authorize" && (
                 <button
                   onClick={startSync}
@@ -539,6 +662,7 @@ function OnboardingPage() {
         status={syncStatus}
         result={syncResult}
         error={syncError}
+        note={syncNote}
         onClose={() => {
           if (syncStatus === "success") finishOnboarding();
           else setSyncOpen(false);
@@ -547,6 +671,8 @@ function OnboardingPage() {
           setSyncStatus("idle");
           startSync();
         }}
+        onContinue={continueWithoutImport}
+        continueLabel="Continue to Home"
       />
     </div>
   );

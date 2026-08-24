@@ -30,6 +30,9 @@ export function PinterestSyncModal({
   error,
   onClose,
   onRetry,
+  onContinue,
+  continueLabel = "Continue anyway",
+  note,
 }: {
   open: boolean;
   status: SyncStatus;
@@ -37,6 +40,17 @@ export function PinterestSyncModal({
   error: string | null;
   onClose: () => void;
   onRetry: () => void;
+  /** A way FORWARD from a failed import, not just out of the sheet. Onboarding
+   *  passes it so a Pinterest outage mid-import can't park a new creator on a
+   *  screen whose only other button is "Cancel". */
+  onContinue?: () => void;
+  continueLabel?: string;
+  /** An explanation the result counts can't give on their own — most often
+   *  "everything on this account is a saved Pin". It used to arrive as an
+   *  8-second toast behind this very sheet, where it was both unreadable and
+   *  gone by the time the sheet closed. It belongs next to the zero it
+   *  explains. */
+  note?: string | null;
 }) {
   // Simulated step progression while the server call is in flight.
   const [stepIndex, setStepIndex] = useState(0);
@@ -167,6 +181,11 @@ export function PinterestSyncModal({
               value={result.pinsCreated}
               empty={result.pinsCreated === 0 ? "No new pins" : undefined}
             />
+            {note && (
+              <p className="col-span-2 rounded-xl border border-border bg-surface-2/60 p-3 text-xs leading-snug text-muted-foreground">
+                {note}
+              </p>
+            )}
           </div>
         ) : status === "error" ? (
           <div className="mt-5 rounded-xl border border-destructive/30 bg-destructive/10 p-3">
@@ -219,10 +238,10 @@ export function PinterestSyncModal({
           {status === "error" && (
             <>
               <button
-                onClick={onClose}
+                onClick={onContinue ?? onClose}
                 className="rounded-full px-4 py-2 text-sm text-muted-foreground hover:text-foreground"
               >
-                Cancel
+                {onContinue ? continueLabel : "Cancel"}
               </button>
               <button
                 onClick={onRetry}

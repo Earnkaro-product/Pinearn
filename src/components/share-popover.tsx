@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { Copy, Facebook, Mail, MessageCircle, Send, Share2, Twitter } from "lucide-react";
-import { toast } from "sonner";
+import { notifyDone, notifyProblem } from "@/lib/notify";
 
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
@@ -45,11 +45,11 @@ export function SharePopover({
   async function copy() {
     try {
       await navigator.clipboard.writeText(url);
-      toast.success("Link copied");
+      notifyDone("Link copied");
     } catch {
       // Clipboard is permission-gated and throws on an insecure origin. Saying
       // so beats a button that silently does nothing.
-      toast.error("Couldn't copy — long-press the link to copy it manually");
+      notifyProblem("Couldn't copy — long-press the link to copy it manually");
     }
   }
 

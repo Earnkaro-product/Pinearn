@@ -1,10 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { RotateCcw, X } from "lucide-react";
-import { AppSheet } from "@/components/app-sheet";
+import { RotateCcw, Sparkles } from "lucide-react";
 import { AnimatedNumber } from "@/components/health-widgets";
-import { useCoinLedger, useWallet } from "@/hooks/use-wallet";
-import { coinLabel, coinReasonLabel, resetCountdown } from "@/lib/coins";
+import { useWallet } from "@/hooks/use-wallet";
+import { coinLabel, resetCountdown } from "@/lib/coins";
 
 // Below this the wallet turns rose and the sheet leads with the refill date — a
 // creator about to run out mid-deck should find out before Apply goes dead.
@@ -121,8 +120,29 @@ function CoinDial({
  */
 export function WalletPill() {
   const { balance, allowance } = useWallet();
+  // Tapping the pill answers "how many left, when do they come back, what do they
+  // buy" in a card the size of the pill itself — no modal, nothing deeper.
   const [open, setOpen] = useState(false);
+  const wrap = useRef<HTMLSpanElement>(null);
   const reduce = useReducedMotion();
+
+  // Click-away and Escape — the card is a popover, not a modal, so it must never
+  // trap the header behind it.
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (!wrap.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
 
   // Flash the delta whenever the balance moves, so spending a coin is felt in the
   // header even though the tap happened at the bottom of the screen.
@@ -144,12 +164,14 @@ export function WalletPill() {
     // The capsule clips its own shine, so the floating ±n has to live outside it
     // — as a child it was silently cropped away by `overflow-hidden` and never
     // actually appeared.
-    <span className="relative shrink-0">
+    <span ref={wrap} className="relative shrink-0">
       <motion.button
         type="button"
         whileTap={{ scale: 0.95 }}
         whileHover={{ y: -1 }}
-        onClick={() => setOpen(true)}
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        aria-haspopup="dialog"
         aria-label={`Wallet — ${coinLabel(balance)} of ${allowance} left this week, refills ${resetCountdown()}. Open wallet`}
         className={`group relative flex h-9 shrink-0 items-center gap-1.5 overflow-hidden rounded-full pl-1 pr-2.5 ring-1 ring-inset transition-colors ${
           low
@@ -209,160 +231,94 @@ export function WalletPill() {
         )}
       </AnimatePresence>
 
-      <AnimatePresence>{open && <WalletSheet onClose={() => setOpen(false)} />}</AnimatePresence>
+      <AnimatePresence>{open && <WalletCard onClose={() => setOpen(false)} />}</AnimatePresence>
     </span>
   );
 }
 
-/** The wallet, open: the card with this week's balance, how much of the allowance
- * is gone, when it refills, and the receipts underneath. */
-function WalletSheet({ onClose }: { onClose: () => void }) {
-  const { balance, allowance, spentThisWeek, provisioned } = useWallet();
-  const ledger = useCoinLedger(true);
+/**
+ * The wallet, open — anchored under the pill rather than thrown up as a modal.
+ *
+ * Tapping a 90px capsule to darken the whole screen was the wrong weight for the
+ * three facts a creator actually wants: how many coins are left, when they come
+ * back, and what they buy. Those are one dial and two lines, so this is a small
+ * card in the pill's own gold.
+ */
+function WalletCard({ onClose }: { onClose: () => void }) {
+  const { balance, allowance, spentThisWeek } = useWallet();
   const low = balance < LOW_BALANCE;
   const pct = allowance > 0 ? Math.round((balance / allowance) * 100) : 0;
 
   return (
-    <AppSheet onClose={onClose} labelledBy="wallet-title">
-      <>
-        {/* The wallet, open. Same gold-on-cream material as the header capsule,
-            scaled up — the dial becomes the hero and carries the week's balance
-            in its middle, so the card needs no separate meter. It keeps its own
-            close button: a sheet header on top of a card that already says
-            "wallet" was 44px of pure duplication. */}
-        <div className="relative overflow-hidden rounded-[22px] bg-gradient-to-br from-amber-50 via-surface to-surface p-4 ring-1 ring-inset ring-amber-500/25">
-          <div
-            aria-hidden
-            className="pointer-events-none absolute -right-12 -top-16 h-44 w-44 rounded-full bg-amber-300/25 blur-3xl"
-          />
-          <div className="relative flex items-center gap-4">
-            <CoinDial pct={pct} low={low} size={70} coin={46} gradientId="wallet-dial-card" />
+    <motion.div
+      role="dialog"
+      aria-label="Wallet"
+      initial={{ opacity: 0, y: -6, scale: 0.95 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={{ opacity: 0, y: -6, scale: 0.96 }}
+      transition={{ type: "spring", stiffness: 420, damping: 32 }}
+      className={`absolute right-0 top-[calc(100%+10px)] z-50 w-[236px] origin-top-right rounded-[20px] bg-gradient-to-br from-amber-50 via-surface to-surface p-3 shadow-elevate ring-1 ring-inset ${
+        low ? "ring-rose-400/35" : "ring-amber-500/25"
+      }`}
+    >
+      {/* A little beak pointing back at the pill, so the card is clearly this
+          button's and not the avatar's next door. */}
+      <span
+        aria-hidden
+        className={`absolute -top-[5px] right-5 h-2.5 w-2.5 rotate-45 rounded-[3px] border-l border-t bg-amber-50 ${
+          low ? "border-rose-400/35" : "border-amber-500/25"
+        }`}
+      />
 
-            <div className="min-w-0 flex-1">
-              <div className="flex items-start justify-between gap-2">
-                <p
-                  id="wallet-title"
-                  className="text-micro font-bold uppercase tracking-[0.18em] text-amber-700/70"
-                >
-                  Wallet · this week
-                </p>
-                <button
-                  type="button"
-                  onClick={onClose}
-                  aria-label="Close wallet"
-                  className="-mr-1 -mt-1 grid h-7 w-7 shrink-0 place-items-center rounded-full text-amber-800/50 transition hover:bg-amber-500/10 hover:text-amber-900"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
-              </div>
-
-              <p className="mt-1 flex items-baseline gap-1.5">
-                <span
-                  className={`font-display text-[34px] font-extrabold leading-none tabular-nums ${
-                    low ? "text-rose-700" : "text-foreground"
-                  }`}
-                >
-                  {balance.toLocaleString()}
-                </span>
-                <span className="text-body font-bold text-amber-700/55">
-                  / {allowance.toLocaleString()}
-                </span>
-              </p>
-
-              <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                <span className="inline-flex items-center gap-1 rounded-full bg-surface px-2 py-[3px] text-micro font-bold text-amber-800/80 ring-1 ring-inset ring-amber-500/25">
-                  <RotateCcw className="h-2.5 w-2.5" /> Refills {resetCountdown()}
-                </span>
-                <span className="inline-flex items-center gap-1 rounded-full bg-surface px-2 py-[3px] text-micro font-bold tabular-nums text-muted-foreground ring-1 ring-inset ring-border">
-                  {spentThisWeek.toLocaleString()} spent
-                </span>
-              </div>
-            </div>
-          </div>
-
-          <p className="relative mt-3 text-micro font-semibold text-muted-foreground">
-            1 coin per pin boost · undo refunds it
+      <div className="flex items-center gap-3">
+        <CoinDial pct={pct} low={low} size={46} coin={30} gradientId="wallet-dial-card-mini" />
+        <div className="min-w-0">
+          <p className="flex items-baseline gap-1 font-display leading-none">
+            <span
+              className={`text-[24px] font-extrabold tabular-nums ${
+                low ? "text-rose-700" : "text-foreground"
+              }`}
+            >
+              {balance.toLocaleString()}
+            </span>
+            <span className="text-mini font-bold text-amber-700/55">
+              / {allowance.toLocaleString()}
+            </span>
+          </p>
+          <p className="mt-1.5 text-micro font-bold uppercase tracking-[0.14em] text-amber-700/70">
+            This week
+            {spentThisWeek > 0 && (
+              <span className="tabular-nums text-muted-foreground">
+                {" · "}
+                {spentThisWeek.toLocaleString()} spent
+              </span>
+            )}
           </p>
         </div>
+      </div>
 
-        {low && (
-          <p className="mt-2.5 rounded-2xl bg-rose-500/10 px-3 py-2 text-mini font-semibold leading-snug text-rose-800 ring-1 ring-inset ring-rose-500/20">
-            Only {coinLabel(balance)} left — your next {allowance} arrive {resetCountdown()}.
-          </p>
-        )}
-
-        {/* Says which wallet this is. A local balance is real and spendable but
-            lives on this device only, so it must never be mistaken for the
-            account-level one. */}
-        {!provisioned && (
-          <p className="mt-2.5 rounded-2xl bg-surface-2 px-3 py-2 text-micro leading-snug text-muted-foreground ring-1 ring-inset ring-border/70">
-            <span className="font-bold text-foreground">On this device only</span> — apply{" "}
-            <code className="text-micro">20260729130000_coin_wallet.sql</code> to sync it to your
-            account.
-          </p>
-        )}
-
-        <p className="mt-3.5 text-micro font-bold uppercase tracking-[0.14em] text-muted-foreground">
-          Receipts
+      {/* The two answers, one line each: when they come back, what they buy. */}
+      <div className="mt-3 space-y-2 border-t border-amber-500/15 pt-2.5">
+        <p
+          className={`flex items-center gap-2 text-mini font-semibold ${
+            low ? "text-rose-700" : "text-foreground/85"
+          }`}
+        >
+          <RotateCcw
+            className={`h-3.5 w-3.5 shrink-0 ${low ? "text-rose-500" : "text-amber-600"}`}
+          />
+          Refills {resetCountdown()}
         </p>
+        <p className="flex items-center gap-2 text-mini font-semibold text-foreground/85">
+          <Sparkles className="h-3.5 w-3.5 shrink-0 text-amber-600" />1 coin = 1 pin boost
+        </p>
+      </div>
 
-        {ledger.isPending ? (
-          <div className="mt-2 space-y-2">
-            {[0, 1, 2].map((i) => (
-              <div key={i} className="h-12 animate-pulse rounded-2xl bg-surface-2" />
-            ))}
-          </div>
-        ) : (ledger.data?.length ?? 0) === 0 ? (
-          <p className="py-6 text-center text-xs text-muted-foreground">
-            Nothing spent yet. Your first boost will show up here.
-          </p>
-        ) : (
-          <ul className="mt-1.5 divide-y divide-border/60">
-            {ledger.data!.map((t) => (
-              <li key={t.id} className="flex items-center gap-2.5 py-2">
-                <span
-                  className={`grid h-6 w-6 shrink-0 place-items-center rounded-full text-mini font-extrabold leading-none ${
-                    t.delta < 0
-                      ? "bg-primary/10 text-primary"
-                      : "bg-emerald-500/10 text-emerald-700"
-                  }`}
-                >
-                  {t.delta < 0 ? "−" : "+"}
-                </span>
-                <p className="min-w-0 flex-1 truncate text-xs font-semibold">
-                  {coinReasonLabel(t.reason)}
-                  <span className="ml-1.5 font-medium text-muted-foreground">
-                    {relativeTime(t.created_at)}
-                  </span>
-                </p>
-                <span
-                  className={`shrink-0 text-xs font-extrabold tabular-nums ${
-                    t.delta < 0 ? "text-primary" : "text-emerald-700"
-                  }`}
-                >
-                  {t.delta > 0 ? `+${t.delta}` : t.delta}
-                </span>
-                <span className="w-9 shrink-0 text-right text-micro tabular-nums text-muted-foreground">
-                  {t.balance_after.toLocaleString()}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </>
-    </AppSheet>
+      {/* Reachable close for keyboards and screen readers; the visible affordance
+          is tapping the pill again or anywhere else. */}
+      <button type="button" onClick={onClose} className="sr-only">
+        Close wallet
+      </button>
+    </motion.div>
   );
-}
-
-function relativeTime(iso: string): string {
-  const then = new Date(iso).getTime();
-  if (Number.isNaN(then)) return "";
-  const mins = Math.round((Date.now() - then) / 60_000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.round(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  const days = Math.round(hrs / 24);
-  if (days < 30) return `${days}d ago`;
-  return new Date(iso).toLocaleDateString();
 }

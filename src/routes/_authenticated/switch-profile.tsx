@@ -1,7 +1,7 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { toast } from "sonner";
+import { notifyDone, notifyProblem } from "@/lib/notify";
 import { AppShell } from "@/components/app-shell";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Check, Plus, Users } from "lucide-react";
@@ -61,21 +61,22 @@ function SwitchProfilePage() {
   function pick(id: string, handle: string) {
     setActiveId(id);
     writeStore({ accounts, activeId: id });
-    toast.success(`Switched to @${handle}`);
+    // The chosen row gets the active treatment immediately — that IS the
+    // confirmation, and unlike a toast it's still true a minute later.
   }
 
   function addAccount(e: React.FormEvent) {
     e.preventDefault();
     const h = newHandle.replace(/^@/, "").trim();
-    if (h.length < 2) return toast.error("Enter a handle");
-    if (accounts.some((a) => a.handle === h)) return toast.error("Already added");
+    if (h.length < 2) return notifyProblem("Enter a handle");
+    if (accounts.some((a) => a.handle === h)) return notifyProblem("Already added");
     const id = crypto.randomUUID();
     const next = [...accounts, { id, handle: h }];
     setAccounts(next);
     setActiveId(id);
     writeStore({ accounts: next, activeId: id });
     setNewHandle("");
-    toast.success(`Added @${h}`);
+    notifyDone(`Added @${h}`);
   }
 
   function remove(id: string) {
@@ -84,7 +85,7 @@ function SwitchProfilePage() {
     setAccounts(next);
     setActiveId(nextActive);
     writeStore({ accounts: next, activeId: nextActive });
-    toast.success("Removed");
+    notifyDone("Removed");
   }
 
   const all: PinAccount[] = [

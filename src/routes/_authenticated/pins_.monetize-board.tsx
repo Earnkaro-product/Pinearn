@@ -760,7 +760,9 @@ function MonetizeBoardPage() {
   };
 
   const backToBoard = () => navigate({ to: "/pins/attach", search: { collection: collectionId } });
-  const seeLivePins = () => navigate({ to: "/pins" });
+  // Live AND drafts: a bulk run can leave both behind (a pin whose match never
+  // resolved stays a draft), and the button promises "all the shoppable pins".
+  const seeLivePins = () => navigate({ to: "/pins", search: { filter: "all" } as never });
 
   if (!collectionId) {
     return (
@@ -2129,7 +2131,7 @@ function BoardMonetized({
           transition={{ delay: 0.25, duration: 0.35 }}
           className="mt-6 font-display text-[26px] font-extrabold leading-tight tracking-tight"
         >
-          Full board monetised! 🎉
+          Monetization started! 🎉
         </motion.h2>
         <motion.p
           initial={{ opacity: 0, y: 10 }}
@@ -2137,8 +2139,9 @@ function BoardMonetized({
           transition={{ delay: 0.35, duration: 0.35 }}
           className="mx-auto mt-2 max-w-[18rem] text-sm font-medium text-muted-foreground"
         >
-          {approvedCount} pin{approvedCount === 1 ? "" : "s"} now live in{" "}
-          {boardName ? `“${boardName}”` : "your board"} — you're earning on every one of them.
+          Shoppable links are live on {approvedCount} pin{approvedCount === 1 ? "" : "s"} in{" "}
+          {boardName ? `“${boardName}”` : "your board"}, with products attached — every tap can now
+          earn you a commission.
         </motion.p>
 
         <motion.button
@@ -2149,7 +2152,7 @@ function BoardMonetized({
           onClick={onBack}
           className="mt-8 inline-flex w-full max-w-[19rem] items-center justify-center gap-1.5 rounded-2xl bg-gradient-primary px-4 py-3.5 text-sm font-bold text-primary-foreground shadow-glow transition"
         >
-          See live pins
+          Check all the shoppable pins
         </motion.button>
       </motion.div>
     </div>

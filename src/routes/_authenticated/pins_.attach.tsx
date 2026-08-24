@@ -5,6 +5,7 @@ import {
   ChevronLeft,
   ChevronDown,
   Check,
+  HelpCircle,
   Link2,
   Plus,
   Search,
@@ -14,6 +15,9 @@ import {
 } from "lucide-react";
 
 import { AppShell } from "@/components/app-shell";
+import { FlowIntro, hasSeenIntro, introForcedByUrl, markIntroSeen } from "@/components/flow-intro";
+import { PinterestConnectPanel } from "@/components/pinterest-gate";
+import { usePinterestConnection } from "@/hooks/use-pinterest-connect";
 import { supabase } from "@/integrations/supabase/client";
 import {
   GRADIENTS,
@@ -71,6 +75,29 @@ function sortPins(pins: Pin[], sortBy: SortBy): Pin[] {
 function AttachPage() {
   const navigate = useNavigate();
   const search = Route.useSearch();
+  // The flow's entry state, in order: the first-run education, then Pinterest
+  // authorization, then the pin picker. Deep links (a specific pin, a board, the
+  // bulk-monetize intent) arrive with a target already chosen and skip the
+  // education — the creator has been here before by definition.
+  const deepLinked = !!(search.pinId || search.collection || search.intent);
+  // `null` until localStorage has been read: the education is a client-only
+  // decision, so the first render must not depend on it.
+  const [primerDone, setPrimerDone] = useState<boolean | null>(null);
+  useEffect(() => {
+    // ?intro=1 replays the education for anyone who has already dismissed it —
+    // it also overrides the deep-link skip, since asking for it is explicit.
+    if (introForcedByUrl()) {
+      setPrimerDone(false);
+      return;
+    }
+    setPrimerDone(deepLinked || hasSeenIntro("monetize-pin"));
+  }, [deepLinked]);
+  // Monetizing writes the shoppable link to the pin on Pinterest, so the whole
+  // flow needs a working connection — asked for here, at the door, rather than
+  // after the creator has already picked products.
+  const { usable: pinterestUsable, isLoading: pinterestLoading } = usePinterestConnection();
+  const needsPinterest =
+    primerDone === true && !deepLinked && !pinterestLoading && !pinterestUsable;
   const [selectedPinId, setSelectedPinId] = useState<string | null>(null);
   // Deep-linked from elsewhere (e.g. the dashboard's "Monetise" button on a
   // specific pin) — jump straight to that pin's attach dialog, skipping the
@@ -202,15 +229,89 @@ function AttachPage() {
     setBoardChoice("ask");
   };
 
+  if (primerDone === null) {
+    // One frame, while localStorage is read. The same skeleton the pin query
+    // uses, so this is invisible rather than a flash of the wrong screen.
+    return (
+      <AppShell title="Monetize pins" backButton backTo="/dashboard" hideBottomNav>
+        <div className="masonry-3 sm:masonry-4 lg:masonry-4">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <div
+              key={i}
+              className={`${RATIOS[i % RATIOS.length]} animate-pulse rounded-2xl border border-border bg-surface/60`}
+            />
+          ))}
+        </div>
+      </AppShell>
+    );
+  }
+
+  // The education and the authorization request are each the whole screen while
+  // they are up, so they carry the flow's name instead of "Select pin".
+  if (primerDone === false) {
+    return (
+      <AppShell title="Monetize pins" backButton backTo="/dashboard" hideBottomNav>
+        <FlowIntro
+          flow="monetize-pin"
+          onDone={() => {
+            markIntroSeen("monetize-pin");
+            setPrimerDone(true);
+          }}
+        />
+      </AppShell>
+    );
+  }
+
+  if (needsPinterest) {
+    return (
+      <AppShell title="Monetize pins" backButton backTo="/dashboard" hideBottomNav>
+        <PinterestConnectPanel
+          title="Connect Pinterest to monetize your pins"
+          reason="Monetizing works on the pins in your Pinterest account — we need access to read them and to add the shoppable link to the ones you pick."
+          bullets={[
+            "We only read your own pins and boards.",
+            "Nothing is published or deleted without you.",
+            "You can disconnect from Settings at any time.",
+          ]}
+        />
+      </AppShell>
+    );
+  }
+
   return (
-    <AppShell title="Select pin" backButton backTo="/pins" hideBottomNav>
+    <AppShell title="Select pin" backButton backTo="/dashboard" hideBottomNav>
       {dialogPin && (
         <PinDetailDialog
           pin={dialogPin}
           products={products}
           collections={collections}
-          onClose={() => setDialogPinId(null)}
+          onClose={() => {
+            setDialogPinId(null);
+            // Drop ?pinId so a later back/forward doesn't reopen a dialog the
+            // user has already dismissed.
+            if (search.pinId) {
+              void navigate({
+                search: ((s: Record<string, unknown>) => ({ ...s, pinId: undefined })) as never,
+                replace: true,
+              });
+            }
+          }}
         />
+      )}
+
+      {/* The education is once-per-browser, so this is the way back to it —
+          without it, "how does this work again?" has no answer inside the flow
+          it explains. */}
+      {!activeBoard && (
+        <div className="mb-3 flex justify-end">
+          <button
+            type="button"
+            onClick={() => setPrimerDone(false)}
+            className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-3 py-1.5 text-xs font-semibold text-muted-foreground transition hover:text-foreground"
+          >
+            <HelpCircle className="h-3.5 w-3.5" /> How it works
+          </button>
+        </div>
       )}
 
       {/* Pinterest-style tabs */}
@@ -280,7 +381,7 @@ function AttachPage() {
             </div>
           ) : activeBoard.pins.length === 0 ? (
             <EmptyBlock
-              text="No pins in this board."
+              text="Looks like this board doesn’t have a pin yet. Try creating one."
               actionLabel="Create pin"
               onAction={() => navigate({ to: "/pins/create" })}
             />
@@ -307,7 +408,7 @@ function AttachPage() {
       ) : tab === "pins" ? (
         pins.length === 0 ? (
           <EmptyBlock
-            text="No pins yet."
+            text="Looks like you don’t have a pin yet. Try creating one."
             actionLabel="Create pin"
             onAction={() => navigate({ to: "/pins/create" })}
           />
@@ -326,7 +427,7 @@ function AttachPage() {
           </div>
         )
       ) : selectableBoards.length === 0 ? (
-        <EmptyBlock text="No boards yet." />
+        <EmptyBlock text="Looks like you don’t have a board to monetize yet. Try creating a pin." />
       ) : (
         <BoardsGrid boards={selectableBoards} onSelect={openBoard} />
       )}

@@ -18,9 +18,10 @@ import {
   Sparkles,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
+import { hasRealName } from "@/lib/creator-name";
+import { useGoBack } from "@/hooks/use-go-back";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { toast } from "sonner";
 import { AffiliateLinkDialog } from "@/components/affiliate-link-dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { WalletPill } from "@/components/wallet-pill";
@@ -49,6 +50,7 @@ export function AppShell({
   onBack,
   greetingName,
   hideBottomNav,
+  hideWallet,
   children,
 }: {
   title: string;
@@ -56,10 +58,11 @@ export function AppShell({
   actions?: ReactNode;
   inlineActions?: boolean;
   backButton?: boolean;
-  // Explicit parent route for the back button. When set, the back button
-  // navigates here instead of `history.back()` — so back is deterministic
-  // regardless of how the user reached the page (deep link, redirect, or a
-  // different entry point). `backSearch` supplies its search params.
+  // Fallback parent route for the back button. Back returns to wherever the
+  // user actually came from; `backTo` only kicks in when there is no in-app
+  // history to return to (deep link, fresh tab, external referrer) — every
+  // page has several entry points, so a fixed parent would strand anyone who
+  // arrived from a different one. `backSearch` supplies its search params.
   backTo?: string;
   backSearch?: Record<string, unknown>;
   // Full override: when set, the back button calls this instead of navigating.
@@ -68,25 +71,30 @@ export function AppShell({
   onBack?: () => void;
   greetingName?: boolean;
   hideBottomNav?: boolean;
+  // Suppresses the coin balance on a page that would otherwise show it. The
+  // shell already withholds it everywhere outside Pinterest SEO, so this only
+  // matters if an SEO screen ever needs its header clear.
+  hideWallet?: boolean;
   children: ReactNode;
 }) {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const hideHeaderActions = pathname === "/pins/attach";
+  // Coins are a Pinterest SEO currency and nothing else spends them, so the
+  // balance only appears inside that flow (/boost and its pin/board steps).
+  // Anywhere else a number in the header just raises "what is this going to
+  // cost me?" on a screen where the answer is "nothing". Keyed off the route
+  // rather than left to each page to opt in, since the flow spans several.
+  const inSeoFlow = pathname === "/boost" || pathname.startsWith("/boost/");
+  const noWallet = hideWallet || !inSeoFlow;
 
   const navigate = useNavigate();
   const qc = useQueryClient();
 
-  // Back navigation: an explicit override wins, then the explicit parent
-  // route, then browser history.
-  const goBack = () => {
-    if (onBack) {
-      onBack();
-    } else if (backTo) {
-      navigate({ to: backTo, search: backSearch ?? {} } as never);
-    } else {
-      history.back();
-    }
-  };
+  // Back navigation: an in-page override wins (sub-views that should swap
+  // rather than leave the page), otherwise real history with `backTo` as the
+  // deep-link fallback. See useGoBack.
+  const backToOrigin = useGoBack({ to: backTo ?? "/dashboard", search: backSearch });
+  const goBack = onBack ?? backToOrigin;
 
   const { data: me, isPending: meLoading } = useQuery({
     queryKey: ["me-shell"],
@@ -115,7 +123,13 @@ export function AppShell({
     navigate({ to: "/auth", replace: true });
   }
 
-  const firstName = (me?.display_name ?? me?.email?.split("@")[0] ?? "creator").split(" ")[0];
+  // The header greets people by FIRST name only — "Hi, Reet 👋", not the full
+  // "Reet Dua" the profile stores. display_name is also seeded with the phone
+  // number at sign-up (see creator-name.ts), so it has to be checked before it
+  // is greeted with; the email fallback is derived from that same number, which
+  // is why it isn't one.
+  const fullName = hasRealName(me?.display_name) ? me!.display_name!.trim() : "creator";
+  const firstName = fullName.split(" ")[0];
   const initials = firstName.slice(0, 1).toUpperCase();
 
   return (
@@ -129,7 +143,7 @@ export function AppShell({
           </Link>
 
           <ProfileSwitcher
-            name={me?.display_name ?? firstName}
+            name={fullName}
             handle={me?.pinterest_username}
             connected={!!me?.pinterest_connected}
             initials={initials}
@@ -184,7 +198,7 @@ export function AppShell({
                 </button>
               ) : (
                 <UserMenu
-                  name={me?.display_name ?? firstName}
+                  name={fullName}
                   email={me?.email}
                   initials={initials}
                   avatar={me?.avatar_url ?? undefined}
@@ -218,10 +232,10 @@ export function AppShell({
                   </>
                 )}
               </div>
-              {/* Coin balance, top right on every screen — it's spent from the
-                  Boost flows but it's account-level, so it lives in the shell
-                  rather than being re-mounted per route. */}
-              <WalletPill />
+              {/* Coin balance — account-level, so it lives in the shell rather
+                  than being re-mounted per route, and shown only where coins
+                  are actually spent. */}
+              {!noWallet && <WalletPill />}
 
               {!hideHeaderActions && (
                 <div
@@ -544,7 +558,9 @@ function ProfileSwitcher({
                 onClick={() => {
                   setActive(a.id);
                   setOpen(false);
-                  toast.success(`Switched to @${a.handle}`);
+                  // No toast: the button this menu hangs off now reads the new
+                  // handle. Announcing a switch the switcher itself displays is
+                  // the clearest case of a toast repeating the UI.
                 }}
                 className="flex w-full items-center gap-3 rounded-xl px-2 py-2 text-left transition hover:bg-surface-2"
               >

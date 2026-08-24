@@ -334,7 +334,20 @@ function toBoard(b: {
  * board whose `privacy` field is missing or unrecognised, which the server-side
  * filter would have let through as "PUBLIC by default".
  */
-export async function listBoards(accessToken: string): Promise<PinterestBoard[]> {
+export type BoardListing = {
+  boards: PinterestBoard[];
+  /** Boards on the account that were left behind because they aren't public.
+   * Returned rather than only logged: a creator whose boards are all secret sees
+   * an empty app, and the only thing that distinguishes that from a broken sync
+   * is this number reaching the screen. */
+  nonPublicSkipped: number;
+  /** Boards dropped because `privacy` was missing or unrecognised. Separate from
+   * the above because it means Pinterest changed its payload, not that the
+   * creator hid something. */
+  unknownPrivacySkipped: number;
+};
+
+export async function listBoards(accessToken: string): Promise<BoardListing> {
   const boards: PinterestBoard[] = [];
   let droppedNonPublic = 0;
   let droppedUnknown = 0;
@@ -371,7 +384,11 @@ export async function listBoards(accessToken: string): Promise<PinterestBoard[]>
         `If this is every board, Pinterest has stopped returning the field and the public-only gate is over-filtering.`,
     );
   }
-  return boards;
+  return {
+    boards,
+    nonPublicSkipped: droppedNonPublic,
+    unknownPrivacySkipped: droppedUnknown,
+  };
 }
 
 export async function createBoard(
@@ -499,9 +516,32 @@ function toPin(p: Record<string, unknown>, fallbackBoardId: string | null): Pint
   };
 }
 
-/** Running tally for one listing walk, so the reason pins were dropped survives
- * as a log line instead of as an unexplained count. */
-type PinFilterStats = { saves: number; noOwnerFlag: number };
+/**
+ * Running tally for one listing walk, so the reason pins were dropped survives
+ * as something the caller can report — not just a log line.
+ *
+ * `savedIds` holds ids rather than a counter because the two discovery passes
+ * overlap: the same save can be dropped by both the per-board walk and the
+ * account-wide listing, and the sync reports one unique total.
+ */
+export type PinFilterStats = { savedIds: Set<string>; noOwnerFlag: number };
+
+export function emptyPinFilterStats(): PinFilterStats {
+  return { savedIds: new Set<string>(), noOwnerFlag: 0 };
+}
+
+/**
+ * A listing walk's result: the pins that passed the authored-only gate, plus
+ * what the gate rejected on the way.
+ *
+ * The stats travel WITH the pins deliberately. They used to be console-only,
+ * which made `PinterestSyncResult.pins.savedSkipped` unreachable — it counted a
+ * second, redundant filter pass over pins these functions had already dropped,
+ * so it was structurally always 0. An account whose every pin is a repin then
+ * imported nothing and said nothing, which is indistinguishable from a broken
+ * integration. This is the number that explains the empty state.
+ */
+export type PinListing = { pins: PinterestPin[]; stats: PinFilterStats };
 
 /** Convert raw items, keeping only authored pins. */
 function pushCreatedPins(
@@ -514,14 +554,14 @@ function pushCreatedPins(
     if (raw.is_owner === undefined) stats.noOwnerFlag++;
     const pin = toPin(raw, fallbackBoardId);
     if (isCreatedByUser(pin)) target.push(pin);
-    else stats.saves++;
+    else stats.savedIds.add(pin.id);
   }
 }
 
 function logPinFilterStats(source: string, kept: number, stats: PinFilterStats) {
-  if (stats.saves > 0) {
+  if (stats.savedIds.size > 0) {
     console.info(
-      `[pinterest-api] ${source}: kept ${kept} authored pin(s), skipped ${stats.saves} save(s)`,
+      `[pinterest-api] ${source}: kept ${kept} authored pin(s), skipped ${stats.savedIds.size} save(s)`,
     );
   }
   // `is_owner` is documented and has always been present. If it ever stops
@@ -547,9 +587,9 @@ function logPinFilterStats(source: string, kept: number, stats: PinFilterStats) 
  * as the board holding it, so the caller's job is to only ever pass a board that
  * passed `isPublicBoard`.
  */
-export async function listBoardPins(accessToken: string, boardId: string): Promise<PinterestPin[]> {
+export async function listBoardPins(accessToken: string, boardId: string): Promise<PinListing> {
   const pins: PinterestPin[] = [];
-  const stats: PinFilterStats = { saves: 0, noOwnerFlag: 0 };
+  const stats = emptyPinFilterStats();
   let bookmark: string | undefined;
   do {
     const qs = new URLSearchParams({ page_size: "100" });
@@ -559,7 +599,7 @@ export async function listBoardPins(accessToken: string, boardId: string): Promi
     bookmark = data.bookmark || undefined;
   } while (bookmark);
   logPinFilterStats(`board ${boardId}`, pins.length, stats);
-  return pins;
+  return { pins, stats };
 }
 
 /**
@@ -583,9 +623,9 @@ export async function listBoardPins(accessToken: string, boardId: string): Promi
  * is the correct outcome rather than a regression. Making such a board public on
  * Pinterest is what brings its pins in.
  */
-export async function listUserPins(accessToken: string): Promise<PinterestPin[]> {
+export async function listUserPins(accessToken: string): Promise<PinListing> {
   const pins: PinterestPin[] = [];
-  const stats: PinFilterStats = { saves: 0, noOwnerFlag: 0 };
+  const stats = emptyPinFilterStats();
   let bookmark: string | undefined;
   do {
     const qs = new URLSearchParams({ page_size: "100", pin_filter: "exclude_repins" });
@@ -595,7 +635,7 @@ export async function listUserPins(accessToken: string): Promise<PinterestPin[]>
     bookmark = data.bookmark || undefined;
   } while (bookmark);
   logPinFilterStats("account listing", pins.length, stats);
-  return pins;
+  return { pins, stats };
 }
 
 export type PinterestAccount = {

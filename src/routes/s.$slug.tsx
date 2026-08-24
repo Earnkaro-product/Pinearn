@@ -1,14 +1,58 @@
-import { createFileRoute, Link, notFound } from "@tanstack/react-router";
+import { createFileRoute, Link, notFound, useRouter } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
-import { useState } from "react";
-import { ChevronLeft, Image as ImageIcon } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Reorder } from "framer-motion";
+import {
+  ArrowUpDown,
+  ArrowUpRight,
+  Check,
+  ChevronDown,
+  ChevronLeft,
+  ChevronUp,
+  GripVertical,
+  Image as ImageIcon,
+  Loader2,
+  Maximize2,
+  ShoppingBag,
+  X,
+} from "lucide-react";
+import { notifyDone, notifyProblem } from "@/lib/notify";
 import { z } from "zod";
 
-import { hostBrand } from "@/lib/brands";
+import { supabase } from "@/integrations/supabase/client";
+import { brandForUrl, brandLogoUrl, hostBrand } from "@/lib/brands";
 import { productPriceParts } from "@/lib/product-price";
 
 const DEFAULT_BACKGROUND =
   "https://images.unsplash.com/photo-1519681393784-d120267933ba?w=1600&q=80&auto=format&fit=crop";
+
+/** True once mounted if the visitor arrived here from another page in this
+ * tab — i.e. the storefront is being previewed from the app. A cold public
+ * visit has no history to go back to, so the button stays hidden there. */
+function useCanGoBack() {
+  const [canGoBack, setCanGoBack] = useState(false);
+  useEffect(() => {
+    setCanGoBack(window.history.length > 1);
+  }, []);
+  return canGoBack;
+}
+
+/** Back chip floating over the background band. Sits on the image, so it
+ * carries its own translucent backdrop to stay readable on any cover. */
+function PreviewBackButton() {
+  const canGoBack = useCanGoBack();
+  if (!canGoBack) return null;
+  return (
+    <button
+      type="button"
+      onClick={() => history.back()}
+      aria-label="Go back"
+      className="absolute left-4 top-4 z-20 inline-flex items-center gap-1.5 rounded-full bg-black/40 px-3 py-2 text-sm font-medium text-white backdrop-blur-sm transition hover:bg-black/60"
+    >
+      <ChevronLeft className="h-4 w-4" /> Back
+    </button>
+  );
+}
 
 export const getPublicStorefront = createServerFn({ method: "GET" })
   .validator((d: { slug: string }) => z.object({ slug: z.string() }).parse(d))
@@ -251,12 +295,22 @@ function PublicStorefront() {
     collectionsByBoard.set(bc.board_id, arr);
   }
 
+  // A board is only worth a tile once one of its collections is actually shown
+  // here — `collections` is already filtered to the monetized ones. An imported
+  // board whose pins were never monetized would otherwise render as a card
+  // saying "0 collections", and a whole tab of those (or an empty state where
+  // boards should be) tells a visitor the store is broken rather than young.
+  const visibleBoards = boards.filter((b: B) =>
+    (collectionsByBoard.get(b.id) ?? []).some((cid) => collections.some((c: C) => c.id === cid)),
+  );
+
   return (
     <div className="min-h-screen bg-background text-foreground">
       {/* Background band */}
       <div className="relative h-48 w-full overflow-hidden sm:h-64">
         <img src={backgroundUrl} alt="" className="absolute inset-0 h-full w-full object-cover" />
         <div className="absolute inset-0 bg-gradient-to-b from-black/20 via-transparent to-background" />
+        <PreviewBackButton />
       </div>
 
       {/* Header card */}
@@ -287,7 +341,7 @@ function PublicStorefront() {
 
       <main className="mx-auto max-w-5xl px-6 py-8">
         {/* Tabs */}
-        {boards.length > 0 && (
+        {visibleBoards.length > 0 && (
           <div className="mx-auto mb-6 flex max-w-xs items-center justify-center gap-1 rounded-full border border-border bg-surface p-1">
             <button
               onClick={() => setTab("collections")}
@@ -336,9 +390,9 @@ function PublicStorefront() {
           ) : (
             <EmptyState text="This storefront is still being set up." />
           )
-        ) : boards.length > 0 ? (
+        ) : (
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
-            {boards.map((b: B) => {
+            {visibleBoards.map((b: B) => {
               const memberIds = collectionsByBoard.get(b.id) ?? [];
               const memberCollections = collections.filter((c: C) => memberIds.includes(c.id));
               const mosaic: string[] = [];
@@ -364,8 +418,6 @@ function PublicStorefront() {
               );
             })}
           </div>
-        ) : (
-          <EmptyState text="No boards yet." />
         )}
       </main>
 
@@ -478,6 +530,45 @@ function currencySymbol(currency: string | null): string {
   return map[code] ?? currency!;
 }
 
+/**
+ * True when the signed-in visitor is the creator who owns this storefront.
+ *
+ * Read from the LOCAL session (getSession, not getUser) so an anonymous shopper
+ * pays no network round-trip for a check that is always going to come back
+ * false. This gates UI only — every write still goes through the
+ * `products owner all` RLS policy (20260706061832), which is the real
+ * authority. Runs in an effect because the page is server-rendered: the server
+ * has no session, so owner-only chrome must appear after hydration or the
+ * markup would not match.
+ */
+function useIsOwner(ownerId: string): boolean {
+  const [isOwner, setIsOwner] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    supabase.auth
+      .getSession()
+      .then(({ data }) => {
+        if (alive) setIsOwner(data.session?.user?.id === ownerId);
+      })
+      .catch(() => {
+        /* no session, no owner chrome — nothing to report to a shopper */
+      });
+    return () => {
+      alive = false;
+    };
+  }, [ownerId]);
+  return isOwner;
+}
+
+type PublicProduct = {
+  id: string;
+  title: string;
+  image_url: string | null;
+  affiliate_url: string;
+  price_cents: number | null;
+  currency: string | null;
+};
+
 function CollectionView({
   store,
   collection,
@@ -486,118 +577,174 @@ function CollectionView({
   brand,
   backgroundUrl,
 }: {
-  store: { name: string; slug: string };
-  collection: { name: string; description: string | null };
-  products: Array<{
+  store: { name: string; slug: string; user_id: string };
+  collection: {
     id: string;
-    title: string;
-    image_url: string | null;
-    affiliate_url: string;
-    price_cents: number | null;
-    currency: string | null;
-  }>;
+    name: string;
+    description: string | null;
+    cover_image_url: string | null;
+    cover_color: string | null;
+  };
+  products: PublicProduct[];
   pins: Array<{ id: string; image_url: string | null }>;
   brand: string;
   backgroundUrl: string;
 }) {
+  const router = useRouter();
+  const isOwner = useIsOwner(store.user_id);
+  const [reorderOpen, setReorderOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [zoomed, setZoomed] = useState(false);
+  /** Order the creator just saved. Held locally so the grid re-sorts on the
+   * same tap that saves, instead of waiting for the loader to come back. */
+  const [savedOrder, setSavedOrder] = useState<string[] | null>(null);
+
+  // The pin this collection was built from is the visual anchor of the page —
+  // a shopper who tapped a pin should see that pin here, not just its products.
+  const thumbUrl =
+    collection.cover_image_url ??
+    pins.find((p) => p.image_url)?.image_url ??
+    products.find((p) => p.image_url)?.image_url ??
+    null;
+
+  const ordered = useMemo(() => {
+    if (!savedOrder) return products;
+    const byId = new Map(products.map((p) => [p.id, p]));
+    const seen = new Set(savedOrder);
+    const list = savedOrder.map((id) => byId.get(id)).filter(Boolean) as PublicProduct[];
+    // Anything the saved order doesn't know about (added from another tab
+    // meanwhile) keeps its loader position at the end rather than vanishing.
+    for (const p of products) if (!seen.has(p.id)) list.push(p);
+    return list;
+  }, [products, savedOrder]);
+
+  async function saveOrder(ids: string[]) {
+    setSaving(true);
+    try {
+      // One UPDATE per row: there is no unique key to upsert against, and an
+      // upsert would have to resend every NOT NULL column of every product.
+      //
+      // `position` is renumbered 0..n-1 within THIS collection, so two
+      // collections can hold the same numbers. That is fine — the loader
+      // buckets products by collection before rendering, so positions are only
+      // ever compared against siblings that appear on the same page.
+      const results = await Promise.all(
+        ids.map((id, idx) =>
+          supabase.from("storefront_products").update({ position: idx }).eq("id", id),
+        ),
+      );
+      const failed = results.find((r) => r.error);
+      if (failed?.error) throw failed.error;
+      setSavedOrder(ids);
+      setReorderOpen(false);
+      notifyDone("Order saved — this is what shoppers see");
+      // Refetch the loader so a reload agrees with what's on screen.
+      router.invalidate();
+    } catch (e) {
+      notifyProblem(e instanceof Error ? e.message : "Could not save the order");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <div className="relative h-36 w-full overflow-hidden sm:h-48">
+      <div className="relative h-40 w-full overflow-hidden sm:h-52">
         <img src={backgroundUrl} alt="" className="absolute inset-0 h-full w-full object-cover" />
-        <div className="absolute inset-0 bg-gradient-to-b from-black/25 via-transparent to-background" />
-      </div>
-
-      <header className="mx-auto max-w-5xl px-6 pt-4">
+        <div className="absolute inset-0 bg-gradient-to-b from-black/30 via-black/5 to-background" />
+        {/* Back to the storefront. A chip on the cover rather than a line of
+            text under it, so the header row below belongs to the collection. */}
         <Link
           to="/s/$slug"
           params={{ slug: store.slug }}
           search={{ c: undefined }}
-          className="inline-flex items-center gap-1.5 text-sm font-medium text-muted-foreground hover:text-foreground"
+          className="absolute left-4 top-4 z-20 inline-flex max-w-[70%] items-center gap-1.5 rounded-full bg-black/40 px-3 py-2 text-sm font-medium text-white backdrop-blur-sm transition hover:bg-black/60"
         >
-          <ChevronLeft className="h-4 w-4" /> {store.name}
+          <ChevronLeft className="h-4 w-4 shrink-0" />
+          <span className="truncate">{store.name}</span>
         </Link>
-        <h1 className="mt-3 font-display text-2xl font-semibold sm:text-3xl">{collection.name}</h1>
-        {collection.description && (
-          <p className="mt-2 max-w-xl text-sm text-muted-foreground">{collection.description}</p>
-        )}
-        <p className="mt-1 text-sm text-muted-foreground">
-          {products.length} product{products.length === 1 ? "" : "s"}
-        </p>
+      </div>
+
+      <header className="relative z-10 mx-auto max-w-5xl px-6">
+        <div className="-mt-14 flex flex-col gap-4 sm:-mt-16 sm:flex-row sm:items-end sm:gap-5">
+          {/* Pin thumbnail */}
+          <button
+            type="button"
+            onClick={() => thumbUrl && setZoomed(true)}
+            disabled={!thumbUrl}
+            aria-label={thumbUrl ? "View pin image" : undefined}
+            className="group relative h-24 w-24 shrink-0 overflow-hidden rounded-3xl border-4 border-background bg-surface-2 shadow-elevate transition enabled:hover:-translate-y-0.5 sm:h-28 sm:w-28"
+            style={
+              thumbUrl
+                ? undefined
+                : {
+                    background: `linear-gradient(135deg, ${collection.cover_color ?? brand}, transparent)`,
+                  }
+            }
+          >
+            {thumbUrl ? (
+              <>
+                <img
+                  src={thumbUrl}
+                  alt=""
+                  className="h-full w-full object-cover transition duration-500 group-hover:scale-105"
+                />
+                <span className="pointer-events-none absolute inset-0 grid place-items-center bg-black/40 opacity-0 transition group-hover:opacity-100">
+                  <Maximize2 className="h-5 w-5 text-white" />
+                </span>
+              </>
+            ) : (
+              <span className="grid h-full w-full place-items-center text-white/80">
+                <ImageIcon className="h-6 w-6" />
+              </span>
+            )}
+          </button>
+
+          <div className="min-w-0 flex-1 sm:pb-1">
+            <h1 className="font-display text-2xl font-semibold leading-tight sm:text-3xl">
+              {collection.name}
+            </h1>
+            <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-surface-2 px-2.5 py-0.5 text-xs font-semibold text-foreground">
+                <ShoppingBag className="h-3.5 w-3.5" style={{ color: brand }} />
+                {ordered.length} product{ordered.length === 1 ? "" : "s"}
+              </span>
+              <span className="text-xs">from {store.name}</span>
+            </p>
+            {collection.description && (
+              <p className="mt-2 max-w-xl text-sm text-muted-foreground">
+                {collection.description}
+              </p>
+            )}
+          </div>
+
+          {/* Owner-only. A shopper never sees it: order is the creator's
+              merchandising decision, and RLS refuses the write anyway. */}
+          {isOwner && ordered.length >= 2 && (
+            <div className="flex items-center gap-2 sm:pb-1">
+              <button
+                type="button"
+                onClick={() => setReorderOpen(true)}
+                className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-3.5 py-2 text-xs font-semibold shadow-sm transition hover:-translate-y-0.5 hover:border-primary/50 hover:shadow-elevate"
+              >
+                <ArrowUpDown className="h-3.5 w-3.5" /> Reorder
+              </button>
+              <span className="hidden text-micro text-muted-foreground sm:inline">
+                Only you
+                <br />
+                see this
+              </span>
+            </div>
+          )}
+        </div>
       </header>
 
-      <main className="mx-auto max-w-5xl px-6 py-6">
-        {products.length > 0 ? (
+      <main className="mx-auto max-w-5xl px-6 py-8">
+        {ordered.length > 0 ? (
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
-            {products.map((p) => {
-              // Same helper the in-app SuggestionCard uses, so the struck-through
-              // "was" price a visitor sees is the same number the creator sees.
-              const parts = productPriceParts(p.price_cents, currencySymbol(p.currency));
-              return (
-                <article
-                  key={p.id}
-                  className="group relative flex h-full flex-col overflow-hidden rounded-2xl border border-border bg-surface text-left shadow-sm transition hover:-translate-y-1 hover:border-primary/50 hover:shadow-elevate"
-                >
-                  <div className="relative aspect-square w-full overflow-hidden bg-surface-2">
-                    {p.image_url ? (
-                      <img
-                        src={p.image_url}
-                        alt={p.title}
-                        loading="lazy"
-                        className="absolute inset-0 h-full w-full object-cover transition duration-500 group-hover:scale-[1.06]"
-                      />
-                    ) : (
-                      <div className="absolute inset-0 grid place-items-center text-muted-foreground">
-                        <ImageIcon className="h-8 w-8" />
-                      </div>
-                    )}
-                    <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/30 via-transparent to-transparent" />
-                  </div>
-
-                  <div className="flex flex-1 flex-col gap-2 p-3">
-                    <span className="truncate text-micro font-bold uppercase tracking-wide text-muted-foreground">
-                      {hostBrand(p.affiliate_url)}
-                    </span>
-                    <h3 className="line-clamp-2 min-h-[2.4em] text-xs font-semibold leading-snug text-foreground">
-                      {p.title}
-                    </h3>
-
-                    {parts && (
-                      <div className="flex flex-wrap items-baseline gap-1.5">
-                        <span className="text-lead font-extrabold tracking-tight text-foreground">
-                          {parts.price}
-                        </span>
-                        {parts.mrp && (
-                          <span className="text-mini font-medium text-muted-foreground line-through">
-                            {parts.mrp}
-                          </span>
-                        )}
-                        {parts.discountPct != null && parts.discountPct > 0 && (
-                          <span className="text-mini font-bold text-amber-600">
-                            ({parts.discountPct}% OFF)
-                          </span>
-                        )}
-                      </div>
-                    )}
-
-                    {/* The ONLY call to action. No compare, no details, no
-                        secondary link — and deliberately no earnings pill: the
-                        commission is the creator's business, never the shopper's.
-                        rel="sponsored nofollow" because this is a paid affiliate
-                        link; noopener/noreferrer so the retailer's page gets no
-                        handle on this tab. */}
-                    <a
-                      href={p.affiliate_url}
-                      target="_blank"
-                      rel="sponsored nofollow noopener noreferrer"
-                      className="mt-auto flex items-center justify-center rounded-xl px-3 py-2.5 text-sm font-semibold text-white transition hover:brightness-110 active:scale-[0.99]"
-                      style={{ background: brand }}
-                    >
-                      Buy now
-                    </a>
-                  </div>
-                </article>
-              );
-            })}
+            {ordered.map((p) => (
+              <ProductCard key={p.id} product={p} brand={brand} />
+            ))}
           </div>
         ) : (
           <>
@@ -633,6 +780,332 @@ function CollectionView({
           ShopMyPin
         </Link>
       </footer>
+
+      {zoomed && thumbUrl && (
+        <Lightbox src={thumbUrl} alt={collection.name} onClose={() => setZoomed(false)} />
+      )}
+
+      {reorderOpen && (
+        <ReorderProductsDialog
+          products={ordered}
+          brand={brand}
+          pending={saving}
+          onSave={saveOrder}
+          onClose={() => setReorderOpen(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * One product.
+ *
+ * The WHOLE card is the affiliate link — one destination, one tap target, so a
+ * thumb that lands anywhere on the card still earns. The "Buy now" pill is a
+ * div, not a nested anchor: it exists to say where the tap goes, and nesting a
+ * second <a> inside one is invalid markup that browsers un-nest unpredictably.
+ *
+ * Still exactly ONE call to action: no compare, no "view details", and
+ * deliberately no earnings pill — the commission is the creator's business,
+ * never the shopper's.
+ */
+function ProductCard({ product: p, brand }: { product: PublicProduct; brand: string }) {
+  // Same helper the in-app SuggestionCard uses, so the struck-through "was"
+  // price a visitor sees is the same number the creator sees.
+  const parts = productPriceParts(p.price_cents, currencySymbol(p.currency));
+  const retailer = brandForUrl(p.affiliate_url);
+  const logo = retailer ? brandLogoUrl(retailer) : null;
+  return (
+    <a
+      href={p.affiliate_url}
+      target="_blank"
+      /* rel="sponsored nofollow" because this is a paid affiliate link;
+         noopener/noreferrer so the retailer's page gets no handle on this tab. */
+      rel="sponsored nofollow noopener noreferrer"
+      className="group relative flex h-full flex-col overflow-hidden rounded-2xl border border-border bg-surface text-left shadow-sm transition hover:-translate-y-1 hover:border-primary/50 hover:shadow-elevate focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+    >
+      <div className="relative aspect-[4/5] w-full overflow-hidden bg-surface-2">
+        {p.image_url ? (
+          <img
+            src={p.image_url}
+            alt={p.title}
+            loading="lazy"
+            className="absolute inset-0 h-full w-full object-cover transition duration-500 group-hover:scale-[1.06]"
+          />
+        ) : (
+          <div className="absolute inset-0 grid place-items-center text-muted-foreground">
+            <ImageIcon className="h-8 w-8" />
+          </div>
+        )}
+        <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/25 via-transparent to-transparent" />
+        {parts?.discountPct != null && parts.discountPct > 0 && (
+          <span className="absolute left-2 top-2 rounded-full bg-amber-500 px-2 py-0.5 text-micro font-bold text-white shadow-sm">
+            {parts.discountPct}% OFF
+          </span>
+        )}
+        {/* Retailer badge: a real logo when we know the domain, its name when
+            we don't — a shopper decides partly on who they are buying from. */}
+        <span className="absolute bottom-2 left-2 inline-flex max-w-[calc(100%-1rem)] items-center gap-1.5 rounded-full bg-white/95 py-1 pl-1 pr-2.5 shadow-sm">
+          {logo ? (
+            <img src={logo} alt="" className="h-4 w-4 rounded-full object-contain" />
+          ) : (
+            <span
+              className="h-4 w-4 shrink-0 rounded-full"
+              style={{ background: retailer?.color ?? brand }}
+            />
+          )}
+          <span className="truncate text-micro font-bold uppercase tracking-wide text-neutral-800">
+            {retailer?.name ?? hostBrand(p.affiliate_url)}
+          </span>
+        </span>
+      </div>
+
+      <div className="flex flex-1 flex-col gap-2 p-3">
+        <h3 className="line-clamp-2 min-h-[2.4em] text-xs font-semibold leading-snug text-foreground">
+          {p.title}
+        </h3>
+
+        {parts && (
+          <div className="flex flex-wrap items-baseline gap-1.5">
+            <span className="text-lead font-extrabold tracking-tight text-foreground">
+              {parts.price}
+            </span>
+            {parts.mrp && (
+              <span className="text-mini font-medium text-muted-foreground line-through">
+                {parts.mrp}
+              </span>
+            )}
+          </div>
+        )}
+
+        <span
+          className="mt-auto flex items-center justify-center gap-1.5 rounded-xl px-3 py-2.5 text-sm font-semibold text-white transition group-hover:brightness-110 group-active:scale-[0.99]"
+          style={{ background: brand }}
+        >
+          Buy now
+          <ArrowUpRight className="h-4 w-4" />
+        </span>
+      </div>
+    </a>
+  );
+}
+
+/** The pin, full size. Tap anywhere (or Esc) to leave. */
+function Lightbox({ src, alt, onClose }: { src: string; alt: string; onClose: () => void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      onClick={onClose}
+      className="fixed inset-0 z-50 grid place-items-center bg-black/80 p-6 backdrop-blur-sm"
+    >
+      <img
+        src={src}
+        alt={alt}
+        className="max-h-[85vh] max-w-full rounded-2xl object-contain shadow-elevate"
+      />
+      <button
+        type="button"
+        aria-label="Close"
+        className="absolute right-4 top-4 grid h-10 w-10 place-items-center rounded-full bg-white/15 text-white backdrop-blur transition hover:bg-white/25"
+      >
+        <X className="h-5 w-5" />
+      </button>
+    </div>
+  );
+}
+
+/**
+ * Reordering, for the creator standing on their own public page.
+ *
+ * Drag is the primary gesture, but every row also carries up/down buttons:
+ * drag-and-drop is unusable with a keyboard, awkward on a long list on a phone,
+ * and the arrows are the same operation with a guaranteed hit target. The
+ * numbers renumber live, so "make this one first" is visibly done before the
+ * save.
+ *
+ * Nothing is written until Save, and Save is disabled until the order actually
+ * differs — a creator who opens this to look does not silently rewrite 20 rows.
+ */
+function ReorderProductsDialog({
+  products,
+  brand,
+  pending,
+  onSave,
+  onClose,
+}: {
+  products: PublicProduct[];
+  brand: string;
+  pending: boolean;
+  onSave: (order: string[]) => void;
+  onClose: () => void;
+}) {
+  const [order, setOrder] = useState<string[]>(() => products.map((p) => p.id));
+  const byId = useMemo(() => new Map(products.map((p) => [p.id, p])), [products]);
+  const dirty = order.some((id, i) => products[i]?.id !== id);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !pending) onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose, pending]);
+
+  const move = (id: string, dir: -1 | 1) =>
+    setOrder((prev) => {
+      const i = prev.indexOf(id);
+      const j = i + dir;
+      if (i < 0 || j < 0 || j >= prev.length) return prev;
+      const next = [...prev];
+      next[i] = prev[j];
+      next[j] = prev[i];
+      return next;
+    });
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-end justify-center bg-background/70 p-0 backdrop-blur sm:items-center sm:p-4"
+      onClick={() => !pending && onClose()}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Reorder products"
+        onClick={(e) => e.stopPropagation()}
+        className="flex max-h-[88vh] w-full max-w-md flex-col overflow-hidden rounded-t-3xl border border-border bg-surface shadow-elevate sm:rounded-3xl"
+      >
+        <div className="flex items-start justify-between gap-3 border-b border-border/60 px-4 py-3">
+          <div>
+            <h3 className="font-display text-base font-semibold">Reorder products</h3>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              Drag a row, or use the arrows. Top of the list shows first.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={pending}
+            aria-label="Close"
+            className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-muted-foreground transition hover:bg-surface-2 hover:text-foreground"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <Reorder.Group
+          axis="y"
+          values={order}
+          onReorder={setOrder}
+          className="flex flex-1 flex-col gap-2 overflow-y-auto p-3"
+        >
+          {order.map((id, idx) => {
+            const p = byId.get(id);
+            if (!p) return null;
+            const parts = productPriceParts(p.price_cents, currencySymbol(p.currency));
+            return (
+              <Reorder.Item
+                key={id}
+                value={id}
+                whileDrag={{
+                  scale: 1.03,
+                  boxShadow: "0 20px 40px -12px rgba(0,0,0,0.35)",
+                  zIndex: 10,
+                }}
+                transition={{ type: "spring", stiffness: 500, damping: 40 }}
+                className="flex touch-none select-none items-center gap-2.5 rounded-2xl border border-border bg-surface p-2 shadow-sm active:cursor-grabbing"
+              >
+                <span className="grid h-7 w-7 shrink-0 cursor-grab place-items-center text-muted-foreground active:cursor-grabbing">
+                  <GripVertical className="h-4 w-4" />
+                </span>
+                <span
+                  className="grid h-6 w-6 shrink-0 place-items-center rounded-full text-micro font-bold text-white"
+                  style={{ background: brand }}
+                >
+                  {idx + 1}
+                </span>
+                <div className="h-12 w-12 shrink-0 overflow-hidden rounded-xl bg-surface-2">
+                  {p.image_url ? (
+                    <img src={p.image_url} alt="" className="h-full w-full object-cover" />
+                  ) : (
+                    <span className="grid h-full w-full place-items-center text-muted-foreground">
+                      <ImageIcon className="h-4 w-4" />
+                    </span>
+                  )}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-xs font-semibold">{p.title}</p>
+                  <p className="truncate text-micro uppercase tracking-wide text-muted-foreground">
+                    {parts?.price ? `${parts.price} · ` : ""}
+                    {brandForUrl(p.affiliate_url)?.name ?? hostBrand(p.affiliate_url)}
+                  </p>
+                </div>
+                {/* Same move as a drag, with a target a thumb can hit and a
+                    keyboard can reach. Pointer-down is stopped so pressing an
+                    arrow never starts a drag instead. */}
+                <div className="flex shrink-0 flex-col">
+                  <button
+                    type="button"
+                    aria-label="Move up"
+                    disabled={idx === 0}
+                    onPointerDownCapture={(e) => e.stopPropagation()}
+                    onClick={() => move(id, -1)}
+                    className="grid h-6 w-7 place-items-center rounded-t-md text-muted-foreground transition hover:bg-surface-2 hover:text-foreground disabled:opacity-30 disabled:hover:bg-transparent"
+                  >
+                    <ChevronUp className="h-4 w-4" />
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="Move down"
+                    disabled={idx === order.length - 1}
+                    onPointerDownCapture={(e) => e.stopPropagation()}
+                    onClick={() => move(id, 1)}
+                    className="grid h-6 w-7 place-items-center rounded-b-md text-muted-foreground transition hover:bg-surface-2 hover:text-foreground disabled:opacity-30 disabled:hover:bg-transparent"
+                  >
+                    <ChevronDown className="h-4 w-4" />
+                  </button>
+                </div>
+              </Reorder.Item>
+            );
+          })}
+        </Reorder.Group>
+
+        <div className="flex items-center justify-between gap-2 border-t border-border/60 px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+          <span className="text-micro text-muted-foreground">
+            {dirty ? "Unsaved changes" : "No changes yet"}
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={pending}
+              className="rounded-lg px-3 py-2 text-sm text-muted-foreground transition hover:text-foreground"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={pending || !dirty}
+              onClick={() => onSave(order)}
+              className="inline-flex items-center gap-1.5 rounded-lg px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:brightness-110 disabled:opacity-50"
+              style={{ background: brand }}
+            >
+              {pending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Check className="h-4 w-4" />
+              )}
+              Save order
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

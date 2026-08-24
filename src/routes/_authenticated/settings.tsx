@@ -1,12 +1,14 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { toast } from "sonner";
+import { notifyDone, notifyProblem } from "@/lib/notify";
 import { AppShell } from "@/components/app-shell";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
-import { startPinterestOAuth, disconnectPinterest } from "@/lib/pinterest-oauth.functions";
+import { disconnectPinterest } from "@/lib/pinterest-oauth.functions";
+import { usePinterestConnect } from "@/hooks/use-pinterest-connect";
+import { PinterestFailureNotice } from "@/components/pinterest-gate";
 import { applyTheme } from "@/lib/theme";
 import {
   Bell,
@@ -45,8 +47,13 @@ function loadPrefs(): Prefs {
 function SettingsPage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
-  const runStartOAuth = useServerFn(startPinterestOAuth);
   const runDisconnect = useServerFn(disconnectPinterest);
+  const {
+    connect,
+    connecting,
+    failure: connectFailure,
+    reset: clearFailure,
+  } = usePinterestConnect();
   const [userId, setUserId] = useState<string | null>(null);
   const [email, setEmail] = useState("");
   const [connected, setConnected] = useState(false);
@@ -72,7 +79,7 @@ function SettingsPage() {
       }
     })();
     if (new URLSearchParams(window.location.search).get("connected") === "1") {
-      toast.success("Pinterest connected");
+      notifyDone("Pinterest connected");
       window.history.replaceState(null, "", window.location.pathname);
     }
   }, []);
@@ -83,7 +90,7 @@ function SettingsPage() {
     localStorage.setItem("pinearn.prefs", JSON.stringify(next));
     // Shared with the root, which re-applies this on every boot.
     if (patch.theme) applyTheme(patch.theme);
-    toast.success("Saved");
+    notifyDone("Saved");
   }
 
   async function togglePinterest() {
@@ -94,14 +101,16 @@ function SettingsPage() {
         await runDisconnect();
         setConnected(false);
         setPinterestUsername("");
-        toast.success("Pinterest disconnected");
+        notifyDone("Pinterest disconnected");
       } else {
-        const { url } = await runStartOAuth({ data: { returnTo: "/settings" } });
-        window.location.href = url;
-        return; // navigating away
+        // The failure lands under the row with a Retry (see below), so a
+        // connection that can't start doesn't just flash a toast on a settings
+        // screen the creator is likely to walk away from.
+        await connect("/settings");
+        return; // navigating away, unless it failed
       }
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Something went wrong");
+      notifyProblem(e instanceof Error ? e.message : "Something went wrong");
     } finally {
       setBusy(false);
     }
@@ -132,7 +141,7 @@ function SettingsPage() {
       })
       .eq("id", userId);
     setBusy(false);
-    toast.success("Account data cleared");
+    notifyDone("Account data cleared");
     await signOut();
   }
 
@@ -156,14 +165,14 @@ function SettingsPage() {
           >
             <button
               onClick={togglePinterest}
-              disabled={busy}
+              disabled={busy || connecting}
               className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold transition disabled:opacity-60 ${
                 connected
                   ? "border border-border bg-surface hover:bg-surface-2"
                   : "bg-gradient-primary text-primary-foreground shadow-glow"
               }`}
             >
-              {busy ? (
+              {busy || connecting ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
               ) : connected ? (
                 <Link2Off className="h-3.5 w-3.5" />
@@ -173,6 +182,22 @@ function SettingsPage() {
               {connected ? "Disconnect" : "Connect"}
             </button>
           </Row>
+          {connectFailure && (
+            <PinterestFailureNotice
+              failure={connectFailure}
+              onRetry={togglePinterest}
+              retrying={connecting}
+              secondary={
+                <button
+                  type="button"
+                  onClick={clearFailure}
+                  className="inline-flex min-h-9 items-center rounded-full border border-border bg-surface px-4 text-xs font-semibold text-muted-foreground transition hover:text-foreground"
+                >
+                  Dismiss
+                </button>
+              }
+            />
+          )}
         </Section>
 
         <Section title="Notifications">
