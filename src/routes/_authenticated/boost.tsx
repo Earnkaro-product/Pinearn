@@ -1,26 +1,20 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { Fragment, useEffect, useMemo, useState } from "react";
-import { AnimatePresence, motion, type Variants } from "framer-motion";
+import { useEffect, useMemo, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import {
   ArrowRight,
   CalendarClock,
   CheckCircle2,
   ChevronRight,
   Clock,
-  Compass,
   ExternalLink,
-  Hand,
   ImagePlus,
   LayoutGrid,
   Link2,
-  MousePointerClick,
   PencilLine,
   RefreshCw,
   Rocket,
-  Sparkles,
-  TrendingUp,
   Type,
-  Undo2,
   UserCheck,
   X,
 } from "lucide-react";
@@ -37,14 +31,10 @@ import {
 import { FlowIntro } from "@/components/flow-intro";
 import { PinterestConnectPanel } from "@/components/pinterest-gate";
 import { usePinterestConnection } from "@/hooks/use-pinterest-connect";
-import { useHealthScore, type HealthData } from "@/hooks/use-health-score";
+import { useHealthScore } from "@/hooks/use-health-score";
 import type { PinterestProfileSnapshot } from "@/lib/pinterest-profile.functions";
 import {
-  boardIssues,
-  boardPassesStructure,
   maxPointsFor,
-  pinPassesSeo,
-  pinSeoIssues,
   pointsEarned,
   pointsLabel,
   recordScore,
@@ -83,11 +73,6 @@ function BoostPinsPage() {
   // A fix flow stashes the score the user last saw; climb from it so the
   // improvement is felt the moment they land back here.
   const animateFrom = useMemo(() => takeLastSeenScore(), []);
-
-  // Which area's fix briefing is open. Every entry into a fix flow goes through
-  // this intermediate step first — it shows what's wrong and what we'll do,
-  // rather than dumping the user straight into the deck.
-  const [briefingKey, setBriefingKey] = useState<SubScoreKey | null>(null);
 
   // The pre-score sequence: "intro" is the three education screens (the
   // problem, what the AI does, the CTA), "scan" is the analyzer choreography
@@ -130,8 +115,6 @@ function BoostPinsPage() {
       case "boardStructure":
         return navigate({ to: "/boost/boards" });
       case "profile":
-        // Swap the briefing for the profile sheet rather than stacking them.
-        setBriefingKey(null);
         return setProfileSheet(true);
       case "freshness":
         return goFreshness(staleBoards(data.pins, data.boards)[0]?.id);
@@ -218,10 +201,10 @@ function BoostPinsPage() {
 
               {/* ---- One prioritized plan (grid + list merged) ---- */}
               <div className="mt-5">
-                <h2 className="mb-3 font-display text-lg font-semibold">Fix your Pinterest now</h2>
+                <h2 className="mb-3 font-display text-lg font-semibold">Fix your 4 SEO pillars</h2>
                 <div className="grid gap-2.5">
                   {ranked.map((s, i) => (
-                    <BoostRow key={s.key} sub={s} rank={i} onFix={() => setBriefingKey(s.key)} />
+                    <BoostRow key={s.key} sub={s} rank={i} onFix={() => goFix(s.key)} />
                   ))}
                 </div>
               </div>
@@ -238,20 +221,6 @@ function BoostPinsPage() {
             report={report}
             onExplain={(key) => setInsightKey(key)}
             onClose={() => setScoringSheet(false)}
-          />
-        )}
-      </AnimatePresence>
-
-      {/* Intermediate briefing — what's wrong + how we'll fix it, before the flow. */}
-      <AnimatePresence>
-        {briefingKey && report && data && (
-          <FixBriefing
-            sub={report.subScores.find((s) => s.key === briefingKey)!}
-            data={data}
-            profileItems={report.profileItems}
-            onStart={() => goFix(briefingKey)}
-            onExplain={() => setInsightKey(briefingKey)}
-            onClose={() => setBriefingKey(null)}
           />
         )}
       </AnimatePresence>
@@ -274,289 +243,12 @@ function BoostPinsPage() {
               saveLastSeenScore(report.overall);
               void refetch();
             }}
+            onExplain={() => setInsightKey("profile")}
             onClose={() => setProfileSheet(false)}
           />
         )}
       </AnimatePresence>
     </AppShell>
-  );
-}
-
-/* ---------------- Fix briefing (intermediate step) ---------------- */
-
-type MissingItem = { id: string; title: string; note: string };
-
-// The concrete items dragging an area down — the same detail the old inline
-// "what's missing" expander showed, now surfaced in the briefing.
-function missingItemsFor(
-  key: SubScoreKey,
-  data: HealthData,
-  profileItems: ProfileItem[],
-): MissingItem[] {
-  switch (key) {
-    case "pinSeo":
-      return data.pins
-        .filter((p) => !pinPassesSeo(p))
-        .map((p) => ({
-          id: p.id,
-          title: p.title?.trim() || "Untitled pin",
-          note: pinSeoIssues(p).join(" · "),
-        }));
-    case "boardStructure":
-      return data.boards
-        .filter((b) => !boardPassesStructure(b))
-        .map((b) => ({
-          id: b.id,
-          title: b.name?.trim() || "Unnamed board",
-          note: boardIssues(b).join(" · "),
-        }));
-    case "profile":
-      return profileItems
-        .filter((i) => !i.ok)
-        .map((i) => ({ id: i.key, title: i.label, note: "Missing on Pinterest" }));
-    case "freshness":
-      return staleBoards(data.pins, data.boards).map((b) => ({
-        id: b.id,
-        title: b.name,
-        note: b.daysSinceLastPin == null ? "No pins yet" : `Last pin ${b.daysSinceLastPin}d ago`,
-      }));
-  }
-}
-
-// The fix flow, as three words and three icons on ONE line.
-//
-// These were sentences in boxes ("AI drafts titles & descriptions"), which made
-// the how-it-works step the visually heaviest thing in a sheet whose job is to
-// get one tap. Two or three words each is enough to convey the shape of the
-// flow; the flow itself explains the rest.
-type HowStep = { icon: typeof Sparkles; label: string };
-const HOW_STEPS: Record<SubScoreKey, HowStep[]> = {
-  pinSeo: [
-    { icon: Sparkles, label: "AI drafts" },
-    { icon: Hand, label: "You swipe" },
-    { icon: TrendingUp, label: "Rank climbs" },
-  ],
-  boardStructure: [
-    { icon: Sparkles, label: "AI drafts" },
-    { icon: Hand, label: "You swipe" },
-    { icon: Undo2, label: "Undo anytime" },
-  ],
-  profile: [
-    { icon: MousePointerClick, label: "Open profile" },
-    { icon: PencilLine, label: "Fix on Pinterest" },
-    { icon: TrendingUp, label: "Score climbs" },
-  ],
-  freshness: [
-    { icon: Compass, label: "Quiet boards" },
-    { icon: ImagePlus, label: "Add a pin" },
-    { icon: TrendingUp, label: "Reach grows" },
-  ],
-};
-
-// Colours for the composition bar's segments, in rank order. Warm-to-cool
-// rather than four shades of one hue, so the segments stay tellable apart at
-// the 6px height the bar is drawn at.
-const ISSUE_COLORS = ["bg-amber-400", "bg-rose-400", "bg-violet-400", "bg-sky-400"];
-
-function FixBriefing({
-  sub,
-  data,
-  profileItems,
-  onStart,
-  onExplain,
-  onClose,
-}: {
-  sub: SubScore;
-  data: HealthData;
-  profileItems: ProfileItem[];
-  onStart: () => void;
-  /** Opens the bulb — what drives this area, and why Pinterest cares. */
-  onExplain: () => void;
-  onClose: () => void;
-}) {
-  const tone = scoreTone(sub.score);
-  const Icon = SUB_ICONS[sub.key];
-  // Everything the creator reads here is points on the 100-pt score: banked
-  // now, and where the bar can get to.
-  const maxPts = maxPointsFor(sub.key);
-  const nowPts = pointsEarned(sub.key, sub.score);
-  const items = missingItemsFor(sub.key, data, profileItems);
-  const shown = items.slice(0, 6);
-
-  // Collapse the repetitive per-item notes into a ranked tally of problem
-  // types, so the same information reads as one visual breakdown, not a list.
-  const topIssues = useMemo(() => {
-    const tally = new Map<string, number>();
-    for (const it of items) {
-      for (const tag of it.note ? it.note.split(" · ") : []) {
-        tally.set(tag, (tally.get(tag) ?? 0) + 1);
-      }
-    }
-    return [...tally.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4);
-  }, [items]);
-  // Segments are shares of the tagged total, NOT of `sub.failing`. One pin
-  // usually carries several tags (a short title AND no description), so the
-  // counts sum past the pin count and scaling against it would overflow.
-  const issueTotal = topIssues.reduce((n, [, count]) => n + count, 0) || 1;
-  // The bar only makes sense when a problem actually repeats; otherwise
-  // (freshness, profile — every note unique) fall back to titled chips.
-  const useBars = topIssues.length > 0 && topIssues[0][1] >= 2;
-
-  const container: Variants = {
-    hidden: {},
-    show: { transition: { staggerChildren: 0.06, delayChildren: 0.1 } },
-  };
-  const item: Variants = {
-    hidden: { opacity: 0, y: 10 },
-    // ease typed as a cubic-bezier tuple — a bare number[] isn't assignable to
-    // framer-motion's Easing inside a Variants object (unlike inline transitions).
-    show: {
-      opacity: 1,
-      y: 0,
-      transition: { duration: 0.4, ease: [0.22, 1, 0.36, 1] as [number, number, number, number] },
-    },
-  };
-
-  return (
-    <AppSheet onClose={onClose} labelledBy="briefing-title">
-      <motion.div variants={container} initial="hidden" animate="show">
-        {/* Header: which area, the score now, the points on the table. */}
-        <motion.div variants={item} className="flex items-start justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <div
-              className={`grid h-12 w-12 shrink-0 place-items-center rounded-2xl ${tone.bg} ${tone.text}`}
-            >
-              <Icon className="h-6 w-6" />
-            </div>
-            <div>
-              <h2 id="briefing-title" className="font-display text-lg font-bold leading-tight">
-                {sub.label}
-              </h2>
-              {/* Where the pts go, not two separate figures to add up. The
-                    destination is the motivating number, so show it — and in the
-                    same unit as the plan row that was just tapped. */}
-              <p className="mt-0.5 flex items-center gap-1.5 text-xs font-bold">
-                <span className={tone.text}>{pointsLabel(nowPts)}</span>
-                <ArrowRight className="h-3 w-3 text-muted-foreground/50" />
-                <span className="text-emerald-600">{maxPts} pts</span>
-              </p>
-            </div>
-          </div>
-          <div className="-mr-1 -mt-1 flex shrink-0 items-center gap-1">
-            <SeoInsightButton label={sub.label} onClick={onExplain} />
-            <button
-              type="button"
-              onClick={onClose}
-              aria-label="Close"
-              className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-muted-foreground transition hover:bg-surface-2"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-        </motion.div>
-
-        {/* The one number that matters, then ONE bar showing what it's made
-              of. This replaced a stacked count-per-issue readout: with the hero
-              already saying 379, three more bars each repeating a number very
-              close to 379 added rows without adding information. The segments
-              carry the same composition, and the names sit under them. */}
-        <motion.div variants={item} className="mt-7 flex items-end gap-2">
-          <span className={`font-display text-5xl font-black leading-none ${tone.text}`}>
-            {sub.failing}
-          </span>
-          <span className="pb-1 text-sm font-semibold text-muted-foreground">
-            {sub.unit} to fix
-          </span>
-        </motion.div>
-
-        {useBars ? (
-          <motion.div variants={item} className="mt-4">
-            <div className="flex h-1.5 gap-0.5 overflow-hidden rounded-full">
-              {topIssues.map(([label, count], i) => (
-                <motion.span
-                  key={label}
-                  className={`${ISSUE_COLORS[i % ISSUE_COLORS.length]} first:rounded-l-full last:rounded-r-full`}
-                  initial={{ width: 0 }}
-                  animate={{ width: `${(count / issueTotal) * 100}%` }}
-                  transition={{ duration: 0.7, delay: 0.2 + i * 0.06, ease: [0.22, 1, 0.36, 1] }}
-                />
-              ))}
-            </div>
-            <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5">
-              {topIssues.map(([label], i) => (
-                <span
-                  key={label}
-                  className="inline-flex items-center gap-1.5 text-mini font-semibold text-muted-foreground"
-                >
-                  <span
-                    className={`h-1.5 w-1.5 rounded-full ${ISSUE_COLORS[i % ISSUE_COLORS.length]}`}
-                  />
-                  {label}
-                </span>
-              ))}
-            </div>
-          </motion.div>
-        ) : (
-          <motion.div variants={item} className="mt-3.5 flex flex-wrap gap-1.5">
-            {shown.slice(0, 4).map((m) => (
-              <span
-                key={m.id}
-                className="max-w-full truncate rounded-full bg-surface-2/70 px-3 py-1.5 text-xs font-medium"
-              >
-                {m.title}
-              </span>
-            ))}
-            {items.length > 4 && (
-              <span className="rounded-full px-2 py-1.5 text-xs text-muted-foreground">
-                +{items.length - 4} more
-              </span>
-            )}
-          </motion.div>
-        )}
-
-        {/* How it works — one line, three beats. No heading: the icons and the
-              arrows between them say "sequence" faster than a label could. */}
-        <motion.div
-          variants={item}
-          className="mt-7 flex items-center justify-between gap-1 rounded-2xl bg-surface-2/40 px-3 py-3"
-        >
-          {HOW_STEPS[sub.key].map((step, i) => (
-            <Fragment key={i}>
-              <div className="flex min-w-0 flex-col items-center gap-1.5 text-center">
-                <span className="grid h-8 w-8 place-items-center rounded-full bg-primary/10 text-primary">
-                  <step.icon className="h-4 w-4" />
-                </span>
-                <span className="truncate text-mini font-semibold text-foreground/80">
-                  {step.label}
-                </span>
-              </div>
-              {i < HOW_STEPS[sub.key].length - 1 && (
-                <ChevronRight className="h-3.5 w-3.5 shrink-0 self-start text-muted-foreground/35" />
-              )}
-            </Fragment>
-          ))}
-        </motion.div>
-
-        {/* One way out is enough — the header's X already dismisses the sheet,
-            so a "Maybe later" button under the CTA was a second word for the
-            same gesture. */}
-        <motion.div variants={item} className="mt-6">
-          <button
-            type="button"
-            onClick={onStart}
-            className="relative inline-flex min-h-[54px] w-full items-center justify-center gap-2 overflow-hidden rounded-2xl bg-gradient-primary px-5 text-sm font-extrabold text-primary-foreground shadow-glow transition hover:opacity-95 active:scale-[0.99]"
-          >
-            {/* Travelling highlight — the one moving thing in the sheet, on
-                  the one element we want tapped. */}
-            <span
-              aria-hidden
-              className="animate-sheen pointer-events-none absolute inset-y-0 w-1/3 bg-gradient-to-r from-transparent via-white/25 to-transparent"
-            />
-            <Sparkles className="h-4 w-4" /> Start fixing <ArrowRight className="h-4 w-4" />
-          </button>
-        </motion.div>
-      </motion.div>
-    </AppSheet>
   );
 }
 
@@ -594,6 +286,7 @@ function PinterestProfileSheet({
   score,
   refreshing,
   onRecheck,
+  onExplain,
   onClose,
 }: {
   snapshot: PinterestProfileSnapshot | null;
@@ -601,6 +294,8 @@ function PinterestProfileSheet({
   score: number;
   refreshing: boolean;
   onRecheck: () => void;
+  /** Opens the bulb — what drives Profile SEO, and why Pinterest cares. */
+  onExplain: () => void;
   onClose: () => void;
 }) {
   const connected = !!snapshot?.connected;
@@ -729,14 +424,17 @@ function PinterestProfileSheet({
                 )}
               </p>
             </div>
-            <button
-              type="button"
-              onClick={onClose}
-              aria-label="Close"
-              className="-mr-1 -mt-1 grid h-9 w-9 shrink-0 place-items-center rounded-full text-muted-foreground transition hover:bg-surface-2"
-            >
-              <X className="h-4 w-4" />
-            </button>
+            <div className="-mr-1 -mt-1 flex shrink-0 items-center gap-1">
+              <SeoInsightButton label="Profile SEO" onClick={onExplain} />
+              <button
+                type="button"
+                onClick={onClose}
+                aria-label="Close"
+                className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-muted-foreground transition hover:bg-surface-2"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
           </div>
 
           {/* The gauge is the sentence: four segments, pts banked, pts left. */}
@@ -935,6 +633,14 @@ function ScoreRing({ score, from }: { score: number; from?: number | null }) {
 
 /* ---------------- Boost plan rows ---------------- */
 
+// One line under each pillar's name saying what its fix flow actually does.
+const SUB_DESCRIPTIONS: Record<SubScoreKey, string> = {
+  pinSeo: "Fix your titles and descriptions with AI",
+  boardStructure: "Optimise your boards with AI",
+  freshness: "Keep your content fresh to rank",
+  profile: "Optimise your profile for better visibility",
+};
+
 function BoostRow({ sub, rank, onFix }: { sub: SubScore; rank: number; onFix: () => void }) {
   const tone = scoreTone(sub.score);
   const optimized = sub.score >= 100;
@@ -991,6 +697,9 @@ function BoostRow({ sub, rank, onFix }: { sub: SubScore; rank: number; onFix: ()
       <div className="h-9 w-px shrink-0 bg-border" />
       <div className="min-w-0 flex-1">
         <p className="truncate text-lead font-semibold">{sub.label}</p>
+        <p className="mt-0.5 truncate text-mini text-muted-foreground">
+          {SUB_DESCRIPTIONS[sub.key]}
+        </p>
         <div className="mt-2 h-2 overflow-hidden rounded-full bg-surface-2">
           <motion.div
             className={`h-full rounded-full ${tone.bar}`}
@@ -1000,7 +709,12 @@ function BoostRow({ sub, rank, onFix }: { sub: SubScore; rank: number; onFix: ()
           />
         </div>
       </div>
-      <ChevronRight className="h-5 w-5 shrink-0 text-muted-foreground/50 transition group-hover:translate-x-0.5 group-hover:text-muted-foreground" />
+      {/* The card itself is the button, so this is a visual pill, not a
+          nested control. */}
+      <span className="inline-flex min-h-8 shrink-0 items-center gap-1 rounded-full bg-gradient-primary px-3 text-mini font-bold text-primary-foreground shadow-glow transition group-active:scale-[0.98]">
+        Fix
+        <ArrowRight className="h-3 w-3 transition group-hover:translate-x-0.5" />
+      </span>
     </motion.button>
   );
 }

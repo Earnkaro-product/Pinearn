@@ -343,11 +343,9 @@ function PinsPage() {
     const base =
       collectionFilter === "drafts"
         ? visiblePins.filter((p) => p.status === "draft")
-        : collectionFilter === "new"
-          ? visiblePins.filter((p) => p.status === "new")
-          : collectionFilter === "all"
-            ? visiblePins
-            : visiblePins.filter((p) => p.status === "live");
+        : collectionFilter === "all"
+          ? visiblePins
+          : visiblePins.filter((p) => p.status === "live");
     return [...base].sort(
       (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
     );
@@ -357,10 +355,13 @@ function PinsPage() {
 
   const draftsCount = visiblePins.filter((p) => p.status === "draft").length;
   const liveCount = visiblePins.filter((p) => p.status === "live").length;
+  // Untouched Pinterest imports. They have no chip of their own — they simply
+  // sit in All alongside everything else — but the count still decides whether
+  // All is a distinct set from Live at all.
   const newCount = visiblePins.filter((p) => p.status === "new").length;
   // Take-down acts on published or drafted pins. An untouched import has
-  // nothing to take down, so the bulk control is withheld on that filter
-  // rather than offering an action that would do nothing.
+  // nothing to take down, so the bulk control is withheld on the mixed All
+  // filter rather than offering an action that would half-apply.
   const canBulkTakeDown = collectionFilter === "live" || collectionFilter === "drafts";
 
   return (
@@ -417,14 +418,6 @@ function PinsPage() {
             onClick={() => setCollectionFilter("drafts")}
             label="Drafts"
             count={draftsCount}
-          />
-        )}
-        {newCount > 0 && (
-          <FilterChip
-            active={collectionFilter === "new"}
-            onClick={() => setCollectionFilter("new")}
-            label="Not monetized"
-            count={newCount}
           />
         )}
         {canBulkTakeDown && filtered.length > 0 && (

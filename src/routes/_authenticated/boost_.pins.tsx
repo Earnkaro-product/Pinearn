@@ -41,11 +41,11 @@ import {
   FieldDiff,
   FixEditSheet,
   GeneratingNotice,
-  GuideSheet,
   IssueChips,
   KeywordProof,
   OptimizedState,
 } from "@/components/boost-fix-kit";
+import { SeoInsightButton, SeoInsightSheet } from "@/components/seo-insight";
 import { supabase } from "@/integrations/supabase/client";
 import { useFixFlow, type BaseFixCard, type FixField } from "@/hooks/use-fix-flow";
 import { useAiRewrites, type AiRewriteState } from "@/hooks/use-ai-rewrites";
@@ -67,7 +67,6 @@ import {
   pinSeoIssues,
   pointsEarned,
   pointsLabel,
-  SCORE_CRITERIA,
   SUB_SCORE_WEIGHTS,
 } from "@/lib/health-score";
 import {
@@ -76,21 +75,10 @@ import {
   ctrLabel,
   DIAGNOSIS_META,
   GROUP_META,
-  IMPACT_CRITERIA,
   reachLabel,
   scorePins,
   type PinImpact,
 } from "@/lib/pin-impact";
-
-// How to drive the deck — surfaced any time via the header's info button. Each
-// step is one action, not a sentence explaining it: the reader is mid-flow with
-// the controls in front of them, so naming the control is the whole instruction.
-const PIN_GUIDE_STEPS = [
-  "Start with High impact — that's where the reach is.",
-  "Tap pins to queue them, then Boost.",
-  "Apply keeps the rewrite, Skip moves on.",
-  "Edit the wording, or undo, anytime.",
-];
 
 // Filmstrip sizing — mirrors the board review navigator so the two flows feel
 // like one product.
@@ -257,7 +245,7 @@ function FixPinSeoPage() {
 
   const [editing, setEditing] = useState(false);
   const [confirming, setConfirming] = useState(false);
-  const [guide, setGuide] = useState(false);
+  const [insight, setInsight] = useState(false);
   const [boardOpen, setBoardOpen] = useState(false);
   const [mode, setMode] = useState<"picker" | "launching" | "review">("picker");
   const [launchCard, setLaunchCard] = useState<PinFixCard | null>(null);
@@ -441,6 +429,11 @@ function FixPinSeoPage() {
       // a sub-view of the picker, so it shouldn't cost the whole page to exit.
       onBack={mode !== "picker" && !flow.done ? backToPicker : undefined}
       hideBottomNav
+      inlineActions
+      // One bulb, not a bulb plus a "How it works" pill: both opened a sheet
+      // answering "what is this screen", so they're one sheet behind one
+      // button now — see components/seo-insight.tsx.
+      actions={<SeoInsightButton label="Pin SEO" onClick={() => setInsight(true)} />}
     >
       <div className="mx-auto flex h-[calc(100dvh-6.5rem)] max-w-md flex-col px-1">
         {flow.isLoading || flow.deck === null ? (
@@ -470,7 +463,6 @@ function FixPinSeoPage() {
             statusById={flow.statusById}
             hasAnalytics={hasAnalytics}
             onStart={startRun}
-            onGuide={() => setGuide(true)}
           />
         ) : mode === "launching" ? (
           <PinLaunch card={launchCard ?? flow.current ?? flow.cards[0]} count={runSize} />
@@ -488,7 +480,7 @@ function FixPinSeoPage() {
               total={flow.total}
               approvedCount={flow.approvedCount}
               skippedCount={flow.skippedCount}
-              onGuide={() => setGuide(true)}
+              onGuide={() => setInsight(true)}
             />
 
             {/* Navigator (neutral grey panel) whose selected pin becomes a white
@@ -638,22 +630,7 @@ function FixPinSeoPage() {
             onCancel={() => setConfirming(false)}
           />
         )}
-        {guide && (
-          <GuideSheet
-            title="What makes a good pin"
-            criteria={SCORE_CRITERIA.pinSeo}
-            steps={PIN_GUIDE_STEPS}
-            onClose={() => setGuide(false)}
-            // Passing the check is one thing; being worth a rewrite is another,
-            // and the ranking on this page is the second one. It has to be
-            // auditable or the order reads as arbitrary.
-            extra={{
-              title: "How we rank them",
-              body: `Every failing pin gets an impact score out of 100. Views are from the last ${ANALYTICS_WINDOW_DAYS} days.`,
-              bullets: IMPACT_CRITERIA,
-            }}
-          />
-        )}
+        {insight && <SeoInsightSheet subKey="pinSeo" onClose={() => setInsight(false)} />}
         {boardOpen && (
           <PinGridSheet
             cards={flow.cards}
@@ -807,7 +784,6 @@ function PinBoostPicker({
   statusById,
   hasAnalytics,
   onStart,
-  onGuide,
 }: {
   cards: PinFixCard[];
   /** Every pin on the account — the denominator the pass rate is scored on.
@@ -819,7 +795,6 @@ function PinBoostPicker({
    * The page says so rather than presenting default zeros as measurements. */
   hasAnalytics: boolean;
   onStart: (ids: string[]) => void;
-  onGuide: () => void;
 }) {
   // Read-only here: the picker prices a run but never charges one. Coins are
   // debited per pin as its rewrite is applied, inside the run.
@@ -917,16 +892,14 @@ function PinBoostPicker({
           points={pointsEarned("pinSeo", score)}
           maxPoints={maxPointsFor("pinSeo")}
           gainPoints={overallPointsFor(ranked.length, totalPins)}
-          onGuide={onGuide}
-          note={
-            best.length > 0 ? (
-              <>
-                Pinterest finds pins by their words, and {ranked.length} of your {totalPins}{" "}
-                aren&apos;t giving it enough. Start with the {best.length} below — they&apos;re
-                where the reach is.
-              </>
-            ) : undefined
-          }
+          // The old sentence ("Pinterest finds pins by their words, and 296 of
+          // your 300 aren't giving it enough…") as a bar and two counts.
+          scan={{
+            weak: ranked.length,
+            strong: Math.max(totalPins - ranked.length, 0),
+            weakLabel: "to boost",
+            strongLabel: "strong",
+          }}
         />
 
         {/* Pinterest-style tabs — same pattern as the Select pin screen. */}
@@ -957,17 +930,27 @@ function PinBoostPicker({
               {best.length > 0 && !searching && (
                 <section
                   aria-label={GROUP_META.high.label}
-                  className="overflow-hidden rounded-3xl border-2 border-primary/40 bg-gradient-to-b from-primary/[0.06] to-surface p-3.5"
+                  className="relative overflow-hidden rounded-3xl border border-primary/25 bg-gradient-to-b from-primary/[0.07] via-surface to-surface p-3.5"
                 >
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="min-w-0">
-                      <h3 className="flex items-center gap-1.5 font-display text-[17px] font-bold leading-tight tracking-tight">
-                        <Flame className="h-4 w-4 text-primary" strokeWidth={2.5} />
-                        {GROUP_META.high.label}
-                      </h3>
-                      <p className="mt-0.5 text-mini text-muted-foreground">
-                        {GROUP_META.high.blurb}
-                      </p>
+                  <div
+                    aria-hidden
+                    className="pointer-events-none absolute -left-14 -top-16 h-44 w-44 rounded-full bg-primary/10 blur-3xl"
+                  />
+                  <div className="relative flex items-center justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-2.5">
+                      <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-gradient-primary text-primary-foreground shadow-glow">
+                        <Flame className="h-4 w-4" strokeWidth={2.5} />
+                      </span>
+                      <div className="min-w-0">
+                        <h3 className="truncate font-display text-[17px] font-bold leading-tight tracking-tight">
+                          {GROUP_META.high.label}
+                        </h3>
+                        {/* Four words where a sentence was — the rows below
+                            argue their own case now. */}
+                        <p className="text-micro font-semibold text-muted-foreground">
+                          Most reach per rewrite
+                        </p>
+                      </div>
                     </div>
                     <QueueAllButton
                       ids={headlineIds}
@@ -976,7 +959,7 @@ function PinBoostPicker({
                       hero
                     />
                   </div>
-                  <div className="mt-3 space-y-2">
+                  <div className="relative mt-3 space-y-2">
                     {best.map((card, i) => (
                       <ImpactRow
                         key={card.id}
@@ -1277,12 +1260,22 @@ function NoAnalyticsNote() {
   );
 }
 
+/** A pin's age at chip length — the number, not a sentence about it. */
+function ageLabel(days: number): string {
+  if (days <= 0) return "Today";
+  if (days < 30) return `${days}d`;
+  if (days < 365) return `${Math.round(days / 30)}mo`;
+  return `${Math.floor(days / 365)}y`;
+}
+
 /**
- * A shortlist pin, as a row that argues its own case.
+ * A shortlist pin, as a row that argues its case in glances, not sentences.
  *
- * Everything on it is a number the creator can check against Pinterest: views
- * in the window, click rate when there's enough traffic to mean anything, the
- * diagnosis that put it in this tier, and what a rewrite is modelled to buy.
+ * The old row spent two lines of prose per pin repeating the model's
+ * reasoning — six near-identical paragraphs in a row read as filler. The same
+ * facts are now marks: a rank badge (why it's ordered here), chips for the
+ * diagnosis / age / views (the measurement), an impact meter (the score the
+ * ranking runs on), and the modelled reach gain as the one highlighted number.
  */
 function ImpactRow({
   card,
@@ -1301,22 +1294,30 @@ function ImpactRow({
 }) {
   const { impact } = card;
   const DiagIcon = DIAGNOSIS_ICON[impact.diagnosis];
+  const delay = Math.min(index, 6) * 0.04;
   return (
     <motion.button
       type="button"
       onClick={onToggle}
       aria-pressed={selected}
-      aria-label={`${selected ? "Remove" : "Queue"} ${card.title}`}
+      // The retired prose still matters to a screen reader — the chips and the
+      // meter don't read aloud, so the label carries the case in words.
+      aria-label={`${selected ? "Remove" : "Queue"} ${card.title} — ${impact.headline}`}
       whileTap={{ scale: 0.985 }}
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ delay: Math.min(index, 6) * 0.04, duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+      transition={{ delay, duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
       className={`flex w-full items-stretch gap-3 rounded-2xl border-2 bg-surface p-2 text-left transition ${
         selected ? "border-primary shadow-sm" : "border-transparent ring-1 ring-border/70"
       }`}
     >
-      <div className="relative h-[86px] w-[68px] shrink-0 overflow-hidden rounded-xl bg-surface-2">
+      <div className="relative h-[88px] w-[70px] shrink-0 overflow-hidden rounded-xl bg-surface-2">
         <PinImage card={card} />
+        {/* Rank, worn by the pin itself — the order is the model's whole
+            argument, so it gets to be visible. */}
+        <span className="absolute left-1 top-1 grid h-5 w-5 place-items-center rounded-full bg-black/55 text-nano font-extrabold text-white backdrop-blur-sm">
+          {index + 1}
+        </span>
         {boosted && (
           <span className="absolute inset-0 grid place-items-center bg-emerald-500/75 text-white">
             <Check className="h-5 w-5" strokeWidth={3.5} />
@@ -1329,31 +1330,51 @@ function ImpactRow({
           <p className="line-clamp-1 text-body font-bold leading-tight">
             {card.title?.trim() || <span className="text-muted-foreground">Untitled pin</span>}
           </p>
-          {/* The measurement, then the reason. Two lines, and they are the
-              whole argument for spending a coin here. */}
-          <p className="mt-1 inline-flex items-center gap-1 text-mini font-bold text-foreground/80">
-            <DiagIcon className="h-3 w-3 shrink-0 text-primary" strokeWidth={2.5} />
-            <span className="truncate">{impact.headline}</span>
-          </p>
-          <p className="mt-0.5 line-clamp-2 text-micro leading-snug text-muted-foreground">
-            {impact.detail}
-          </p>
+          {/* The measurement as chips: what's wrong, how old, how seen. */}
+          <div className="mt-1.5 flex flex-wrap items-center gap-1">
+            <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-micro font-bold text-primary">
+              <DiagIcon className="h-2.5 w-2.5 shrink-0" strokeWidth={2.5} />
+              {DIAGNOSIS_META[impact.diagnosis].label}
+            </span>
+            <span className="inline-flex items-center gap-1 rounded-full bg-surface-2 px-2 py-0.5 text-micro font-bold tabular-nums text-muted-foreground">
+              <Clock3 className="h-2.5 w-2.5 shrink-0" strokeWidth={2.5} />
+              {ageLabel(impact.ageDays)}
+            </span>
+            {impact.reach > 0 && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-surface-2 px-2 py-0.5 text-micro font-bold tabular-nums text-muted-foreground">
+                <Eye className="h-2.5 w-2.5 shrink-0" strokeWidth={2.5} />
+                {metricLabel(impact.reach)}
+              </span>
+            )}
+          </div>
         </div>
 
-        <div className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1">
-          {impact.reachLift !== null && impact.reachLift > 0 && (
-            <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-micro font-bold text-primary">
-              <TrendingUp className="h-2.5 w-2.5" /> ≈ +{reachLabel(impact.reachLift)} views
-            </span>
-          )}
-          <span className="text-micro font-semibold text-muted-foreground tabular-nums">
-            +{pointsLabel(points)} pts
-          </span>
-          <span className="ml-auto shrink-0">
-            <SelectDot on={selected} small />
+        {/* The 0–100 impact score the whole page ranks by, drawn instead of
+            asserted — and the payoff for fixing it on the right. */}
+        <div className="mt-2 flex items-center gap-2">
+          <div className="relative h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-surface-2">
+            <motion.span
+              className="absolute inset-y-0 left-0 rounded-full bg-gradient-primary"
+              initial={{ width: 0 }}
+              animate={{ width: `${Math.max(4, Math.min(100, impact.score))}%` }}
+              transition={{ duration: 0.7, delay: delay + 0.2, ease: [0.22, 1, 0.36, 1] }}
+            />
+          </div>
+          <span className="inline-flex shrink-0 items-center gap-1 text-micro font-bold tabular-nums text-primary">
+            {impact.reachLift !== null && impact.reachLift > 0 ? (
+              <>
+                <TrendingUp className="h-2.5 w-2.5" /> +{reachLabel(impact.reachLift)} views
+              </>
+            ) : (
+              <>+{pointsLabel(points)} pts</>
+            )}
           </span>
         </div>
       </div>
+
+      <span className="shrink-0 self-center pr-1">
+        <SelectDot on={selected} small />
+      </span>
     </motion.button>
   );
 }

@@ -5,7 +5,7 @@ import {
   ChevronLeft,
   ChevronDown,
   Check,
-  HelpCircle,
+  Lightbulb,
   Link2,
   Plus,
   Search,
@@ -279,7 +279,30 @@ function AttachPage() {
   }
 
   return (
-    <AppShell title="Select pin" backButton backTo="/dashboard" hideBottomNav>
+    <AppShell
+      title="Monetise Pinterest"
+      backButton
+      backTo="/dashboard"
+      hideBottomNav
+      // The education is once-per-browser, so this is the way back to it —
+      // without it, "how does this work again?" has no answer inside the flow
+      // it explains. It rides the header next to the title rather than the page
+      // body, so the stepper below is the first thing in the content.
+      inlineActions
+      actions={
+        activeBoard ? undefined : (
+          <button
+            type="button"
+            onClick={() => setPrimerDone(false)}
+            aria-label="How it works"
+            title="How it works"
+            className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-border bg-surface text-muted-foreground shadow-sm transition hover:text-foreground"
+          >
+            <Lightbulb className="h-4 w-4" strokeWidth={2.25} />
+          </button>
+        )
+      }
+    >
       {dialogPin && (
         <PinDetailDialog
           pin={dialogPin}
@@ -299,20 +322,9 @@ function AttachPage() {
         />
       )}
 
-      {/* The education is once-per-browser, so this is the way back to it —
-          without it, "how does this work again?" has no answer inside the flow
-          it explains. */}
-      {!activeBoard && (
-        <div className="mb-3 flex justify-end">
-          <button
-            type="button"
-            onClick={() => setPrimerDone(false)}
-            className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-3 py-1.5 text-xs font-semibold text-muted-foreground transition hover:text-foreground"
-          >
-            <HelpCircle className="h-3.5 w-3.5" /> How it works
-          </button>
-        </div>
-      )}
+      {/* Timeline — the same labelled-dot stepper as Create pin, so the flow
+          reads as one journey. This screen is always step 1. */}
+      {!activeBoard && <MonetiseSteps current={1} />}
 
       {/* Pinterest-style tabs */}
       {!activeBoard && (
@@ -545,6 +557,53 @@ function SortDropdown({ value, onChange }: { value: SortBy; onChange: (v: SortBy
           })}
         </div>
       )}
+    </div>
+  );
+}
+
+// The monetize journey at a glance — mirrors the Create pin stepper (labelled
+// dots + connectors) so the two flows read as one system.
+const MONETISE_STEPS = ["Select pin/board", "Verify products", "Attach shoppable link"];
+
+function MonetiseSteps({ current }: { current: 1 | 2 | 3 }) {
+  return (
+    <div className="mx-auto mb-5 flex max-w-2xl items-start gap-2">
+      {MONETISE_STEPS.map((label, i) => {
+        const n = i + 1;
+        const done = current > n;
+        const active = current === n;
+        return (
+          <div key={label} className={`flex items-start gap-2 ${i < 2 ? "flex-1" : ""}`}>
+            <div className="flex max-w-[92px] flex-col items-center gap-1">
+              <div
+                className={`grid h-8 w-8 shrink-0 place-items-center rounded-full text-xs font-bold ring-2 transition ${
+                  done
+                    ? "bg-primary text-primary-foreground ring-primary"
+                    : active
+                      ? "bg-primary/10 text-primary ring-primary"
+                      : "bg-surface-2 text-muted-foreground ring-border"
+                }`}
+              >
+                {done ? <Check className="h-4 w-4" /> : n}
+              </div>
+              <span
+                className={`text-center text-[11px] font-semibold leading-tight ${
+                  active ? "text-primary" : done ? "text-foreground" : "text-muted-foreground"
+                }`}
+              >
+                {label}
+              </span>
+            </div>
+            {i < 2 && (
+              <div
+                className={`mt-[15px] h-0.5 flex-1 rounded transition ${
+                  done ? "bg-primary" : "bg-border"
+                }`}
+              />
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

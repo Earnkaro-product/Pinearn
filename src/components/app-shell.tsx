@@ -78,7 +78,6 @@ export function AppShell({
   children: ReactNode;
 }) {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
-  const hideHeaderActions = pathname === "/pins/attach";
   // Coins are a Pinterest SEO currency and nothing else spends them, so the
   // balance only appears inside that flow (/boost and its pin/board steps).
   // Anywhere else a number in the header just raises "what is this going to
@@ -237,17 +236,15 @@ export function AppShell({
                   are actually spent. */}
               {!noWallet && <WalletPill />}
 
-              {!hideHeaderActions && (
-                <div
-                  className={
-                    inlineActions
-                      ? "flex items-center gap-2"
-                      : "hidden sm:flex sm:items-center sm:gap-2"
-                  }
-                >
-                  {actions}
-                </div>
-              )}
+              <div
+                className={
+                  inlineActions
+                    ? "flex items-center gap-2"
+                    : "hidden sm:flex sm:items-center sm:gap-2"
+                }
+              >
+                {actions}
+              </div>
             </div>
 
             {/* Actions row on mobile */}

@@ -10,7 +10,6 @@ import {
   ArrowRight,
   Ban,
   BarChart3,
-  ChevronRight,
   Eye,
   Loader2,
   PencilLine,
@@ -431,26 +430,9 @@ function OnboardingPage() {
         }}
       />
       <div className="mx-auto w-full max-w-md px-4 pb-8 pt-8 sm:max-w-lg">
-        {/* The pill up here used to read "Required", with a padlock, and it was
-            the most load-bearing lie on the screen: nothing on this flow is
-            required to use the product. It is now the top-level way out — the
-            same skip as the one below the connect button, in the corner where a
-            skip is looked for. Present on the name step too, because a creator
-            who wants in should not have to answer two screens first; a name
-            typed but not submitted is carried over anyway (see skipOnboarding). */}
         <div className="mb-6 flex items-center gap-2">
           <img src="/shopmypin-logo.png" alt="" draggable={false} className="h-8 w-8" />
           <span className="font-display text-lg font-semibold">ShopMyPin</span>
-          <button
-            type="button"
-            onClick={skipOnboarding}
-            disabled={skipping || !userId}
-            className="ml-auto inline-flex min-h-8 items-center gap-1 rounded-full border border-border bg-surface px-3 text-mini font-semibold text-muted-foreground transition hover:border-primary/40 hover:text-foreground disabled:opacity-60"
-          >
-            {skipping ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
-            {skipping ? "Skipping…" : "Skip for now"}
-            {!skipping && <ChevronRight className="h-3 w-3" />}
-          </button>
         </div>
 
         {phase === "name" ? (
@@ -629,13 +611,6 @@ function OnboardingPage() {
                   {skipping ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
                   {skipping ? "Taking you in…" : "Skip — I'll connect later"}
                 </button>
-              )}
-
-              {phase === "authorize" && (
-                <p className="mt-1 text-center text-xs leading-snug text-muted-foreground">
-                  You can look around the whole app without this. We'll ask again — and only ask —
-                  when you do something that touches your Pinterest account.
-                </p>
               )}
 
               {phase !== "authorize" && (

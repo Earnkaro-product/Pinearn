@@ -4,10 +4,10 @@ import {
   ArrowRight,
   Check,
   ChevronDown,
-  ChevronRight,
-  Info,
+  Lightbulb,
   Search,
   Sparkles,
+  TrendingUp,
   X,
 } from "lucide-react";
 import { LiveScorePill } from "@/components/health-widgets";
@@ -97,13 +97,13 @@ export function ScoreRing({ points, maxPoints }: { points: number; maxPoints: nu
 }
 
 /** The whole briefing in one slim band: pts banked, pts on the table, and the
- * page's only instruction — everything else is pictures. */
+ * account's state as a bar — everything else is pictures. */
 export function PickerHeader({
   heading,
   points,
   maxPoints,
   gainPoints,
-  note,
+  scan,
   onGuide,
 }: {
   heading: string;
@@ -113,40 +113,69 @@ export function PickerHeader({
   maxPoints: number;
   /** Pts still recoverable from everything on this screen. */
   gainPoints: number;
-  /** Optional one-or-two-sentence brief: what this screen is deciding, and on
-   * what basis. Worth the height on a surface whose ORDER is the product — a
-   * ranked list nobody can see the rule behind reads as an arbitrary one. */
-  note?: ReactNode;
-  onGuide: () => void;
+  /** The account at a glance: items needing work vs already strong. Drawn as
+   * a segmented bar with a two-word legend — the sentence this replaced spelt
+   * out the same split and went unread next to the pictures below it. */
+  scan?: { weak: number; strong: number; weakLabel: string; strongLabel: string };
+  /** Omit when the page surfaces its guide elsewhere (e.g. an app-bar button). */
+  onGuide?: () => void;
 }) {
+  const total = scan ? scan.weak + scan.strong : 0;
+  const weakPct = scan && total > 0 ? (scan.weak / total) * 100 : 0;
   return (
     // The eyebrow ("Pin SEO") went: the app bar directly above already says
     // which flow this is, so it was the same words twice, one line apart.
-    <header className="rounded-3xl border border-border bg-surface p-4 shadow-sm">
-      <div className="flex items-center gap-3.5">
+    <header className="relative overflow-hidden rounded-3xl border border-border bg-surface p-4 shadow-sm">
+      <div
+        aria-hidden
+        className="pointer-events-none absolute -right-12 -top-16 h-44 w-44 rounded-full bg-primary/[0.07] blur-2xl"
+      />
+      <div className="relative flex items-center gap-3.5">
         <ScoreRing points={points} maxPoints={maxPoints} />
         <div className="min-w-0 flex-1">
           <h2 className="font-display text-[22px] font-bold leading-tight tracking-tight">
             {heading}
           </h2>
-          <p className="mt-0.5 text-mini font-bold text-primary">
-            +{pointsLabel(gainPoints)} pts on the table
-          </p>
-          {/* Labelled, not an info glyph — same call as the score hero. */}
-          <button
-            type="button"
-            onClick={onGuide}
-            className="mt-1 inline-flex items-center gap-0.5 text-micro font-semibold text-muted-foreground transition hover:text-primary"
-          >
-            How it works
-            <ChevronRight className="h-3 w-3" />
-          </button>
+          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+            <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2.5 py-1 text-micro font-extrabold tabular-nums text-primary">
+              <TrendingUp className="h-3 w-3" strokeWidth={2.75} />+{pointsLabel(gainPoints)} pts
+            </span>
+            {/* Amber and bulb-marked, because it opens the same bulb sheet the
+                app bar's bulb does — one surface, one visual language. */}
+            {onGuide && (
+              <button
+                type="button"
+                onClick={onGuide}
+                className="inline-flex items-center gap-1 rounded-full border border-border bg-surface px-2 py-1 text-micro font-bold text-muted-foreground shadow-sm transition hover:text-foreground"
+              >
+                <Lightbulb className="h-3 w-3" strokeWidth={2.5} />
+                How it works
+              </button>
+            )}
+          </div>
         </div>
       </div>
-      {note && (
-        <p className="mt-3 border-t border-border/70 pt-3 text-mini leading-relaxed text-muted-foreground">
-          {note}
-        </p>
+      {scan && total > 0 && (
+        <div className="relative mt-3.5 border-t border-border/70 pt-3">
+          <div className="relative h-2 overflow-hidden rounded-full bg-emerald-500/20">
+            <motion.span
+              className="absolute inset-y-0 left-0 rounded-full bg-gradient-primary"
+              initial={{ width: 0 }}
+              animate={{ width: `${weakPct}%` }}
+              transition={{ duration: 0.9, delay: 0.15, ease: [0.22, 1, 0.36, 1] }}
+            />
+          </div>
+          <div className="mt-2 flex items-center justify-between gap-2 text-micro font-bold tabular-nums">
+            <span className="inline-flex items-center gap-1.5 text-foreground/80">
+              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary" />
+              {scan.weak} {scan.weakLabel}
+            </span>
+            <span className="inline-flex items-center gap-1.5 text-emerald-700">
+              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
+              {scan.strong} {scan.strongLabel}
+            </span>
+          </div>
+        </div>
       )}
     </header>
   );
@@ -563,9 +592,9 @@ export function ReviewProgressHeader({
           type="button"
           onClick={onGuide}
           aria-label="How it works"
-          className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-surface text-primary ring-1 ring-primary/20 transition hover:bg-primary/10"
+          className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-border bg-surface text-muted-foreground shadow-sm transition hover:text-foreground"
         >
-          <Info className="h-4 w-4" />
+          <Lightbulb className="h-4 w-4" />
         </button>
       </div>
 

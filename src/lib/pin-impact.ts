@@ -507,12 +507,13 @@ export const DIAGNOSIS_META: Record<PinDiagnosis, { label: string; hint: string 
   working: { label: "Doing well", hint: "Above your median click rate" },
 };
 
-/** Plain-language account of the model, for the "How it works" sheet. The
- * heuristics are auditable rather than a black box — same contract as
- * SCORE_CRITERIA in health-score.ts. */
-export const IMPACT_CRITERIA = [
-  `Reach at stake — impressions over the last ${ANALYTICS_WINDOW_DAYS} days, compared with what your other pins on the same board get.`,
-  "Copy gap — how much of the title and description Pinterest has to work with, graded rather than pass/fail.",
-  "Timing — a pin under three weeks old is still being sized up, so fixing it is worth more.",
-  "Click rate — measured against your own median. Pins beating it are marked working and pushed down, not up.",
-];
+/** What decides the order, as chips for the bulb sheet. Naming the factors is
+ * what makes the ranking auditable; the old version spent a full sentence on
+ * each and none of them were read on a phone. Same contract as SCORE_CRITERIA
+ * in health-score.ts. */
+export const IMPACT_FACTORS = [
+  `Reach at stake (${ANALYTICS_WINDOW_DAYS}d)`,
+  "Copy gap",
+  "Under 3 weeks old",
+  "Beats your click rate → last",
+] as const;

@@ -32,11 +32,11 @@ import {
   FieldDiff,
   FixEditSheet,
   GeneratingNotice,
-  GuideSheet,
   IssueChips,
   KeywordProof,
   OptimizedState,
 } from "@/components/boost-fix-kit";
+import { SeoInsightButton, SeoInsightSheet } from "@/components/seo-insight";
 import { supabase } from "@/integrations/supabase/client";
 import { useFixFlow, type BaseFixCard } from "@/hooks/use-fix-flow";
 import { useAiRewrites, type AiRewriteState } from "@/hooks/use-ai-rewrites";
@@ -50,18 +50,8 @@ import {
   maxPointsFor,
   pointsEarned,
   pointsLabel,
-  SCORE_CRITERIA,
   SUB_SCORE_WEIGHTS,
 } from "@/lib/health-score";
-
-// How to drive the deck — surfaced any time via the header's info button. One
-// action per step; the controls are on screen while this is read.
-const BOARD_GUIDE_STEPS = [
-  "Tap boards to queue them, then Boost.",
-  "Hold a board to see what it's worth.",
-  "Apply keeps the rewrite, Skip moves on.",
-  "Edit the wording, or undo, anytime.",
-];
 
 // Filmstrip sizing — mirrors the pin review navigator so the two flows feel
 // like one product.
@@ -179,7 +169,7 @@ function FixBoardsPage() {
 
   const [editing, setEditing] = useState(false);
   const [confirming, setConfirming] = useState(false);
-  const [guide, setGuide] = useState(false);
+  const [insight, setInsight] = useState(false);
   const [gridOpen, setGridOpen] = useState(false);
   const [mode, setMode] = useState<"picker" | "launching" | "review">("picker");
   const [launchCard, setLaunchCard] = useState<BoardFixCard | null>(null);
@@ -300,6 +290,10 @@ function FixBoardsPage() {
       // a sub-view of the picker, so it shouldn't cost the whole page to exit.
       onBack={mode !== "picker" && !flow.done ? backToPicker : undefined}
       hideBottomNav
+      inlineActions
+      // The bulb — what drives Board SEO. Lived on the briefing sheet this page
+      // used to sit behind; the briefing is gone, so it rides the app bar.
+      actions={<SeoInsightButton label="Board SEO" onClick={() => setInsight(true)} />}
     >
       <div className="mx-auto flex h-[calc(100dvh-6.5rem)] max-w-md flex-col px-1">
         {flow.isLoading || flow.deck === null ? (
@@ -327,7 +321,7 @@ function FixBoardsPage() {
             score={flow.score}
             statusById={flow.statusById}
             onStart={startRun}
-            onGuide={() => setGuide(true)}
+            onGuide={() => setInsight(true)}
           />
         ) : mode === "launching" ? (
           <BoardLaunch card={launchCard ?? flow.current ?? flow.cards[0]} count={runSize} />
@@ -343,7 +337,7 @@ function FixBoardsPage() {
               total={flow.total}
               approvedCount={flow.approvedCount}
               skippedCount={flow.skippedCount}
-              onGuide={() => setGuide(true)}
+              onGuide={() => setInsight(true)}
             />
 
             <div className="flex min-h-0 flex-1 flex-col">
@@ -449,14 +443,7 @@ function FixBoardsPage() {
             onCancel={() => setConfirming(false)}
           />
         )}
-        {guide && (
-          <GuideSheet
-            title="What makes a good board"
-            criteria={SCORE_CRITERIA.boardStructure}
-            steps={BOARD_GUIDE_STEPS}
-            onClose={() => setGuide(false)}
-          />
-        )}
+        {insight && <SeoInsightSheet subKey="boardStructure" onClose={() => setInsight(false)} />}
         {gridOpen && (
           <BoardGridSheet
             cards={flow.cards}
