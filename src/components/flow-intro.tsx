@@ -1,10 +1,10 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion, type Variants } from "framer-motion";
 import {
   ArrowLeft,
   ArrowRight,
-  ArrowUpRight,
   Check,
+  ChevronRight,
   Coins,
   EyeOff,
   Gauge,
@@ -338,49 +338,17 @@ function MonetizeVerifyArt({ reduce }: { reduce: boolean }) {
   );
 }
 
-// Screen 4 — where the shoppable link actually lands, drawn rather than
-// screenshotted so it stays correct in both themes and at any width. The
-// earnings badge alongside is the payoff the link buys.
+// Screen 4 — a real live Pin, screenshotted: the Visit button (arrowed) is
+// where the shoppable link takes a tapping shopper. The earnings badge
+// alongside is the payoff the link buys.
 function MonetizeLinkArt({ reduce }: { reduce: boolean }) {
   return (
     <div className="relative mx-auto w-full max-w-[13rem]">
-      <div className="overflow-hidden rounded-3xl border border-border bg-surface shadow-elevate">
-        <div className="relative aspect-[4/5] bg-gradient-to-br from-rose-400 via-rose-300 to-amber-200">
-          {/* Stand-in for the Pin's own image — deliberately abstract, so it
-              reads as "your Pin" rather than as one specific Pin. */}
-          <div className="absolute inset-x-4 top-4 space-y-1.5">
-            <div className="h-1.5 w-2/3 rounded-full bg-white/50" />
-            <div className="h-1.5 w-1/3 rounded-full bg-white/35" />
-          </div>
-
-          {/* The shoppable link, exactly where it appears on a live Pin. */}
-          <div className="absolute inset-x-3 bottom-3">
-            <div className="relative">
-              {!reduce && (
-                <span
-                  aria-hidden
-                  className="pointer-events-none absolute inset-0 animate-ping rounded-full bg-white/40"
-                />
-              )}
-              <div className="relative flex items-center gap-2 rounded-full bg-white/95 px-3 py-2 shadow-glow ring-2 ring-primary">
-                <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-primary text-primary-foreground">
-                  <Link2 className="h-3 w-3" />
-                </span>
-                <span className="truncate text-mini font-bold text-neutral-900">
-                  Shop this look
-                </span>
-                <ArrowUpRight className="ml-auto h-3.5 w-3.5 shrink-0 text-primary" />
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Pin title/board rows, greyed — context for the chip above. */}
-        <div className="space-y-1.5 px-3 py-3">
-          <div className="h-2 w-3/4 rounded-full bg-surface-2" />
-          <div className="h-2 w-1/2 rounded-full bg-surface-2" />
-        </div>
-      </div>
+      <img
+        src="/monetize-pin-visit.png"
+        alt="A live Pin on Pinterest, with the Visit button that opens your shoppable link"
+        className="w-full rounded-3xl border border-border shadow-elevate"
+      />
 
       {/* Earnings, counting up beside the Pin that produced them. */}
       <motion.div
@@ -689,32 +657,187 @@ function StoreShareArt({ reduce }: { reduce: boolean }) {
 
 /* ========================================================= Pinterest SEO == */
 
-// Screen 1 — a good Pin, buried. Two ghost cards behind it read as "the
-// thousands it competes with"; the eye-off badge says what happens.
-function SeoBuriedArt() {
+// The three things that bury a Pin, in the order the score checks them. Named,
+// because "your SEO is weak" is not something a creator can act on and "your
+// title, keywords and board" is.
+const SEO_FAULTS = [
+  { icon: Type, label: "Title" },
+  { icon: Tags, label: "Keywords" },
+  { icon: LayoutGrid, label: "Board" },
+];
+
+// Screen 1 — the diagnosis, as a picture instead of a paragraph. The Pin sits
+// buried under the thousands it competes with while three faults show red
+// beside it; they clear one at a time and the Pin rises out of the stack. The
+// problems ARE the art here, so the copy underneath doesn't have to list them —
+// which is what let the body shrink from four lines to one.
+function SeoImpactArt({ reduce }: { reduce: boolean }) {
+  // 0 buried · 1–3 one fault clearing per beat · 4–5 resting, surfaced. Under
+  // reduced motion `useLoop` pins to the last beat, which is deliberately the
+  // fixed state — the outcome, not the problem.
+  const t = useLoop(6, 760, reduce);
+  const cleared = Math.min(SEO_FAULTS.length, t);
+  const surfaced = t >= SEO_FAULTS.length;
+
   return (
-    <div className="relative mx-auto h-44 w-32">
-      <div className="absolute inset-x-0 top-2 h-40 -rotate-6 rounded-2xl border border-border bg-surface-2/80" />
-      <div className="absolute inset-x-0 top-2 h-40 rotate-3 rounded-2xl border border-border bg-surface-2" />
-      <PinCard
-        className="absolute inset-x-0 top-2 h-40"
-        dim
-        tint="from-rose-200/80 via-amber-100 to-rose-100"
-      />
-      <div className="absolute -right-3 top-0 grid h-9 w-9 place-items-center rounded-full border border-border bg-surface text-muted-foreground shadow-elevate">
-        <EyeOff className="h-4 w-4" />
+    <div className="mx-auto flex h-44 w-[17rem] items-center justify-center gap-3.5">
+      {/* The Pin, in a stack that recedes as it rises. */}
+      <div className="relative h-40 w-[6.25rem] shrink-0">
+        <motion.div
+          className="absolute inset-x-0 top-0 h-36 rounded-2xl border border-border bg-surface-2/80"
+          animate={{
+            rotate: surfaced ? -11 : -6,
+            y: surfaced ? 10 : 0,
+            opacity: surfaced ? 0.4 : 1,
+          }}
+          transition={{ duration: 0.7, ease: EASE }}
+        />
+        <motion.div
+          className="absolute inset-x-0 top-0 h-36 rounded-2xl border border-border bg-surface-2"
+          animate={{ rotate: surfaced ? 8 : 3, y: surfaced ? 8 : 0, opacity: surfaced ? 0.5 : 1 }}
+          transition={{ duration: 0.7, ease: EASE }}
+        />
+        <motion.div
+          className="absolute inset-x-0 top-0"
+          animate={{ y: surfaced ? -10 : 0, scale: surfaced ? 1.04 : 1 }}
+          transition={{ duration: 0.7, ease: EASE }}
+        >
+          <PinCard
+            className="h-36"
+            dim={!surfaced}
+            tint="from-rose-200/80 via-amber-100 to-rose-100"
+          />
+        </motion.div>
+
+        {/* Buried or found, in one glyph, worn by the Pin itself. */}
+        <AnimatePresence mode="wait" initial={false}>
+          {surfaced ? (
+            <motion.div
+              key="up"
+              initial={{ opacity: 0, scale: 0.8 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.8 }}
+              transition={{ duration: 0.3, ease: EASE }}
+              className="absolute -left-3 -top-2 flex items-center gap-1 rounded-full border border-emerald-500/30 bg-surface px-2 py-1.5 text-emerald-600 shadow-elevate"
+            >
+              <TrendingUp className="h-3.5 w-3.5" />
+              <span className="text-micro font-bold leading-none">Found</span>
+            </motion.div>
+          ) : (
+            <motion.div
+              key="down"
+              initial={{ opacity: 0, scale: 0.8 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.8 }}
+              transition={{ duration: 0.3, ease: EASE }}
+              className="absolute -left-3 -top-2 grid h-8 w-8 place-items-center rounded-full border border-border bg-surface text-muted-foreground shadow-elevate"
+            >
+              <EyeOff className="h-4 w-4" />
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+
+      {/* The faults, clearing top to bottom. */}
+      <div className="flex w-[8.75rem] shrink-0 flex-col gap-2">
+        {SEO_FAULTS.map((f, i) => {
+          const ok = i < cleared;
+          return (
+            <motion.div
+              key={f.label}
+              animate={{ x: ok ? 0 : -3 }}
+              transition={{ duration: 0.4, ease: EASE }}
+              className={`flex items-center gap-2 rounded-xl border bg-surface px-2 py-1.5 shadow-sm transition-colors duration-500 ${
+                ok ? "border-emerald-500/30" : "border-rose-500/30"
+              }`}
+            >
+              <span
+                className={`grid h-6 w-6 shrink-0 place-items-center rounded-lg transition-colors duration-500 ${
+                  ok ? "bg-emerald-500/10 text-emerald-600" : "bg-rose-500/10 text-rose-500"
+                }`}
+              >
+                <f.icon className="h-3.5 w-3.5" />
+              </span>
+              <span className="text-micro font-bold leading-none">{f.label}</span>
+              <span className="ml-auto shrink-0">
+                {ok ? (
+                  <Check className="h-3.5 w-3.5 text-emerald-600" strokeWidth={3} />
+                ) : (
+                  <X className="h-3.5 w-3.5 text-rose-500" strokeWidth={3} />
+                )}
+              </span>
+            </motion.div>
+          );
+        })}
       </div>
     </div>
   );
 }
 
-// The funnel the creator is leaking: each stage names what better SEO buys.
-const SEO_FUNNEL = [
-  { icon: Search, label: "Better discovery", tint: "bg-primary/10 text-primary" },
-  { icon: TrendingUp, label: "More reach", tint: "bg-amber-500/10 text-amber-600" },
-  { icon: MousePointerClick, label: "More clicks", tint: "bg-rose-500/10 text-rose-600" },
-  { icon: IndianRupee, label: "More earnings", tint: "bg-emerald-500/10 text-emerald-600" },
+// What the fix is actually worth, drawn as the chain it runs down rather than
+// a grid of features: search finds the Pin, the reach becomes taps, the taps
+// pay. Each link is a consequence of the one before it, and it lights up left
+// to right so the creator reads it in that order and lands on the money.
+const SEO_IMPACT = [
+  { icon: Search, label: "Found", tint: "bg-primary/10 text-primary" },
+  { icon: TrendingUp, label: "Reach", tint: "bg-amber-500/10 text-amber-600" },
+  { icon: MousePointerClick, label: "Clicks", tint: "bg-rose-500/10 text-rose-600" },
+  { icon: IndianRupee, label: "Earnings", tint: "bg-emerald-500/10 text-emerald-600" },
 ];
+
+function SeoImpactBlock({ reduce }: { reduce: boolean }) {
+  // Two extra steps so the chain rests fully lit before running again.
+  const lit = useLoop(SEO_IMPACT.length + 2, 620, reduce);
+  return (
+    <>
+      <div className="mx-auto mt-6 flex max-w-xs items-start justify-center gap-0.5">
+        {SEO_IMPACT.map((s, i) => {
+          const on = reduce || i < lit;
+          return (
+            <Fragment key={s.label}>
+              {i > 0 && (
+                <ChevronRight
+                  className={`mt-2.5 h-3.5 w-3.5 shrink-0 transition-colors duration-500 ${
+                    on ? "text-primary" : "text-border"
+                  }`}
+                />
+              )}
+              <div className="flex w-[3.75rem] flex-col items-center gap-1.5">
+                <span
+                  className={`grid h-9 w-9 place-items-center rounded-xl transition-all duration-500 ${
+                    on
+                      ? `${s.tint} shadow-[0_0_18px_-6px_var(--color-primary)]`
+                      : "bg-surface-2 text-muted-foreground/50"
+                  }`}
+                >
+                  <s.icon className="h-4 w-4" />
+                </span>
+                <span
+                  className={`text-micro font-bold leading-tight transition-colors duration-500 ${
+                    on ? "text-foreground" : "text-muted-foreground/60"
+                  }`}
+                >
+                  {s.label}
+                </span>
+              </div>
+            </Fragment>
+          );
+        })}
+      </div>
+      {/* The objection this screen has to clear before the CTA: that "SEO"
+          means making something new. It doesn't — the scan is read-only and
+          works on what is already on the account (see boost.tsx). As a badge
+          rather than a sentence, so it reads as a guarantee and costs the
+          screen one line instead of two. */}
+      <div className="mt-4 flex justify-center">
+        <span className="inline-flex items-center gap-1.5 rounded-full bg-surface-2 px-3 py-1.5 text-micro font-bold text-foreground/70">
+          <Check className="h-3.5 w-3.5 text-emerald-600" strokeWidth={3} />
+          Nothing new to make
+        </span>
+      </div>
+    </>
+  );
+}
 
 // Screen 2 — the engine. Breathing rings around a sparkle, matching the
 // analyzer's centre badge so the scan feels like this, running.
@@ -920,10 +1043,13 @@ const FLOWS: Record<IntroFlow, FlowDef> = {
     ctaLabel: "Check my SEO score",
     screens: [
       {
-        art: SeoBuriedArt,
+        art: SeoImpactArt,
         headline: "Great Pins get buried",
-        body: "Weak titles, keywords and boards keep your best Pins out of Pinterest search.",
-        extra: () => <ChipGrid items={SEO_FUNNEL} cols={2} />,
+        // One line. The three faults are named in the art above and the payoff
+        // is drawn in the chain below, so prose repeating either was just the
+        // slide explaining its own pictures.
+        body: "Three faults keep yours out of Pinterest search.",
+        extra: SeoImpactBlock,
       },
       {
         art: SeoAiArt,

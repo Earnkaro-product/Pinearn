@@ -34,6 +34,7 @@ import {
 import { EducationalLoader, HINTS } from "@/components/rotating-hint";
 import { useVisualSearch } from "@/hooks/use-visual-search";
 import { AppShell } from "@/components/app-shell";
+import { SeoInsightButton, SeoInsightSheet } from "@/components/seo-insight";
 import { FlowIntroGate } from "@/components/flow-intro";
 import { supabase } from "@/integrations/supabase/client";
 import { hostBrand, estimateCommissionPct } from "@/lib/brands";
@@ -140,6 +141,7 @@ function CreatePinWizard() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const [step, setStep] = useState<Step>(1);
+  const [insight, setInsight] = useState(false);
 
   // form state
   const [imageUrl, setImageUrl] = useState("");
@@ -342,6 +344,11 @@ function CreatePinWizard() {
       backButton
       backTo="/pins"
       hideBottomNav
+      inlineActions
+      // The bulb — why fresh pins matter. Lived on the Content SEO briefing
+      // sheet this page used to sit behind; the briefing is gone, so it rides
+      // the app bar.
+      actions={<SeoInsightButton label="Content SEO" onClick={() => setInsight(true)} />}
     >
       <input
         ref={fileRef}
@@ -486,6 +493,10 @@ function CreatePinWizard() {
           </div>
         </div>
       )}
+
+      <AnimatePresence>
+        {insight && <SeoInsightSheet subKey="freshness" onClose={() => setInsight(false)} />}
+      </AnimatePresence>
     </AppShell>
   );
 }
