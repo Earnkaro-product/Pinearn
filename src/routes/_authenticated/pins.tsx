@@ -43,12 +43,15 @@ import { usePinterestConnection } from "@/hooks/use-pinterest-connect";
 // `pinId` keeps the open pin dialog in the URL rather than in local state
 // only, so leaving for /pins/preview and coming back reopens the pin the user
 // was editing instead of dumping them on the bare grid.
-type PinsSearch = { new?: 1; filter?: "drafts" | "all"; pinId?: string };
+type PinsSearch = { new?: 1; filter?: "drafts"; pinId?: string };
 
 export const Route = createFileRoute("/_authenticated/pins")({
   validateSearch: (s: Record<string, unknown>): PinsSearch => ({
     new: s.new === 1 || s.new === "1" ? 1 : undefined,
-    filter: s.filter === "drafts" || s.filter === "all" ? s.filter : undefined,
+    // "all" used to be a third value here. The chip it drove is gone (this
+    // page is Live and Drafts — untouched imports belong to the attach flow),
+    // so an old ?filter=all link now reads as "no filter" and lands on Live.
+    filter: s.filter === "drafts" ? s.filter : undefined,
     pinId: typeof s.pinId === "string" ? s.pinId : undefined,
   }),
   component: PinsPage,
@@ -144,18 +147,11 @@ function PinsPage() {
   };
 
   // Sync the filter chip from the URL: ?filter=drafts after Save draft,
-  // ?filter=all from the "check all the shoppable pins" button that every
-  // monetization success screen ends on — a run that just went live can leave
-  // both live pins and drafts behind, and that button has to show both or it
-  // lands on a grid that's missing the work it just did.
+  // nothing otherwise — the monetization success screens land on Live, which is
+  // what their own button says ("see your live pins"), and a draft the run left
+  // behind is one chip away.
   useEffect(() => {
-    if (search.filter === "drafts") {
-      setCollectionFilter("drafts");
-    } else if (search.filter === "all") {
-      setCollectionFilter("all");
-    } else if (search.filter === undefined) {
-      setCollectionFilter("live");
-    }
+    setCollectionFilter(search.filter === "drafts" ? "drafts" : "live");
   }, [search.filter]);
 
   useEffect(() => {
@@ -343,9 +339,7 @@ function PinsPage() {
     const base =
       collectionFilter === "drafts"
         ? visiblePins.filter((p) => p.status === "draft")
-        : collectionFilter === "all"
-          ? visiblePins
-          : visiblePins.filter((p) => p.status === "live");
+        : visiblePins.filter((p) => p.status === "live");
     return [...base].sort(
       (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
     );
@@ -355,14 +349,6 @@ function PinsPage() {
 
   const draftsCount = visiblePins.filter((p) => p.status === "draft").length;
   const liveCount = visiblePins.filter((p) => p.status === "live").length;
-  // Untouched Pinterest imports. They have no chip of their own — they simply
-  // sit in All alongside everything else — but the count still decides whether
-  // All is a distinct set from Live at all.
-  const newCount = visiblePins.filter((p) => p.status === "new").length;
-  // Take-down acts on published or drafted pins. An untouched import has
-  // nothing to take down, so the bulk control is withheld on the mixed All
-  // filter rather than offering an action that would half-apply.
-  const canBulkTakeDown = collectionFilter === "live" || collectionFilter === "drafts";
 
   return (
     <AppShell
@@ -390,24 +376,11 @@ function PinsPage() {
       }
     >
       <div className="no-scrollbar mb-5 -mx-1 flex items-center gap-2 overflow-x-auto px-1">
-        {/* "All" only earns a chip when there is a mix to separate — with no
-            drafts it would be a second name for "Live". */}
-        {draftsCount + newCount > 0 && (
-          <FilterChip
-            active={collectionFilter === "all"}
-            onClick={() => setCollectionFilter("all")}
-            label="All"
-            count={visiblePins.length}
-          />
-        )}
+        {/* No "All" chip. It counted every untouched Pinterest import too, so it
+            read as "300 pins" on a page that manages 45 — those imports are the
+            subject of the attach flow above, not of this grid. */}
         <FilterChip
-          // With no drafts, "all" and "live" are the same set and the All chip
-          // isn't rendered — so Live owns the selection rather than leaving no
-          // chip lit at all.
-          active={
-            collectionFilter === "live" ||
-            (collectionFilter === "all" && draftsCount + newCount === 0)
-          }
+          active={collectionFilter === "live"}
           onClick={() => setCollectionFilter("live")}
           label="Live"
           count={liveCount}
@@ -420,7 +393,7 @@ function PinsPage() {
             count={draftsCount}
           />
         )}
-        {canBulkTakeDown && filtered.length > 0 && (
+        {filtered.length > 0 && (
           <button
             onClick={() => {
               if (
