@@ -184,7 +184,7 @@ function PinPreviewPage() {
         <LiveSuccess
           imageUrl={pin?.image_url ?? null}
           count={productCount}
-          onSeePins={() => navigate({ to: "/pins", search: { filter: "all" } as never })}
+          onSeePins={() => navigate({ to: "/pins", search: {} as never })}
         />
       </AppShell>
     );

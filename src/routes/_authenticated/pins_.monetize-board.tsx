@@ -762,7 +762,7 @@ function MonetizeBoardPage() {
   const backToBoard = () => navigate({ to: "/pins/attach", search: { collection: collectionId } });
   // Live AND drafts: a bulk run can leave both behind (a pin whose match never
   // resolved stays a draft), and the button promises "all the shoppable pins".
-  const seeLivePins = () => navigate({ to: "/pins", search: { filter: "all" } as never });
+  const seeLivePins = () => navigate({ to: "/pins", search: {} as never });
 
   if (!collectionId) {
     return (
