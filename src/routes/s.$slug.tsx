@@ -22,6 +22,7 @@ import { z } from "zod";
 import { supabase } from "@/integrations/supabase/client";
 import { brandForUrl, brandLogoUrl, hostBrand } from "@/lib/brands";
 import { productPriceParts } from "@/lib/product-price";
+import { categoryOfTitle, type ProductCategory } from "@/lib/product-category";
 
 const DEFAULT_BACKGROUND =
   "https://images.unsplash.com/photo-1519681393784-d120267933ba?w=1600&q=80&auto=format&fit=crop";
@@ -37,17 +38,40 @@ function useCanGoBack() {
   return canGoBack;
 }
 
-/** Back chip floating over the background band. Sits on the image, so it
- * carries its own translucent backdrop to stay readable on any cover. */
-function PreviewBackButton() {
+const CHIP_CLASS =
+  "absolute left-4 top-4 z-20 inline-flex items-center gap-1.5 rounded-full bg-black/40 px-3 py-2 text-sm font-medium text-white backdrop-blur-sm transition hover:bg-black/60";
+
+/**
+ * Back chip floating over the background band. Sits on the image, so it carries
+ * its own translucent backdrop to stay readable on any cover.
+ *
+ * For the CREATOR this is a fixed link to My Store, not `history.back()`.
+ * History was one step wrong the moment the preview stopped being a single
+ * page: preview the store → open a collection → back to the store root, and now
+ * the previous entry is that collection, so the chip walked back INTO the
+ * preview instead of leaving it. There is exactly one place this chip means to
+ * go, so it names it.
+ *
+ * A visitor who is not the owner has no My Store to return to, so they keep the
+ * history step — and only when there is history to step through.
+ */
+function PreviewBackButton({ ownerId }: { ownerId: string }) {
+  const isOwner = useIsOwner(ownerId);
   const canGoBack = useCanGoBack();
+  if (isOwner) {
+    return (
+      <Link to="/storefront" className={CHIP_CLASS}>
+        <ChevronLeft className="h-4 w-4" /> My Store
+      </Link>
+    );
+  }
   if (!canGoBack) return null;
   return (
     <button
       type="button"
       onClick={() => history.back()}
       aria-label="Go back"
-      className="absolute left-4 top-4 z-20 inline-flex items-center gap-1.5 rounded-full bg-black/40 px-3 py-2 text-sm font-medium text-white backdrop-blur-sm transition hover:bg-black/60"
+      className={CHIP_CLASS}
     >
       <ChevronLeft className="h-4 w-4" /> Back
     </button>
@@ -248,7 +272,10 @@ function PublicStorefront() {
   type B = (typeof boards)[number];
   const brand = store.brand_color ?? "#E60023";
   const backgroundUrl = store.background_image_url ?? DEFAULT_BACKGROUND;
-  const [tab, setTab] = useState<"collections" | "boards">("collections");
+  // Which board is filtering the grid — null is "All". Boards are a filter
+  // rather than a second tab: a board is a collection of collections, so it
+  // narrows the same grid instead of owning one of its own.
+  const [activeBoard, setActiveBoard] = useState<string | null>(null);
 
   // `pins` only contains live pins (see the loader) — a pin only goes live
   // via the explicit Go Live action, so a collection (synced Pinterest
@@ -304,13 +331,45 @@ function PublicStorefront() {
     (collectionsByBoard.get(b.id) ?? []).some((cid) => collections.some((c: C) => c.id === cid)),
   );
 
+  // Per-board: how many of its collections are actually shown, and a cover for
+  // its pill (its own, else the first collection's, else that collection's pin).
+  const boardCollectionCount = new Map<string, number>();
+  const boardThumb = new Map<string, string | null>();
+  for (const b of visibleBoards) {
+    const members = collections.filter((c: C) =>
+      (collectionsByBoard.get(b.id) ?? []).includes(c.id),
+    );
+    boardCollectionCount.set(b.id, members.length);
+    boardThumb.set(
+      b.id,
+      b.cover_image_url ??
+        members
+          .map(
+            (mc: C) =>
+              mc.cover_image_url ??
+              pins.find((p: P) => p.collection_id === mc.id && p.image_url)?.image_url ??
+              null,
+          )
+          .find((img): img is string => !!img) ??
+        null,
+    );
+  }
+
+  // A board pill that no longer exists (its last collection came down between
+  // renders) must not leave the grid empty — fall back to All.
+  const activeBoardIds = activeBoard ? (collectionsByBoard.get(activeBoard) ?? []) : null;
+  const shownCollections =
+    activeBoardIds && visibleBoards.some((b: B) => b.id === activeBoard)
+      ? collections.filter((c: C) => activeBoardIds.includes(c.id))
+      : collections;
+
   return (
     <div className="min-h-screen bg-background text-foreground">
       {/* Background band */}
       <div className="relative h-48 w-full overflow-hidden sm:h-64">
         <img src={backgroundUrl} alt="" className="absolute inset-0 h-full w-full object-cover" />
         <div className="absolute inset-0 bg-gradient-to-b from-black/20 via-transparent to-background" />
-        <PreviewBackButton />
+        <PreviewBackButton ownerId={store.user_id} />
       </div>
 
       {/* Header card */}
@@ -340,84 +399,54 @@ function PublicStorefront() {
       </header>
 
       <main className="mx-auto max-w-5xl px-6 py-8">
-        {/* Tabs */}
+        {/* Board pills — same shape as the pills over matching products in the
+            app: All first, one per board, each carrying its own count. A board
+            used to be a second tab full of inert cards; as a filter it narrows
+            the grid a visitor is already looking at, which is the only thing a
+            "collection of collections" is actually for. */}
         {visibleBoards.length > 0 && (
-          <div className="mx-auto mb-6 flex max-w-xs items-center justify-center gap-1 rounded-full border border-border bg-surface p-1">
-            <button
-              onClick={() => setTab("collections")}
-              className={`flex-1 rounded-full px-4 py-2 text-sm font-semibold transition ${
-                tab === "collections"
-                  ? "bg-foreground text-background"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              Collections
-            </button>
-            <button
-              onClick={() => setTab("boards")}
-              className={`flex-1 rounded-full px-4 py-2 text-sm font-semibold transition ${
-                tab === "boards"
-                  ? "bg-foreground text-background"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              Boards
-            </button>
+          <div className="no-scrollbar -mx-1 mb-6 flex items-center gap-2 overflow-x-auto px-1">
+            <FilterPill
+              label="All"
+              count={collections.length}
+              active={activeBoard === null}
+              onClick={() => setActiveBoard(null)}
+            />
+            {visibleBoards.map((b: B) => (
+              <FilterPill
+                key={b.id}
+                label={b.name}
+                count={boardCollectionCount.get(b.id) ?? 0}
+                thumbUrl={boardThumb.get(b.id) ?? null}
+                active={activeBoard === b.id}
+                onClick={() => setActiveBoard(b.id)}
+              />
+            ))}
           </div>
         )}
 
-        {tab === "collections" ? (
-          collections.length > 0 ? (
-            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
-              {collections.map((c: C) => {
-                const cPins = pins.filter((p: P) => p.collection_id === c.id);
-                const cover =
-                  c.cover_image_url ?? cPins.find((p: P) => p.image_url)?.image_url ?? null;
-                const count = (productsByCollection.get(c.id) ?? []).length || cPins.length;
-                return (
-                  <CoverCard
-                    key={c.id}
-                    name={c.name}
-                    subtitle={`${count} product${count === 1 ? "" : "s"}`}
-                    coverUrl={cover}
-                    coverColor={c.cover_color}
-                    brand={brand}
-                    to={{ to: "/s/$slug", params: { slug: store.slug }, search: { c: c.slug } }}
-                  />
-                );
-              })}
-            </div>
-          ) : (
-            <EmptyState text="This storefront is still being set up." />
-          )
-        ) : (
+        {shownCollections.length > 0 ? (
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
-            {visibleBoards.map((b: B) => {
-              const memberIds = collectionsByBoard.get(b.id) ?? [];
-              const memberCollections = collections.filter((c: C) => memberIds.includes(c.id));
-              const mosaic: string[] = [];
-              for (const mc of memberCollections) {
-                const img =
-                  mc.cover_image_url ??
-                  pins.find((p: P) => p.collection_id === mc.id && p.image_url)?.image_url ??
-                  null;
-                if (img) mosaic.push(img);
-                if (mosaic.length >= 4) break;
-              }
-              const cover = b.cover_image_url ?? mosaic[0] ?? null;
+            {shownCollections.map((c: C) => {
+              const cPins = pins.filter((p: P) => p.collection_id === c.id);
+              const cover =
+                c.cover_image_url ?? cPins.find((p: P) => p.image_url)?.image_url ?? null;
+              const count = (productsByCollection.get(c.id) ?? []).length || cPins.length;
               return (
                 <CoverCard
-                  key={b.id}
-                  name={b.name}
-                  subtitle={`${memberCollections.length} collection${memberCollections.length === 1 ? "" : "s"}`}
+                  key={c.id}
+                  name={c.name}
+                  subtitle={`${count} product${count === 1 ? "" : "s"}`}
                   coverUrl={cover}
-                  coverColor={null}
+                  coverColor={c.cover_color}
                   brand={brand}
-                  mosaic={mosaic}
+                  to={{ to: "/s/$slug", params: { slug: store.slug }, search: { c: c.slug } }}
                 />
               );
             })}
           </div>
+        ) : (
+          <EmptyState text="This storefront is still being set up." />
         )}
       </main>
 
@@ -431,13 +460,64 @@ function PublicStorefront() {
   );
 }
 
+/**
+ * One pill in a filter row — the same object as the pills over matching
+ * products in the app (label + count, gradient when active), so a shopper who
+ * has seen one row of pills has seen them all. Boards additionally carry their
+ * cover as a thumb, which is the one thing a board has that a category doesn't.
+ *
+ * Deliberately re-declared here rather than imported from the pins route: this
+ * page is server-rendered for anonymous visitors, and pulling in an
+ * authenticated route module to reuse forty lines of markup would drag the
+ * whole wizard's dependency graph onto a public page.
+ */
+function FilterPill({
+  label,
+  count,
+  active,
+  onClick,
+  thumbUrl,
+}: {
+  label: string;
+  count: number;
+  active: boolean;
+  onClick: () => void;
+  thumbUrl?: string | null;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={`inline-flex shrink-0 items-center gap-1.5 rounded-full py-1.5 pr-3.5 text-xs font-bold transition ${
+        thumbUrl ? "pl-1.5" : "pl-3.5"
+      } ${
+        active
+          ? "bg-gradient-primary text-primary-foreground shadow-glow"
+          : "bg-surface-2 text-muted-foreground hover:text-foreground"
+      }`}
+    >
+      {thumbUrl && <img src={thumbUrl} alt="" className="h-5 w-5 rounded-full object-cover" />}
+      <span className="max-w-[9rem] truncate">{label}</span>
+      <span
+        className={`grid min-w-[1.15rem] place-items-center rounded-full px-1.5 text-micro font-bold ${
+          active ? "bg-white/25 text-primary-foreground" : "bg-foreground/10 text-foreground/70"
+        }`}
+      >
+        {count}
+      </span>
+    </button>
+  );
+}
+
+/** One collection tile. Always a link — the boards grid that used to render
+ * inert copies of this card is now the pill row above it. */
 function CoverCard({
   name,
   subtitle,
   coverUrl,
   coverColor,
   brand,
-  mosaic,
   to,
 }: {
   name: string;
@@ -445,59 +525,37 @@ function CoverCard({
   coverUrl: string | null;
   coverColor: string | null;
   brand: string;
-  mosaic?: string[];
-  /** When present the whole card becomes a link. Boards have no destination
-   * yet, so they stay inert rather than pretending to be tappable. */
-  to?: { to: string; params: { slug: string }; search: { c: string } };
+  to: { to: string; params: { slug: string }; search: { c: string } };
 }) {
-  const showMosaic = !coverUrl && mosaic && mosaic.length >= 2;
-  const Wrapper = to
-    ? ({ children }: { children: React.ReactNode }) => (
-        <Link
-          to={to.to}
-          params={to.params}
-          search={to.search}
-          className="group block overflow-hidden rounded-2xl border border-border bg-surface shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg"
-        >
-          {children}
-        </Link>
-      )
-    : ({ children }: { children: React.ReactNode }) => (
-        <div className="group overflow-hidden rounded-2xl border border-border bg-surface shadow-sm">
-          {children}
-        </div>
-      );
   return (
-    <Wrapper>
+    <Link
+      to={to.to}
+      params={to.params}
+      search={to.search}
+      className="group block overflow-hidden rounded-2xl border border-border bg-surface shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg"
+    >
       <div
         className="relative aspect-square w-full"
         style={{
-          background:
-            coverUrl || showMosaic
-              ? undefined
-              : `linear-gradient(135deg, ${coverColor ?? brand}, transparent)`,
+          background: coverUrl
+            ? undefined
+            : `linear-gradient(135deg, ${coverColor ?? brand}, transparent)`,
         }}
       >
-        {coverUrl ? (
+        {coverUrl && (
           <img
             src={coverUrl}
             alt=""
             className="absolute inset-0 h-full w-full object-cover transition duration-500 group-hover:scale-105"
           />
-        ) : showMosaic ? (
-          <div className="absolute inset-0 grid grid-cols-2 grid-rows-2 gap-0.5">
-            {mosaic!.slice(0, 4).map((src, i) => (
-              <img key={i} src={src} alt="" className="h-full w-full object-cover" />
-            ))}
-          </div>
-        ) : null}
+        )}
         <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/10 to-transparent" />
         <div className="absolute inset-x-3 bottom-3 text-white">
           <div className="truncate text-sm font-semibold drop-shadow">{name}</div>
           <div className="text-micro opacity-80">{subtitle}</div>
         </div>
       </div>
-    </Wrapper>
+    </Link>
   );
 }
 
@@ -560,6 +618,38 @@ function useIsOwner(ownerId: string): boolean {
   return isOwner;
 }
 
+/**
+ * Shopper-facing names for the internal category vocabulary
+ * (`PRODUCT_CATEGORIES`). The enum is singular and lowercase because the
+ * detector and the match gate compare against it; a pill is read by a person,
+ * so it says "Dresses", not "dress". `other` becomes "More" — it means
+ * "nothing recognisable", and no shopper needs to know that.
+ */
+const CATEGORY_LABEL: Record<ProductCategory, string> = {
+  top: "Tops",
+  outerwear: "Outerwear",
+  dress: "Dresses",
+  bottom: "Bottoms",
+  innerwear: "Innerwear",
+  footwear: "Footwear",
+  bag: "Bags",
+  accessory: "Accessories",
+  watch: "Watches",
+  jewellery: "Jewellery",
+  eyewear: "Eyewear",
+  headwear: "Headwear",
+  beauty: "Beauty",
+  electronics: "Electronics",
+  furniture: "Furniture",
+  decor: "Decor",
+  kitchen: "Kitchen",
+  fitness: "Fitness",
+  toys: "Toys",
+  stationery: "Stationery",
+  pet: "Pet",
+  other: "More",
+};
+
 type PublicProduct = {
   id: string;
   title: string;
@@ -595,6 +685,8 @@ function CollectionView({
   const [reorderOpen, setReorderOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [zoomed, setZoomed] = useState(false);
+  /** Active category pill — null is "All". */
+  const [activeCat, setActiveCat] = useState<ProductCategory | null>(null);
   /** Order the creator just saved. Held locally so the grid re-sorts on the
    * same tap that saves, instead of waiting for the loader to come back. */
   const [savedOrder, setSavedOrder] = useState<string[] | null>(null);
@@ -617,6 +709,51 @@ function CollectionView({
     for (const p of products) if (!seen.has(p.id)) list.push(p);
     return list;
   }, [products, savedOrder]);
+
+  // Category pills over the products, read off each title with the same
+  // classifier the match pipeline uses — so a collection built from one pin
+  // ("17 products") becomes browsable by what the things ARE rather than one
+  // undifferentiated wall of cards.
+  const catOf = useMemo(() => {
+    const m = new Map<string, ProductCategory>();
+    for (const p of ordered) m.set(p.id, categoryOfTitle(p.title));
+    return m;
+  }, [ordered]);
+
+  // Ordered by size, "More" (the honest unknown) always last.
+  const catPills = useMemo(() => {
+    const counts = new Map<ProductCategory, number>();
+    for (const p of ordered) {
+      const c = catOf.get(p.id) ?? "other";
+      counts.set(c, (counts.get(c) ?? 0) + 1);
+    }
+    return [...counts.entries()]
+      .sort((a, b) => {
+        if (a[0] === "other") return 1;
+        if (b[0] === "other") return -1;
+        return b[1] - a[1];
+      })
+      .map(([cat, count]) => ({ cat, count }));
+  }, [ordered, catOf]);
+  // One named category is enough — same rule as the pills over matching
+  // products in the app, where a single detected component still gets "All"
+  // plus its own pill. A collection built from a pin with one product is the
+  // common case, and it was the one showing no pills at all.
+  //
+  // A lone "More" is still no row: "All 1 · More 1" tells a shopper nothing,
+  // because `other` means "unrecognised", not a category to browse.
+  const showCatPills = catPills.some((p) => p.cat !== "other");
+
+  const shown = useMemo(
+    () => (activeCat ? ordered.filter((p) => catOf.get(p.id) === activeCat) : ordered),
+    [activeCat, ordered, catOf],
+  );
+
+  // The pill can disappear under a shopper standing on it (the creator removed
+  // the last product in it, and the loader came back with one fewer category).
+  useEffect(() => {
+    if (activeCat && !catPills.some((p) => p.cat === activeCat)) setActiveCat(null);
+  }, [activeCat, catPills]);
 
   async function saveOrder(ids: string[]) {
     setSaving(true);
@@ -740,9 +877,28 @@ function CollectionView({
       </header>
 
       <main className="mx-auto max-w-5xl px-6 py-8">
+        {showCatPills && (
+          <div className="no-scrollbar -mx-1 mb-5 flex items-center gap-2 overflow-x-auto px-1">
+            <FilterPill
+              label="All"
+              count={ordered.length}
+              active={activeCat === null}
+              onClick={() => setActiveCat(null)}
+            />
+            {catPills.map(({ cat, count }) => (
+              <FilterPill
+                key={cat}
+                label={CATEGORY_LABEL[cat]}
+                count={count}
+                active={activeCat === cat}
+                onClick={() => setActiveCat(cat)}
+              />
+            ))}
+          </div>
+        )}
         {ordered.length > 0 ? (
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
-            {ordered.map((p) => (
+            {shown.map((p) => (
               <ProductCard key={p.id} product={p} brand={brand} />
             ))}
           </div>

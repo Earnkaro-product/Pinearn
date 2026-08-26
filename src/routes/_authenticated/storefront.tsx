@@ -714,13 +714,6 @@ function StorefrontPage() {
     [boards, collectionsByBoard, storefrontCollectionIds],
   );
 
-  // The tab can vanish under a creator standing in it (the last board's
-  // collection was taken down) — move them back rather than leave them on a tab
-  // that no longer renders.
-  useEffect(() => {
-    if (monetizedBoards.length === 0) setTab("collections");
-  }, [monetizedBoards.length]);
-
   if (sfLoading) {
     return (
       <AppShell title="My Store" backButton backTo="/dashboard" hideWallet>
@@ -858,32 +851,24 @@ function StorefrontPage() {
         </div>
       </div>
 
-      {/* Tabs. A single-tab switcher is just a label, so the strip only appears
-          once there is a board to switch to — see monetizedBoards. */}
-      {monetizedBoards.length > 0 && (
-        <div className="mb-4 flex items-center justify-center gap-1 rounded-full border border-border bg-surface p-1">
-          <button
-            onClick={() => setTab("collections")}
-            className={`flex-1 rounded-full px-4 py-2 text-sm font-semibold transition ${
-              tab === "collections"
-                ? "bg-foreground text-background"
-                : "text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            Collections
-          </button>
-          <button
-            onClick={() => setTab("boards")}
-            className={`flex-1 rounded-full px-4 py-2 text-sm font-semibold transition ${
-              tab === "boards"
-                ? "bg-foreground text-background"
-                : "text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            Boards
-          </button>
-        </div>
-      )}
+      {/* Tabs. Boards are the store's second dimension — a board is a
+          collection of collections — so the strip is always here. It used to
+          appear only once a board existed, which hid the one route to making
+          the first one: the New button belongs to whichever tab is open. */}
+      <div className="mb-4 flex items-center justify-center gap-1 rounded-full border border-border bg-surface p-1">
+        <StoreTab
+          label="Collections"
+          count={storefrontCollections.length}
+          active={tab === "collections"}
+          onClick={() => setTab("collections")}
+        />
+        <StoreTab
+          label="Boards"
+          count={monetizedBoards.length}
+          active={tab === "boards"}
+          onClick={() => setTab("boards")}
+        />
+      </div>
 
       {/* Section header */}
       <section>
@@ -987,6 +972,44 @@ function StorefrontPage() {
               })}
             </div>
           )
+        ) : monetizedBoards.length === 0 ? (
+          <div className="rounded-2xl border border-dashed border-border bg-surface/40 p-10 text-center">
+            <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-gradient-primary shadow-glow">
+              <Layers className="h-6 w-6 text-primary-foreground" />
+            </div>
+            <h4 className="mt-4 font-display text-base font-semibold">No boards yet</h4>
+            <p className="mx-auto mt-2 max-w-xs text-sm text-muted-foreground">
+              A board is a collection of collections — group “Summer dresses” and “Beach bags” under
+              one board so shoppers can browse by theme.
+            </p>
+            {/* Synced Pinterest boards exist but none of their collections is
+                live yet. Without this line the empty state reads as "your
+                boards were lost" to a creator who just imported twenty. */}
+            {boards.length > monetizedBoards.length && (
+              <p className="mx-auto mt-2 max-w-xs text-mini text-muted-foreground">
+                {boards.length} synced board{boards.length === 1 ? "" : "s"} stay hidden until a
+                collection inside them has a product.
+              </p>
+            )}
+            <button
+              onClick={() =>
+                storefrontCollections.length === 0
+                  ? setShowNewCollection(true)
+                  : setShowNewBoard(true)
+              }
+              className="mt-5 inline-flex items-center gap-1.5 rounded-full bg-gradient-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-glow"
+            >
+              {storefrontCollections.length === 0 ? (
+                <>
+                  <FolderPlus className="h-3.5 w-3.5" /> Make a collection first
+                </>
+              ) : (
+                <>
+                  <Plus className="h-3.5 w-3.5" /> New board
+                </>
+              )}
+            </button>
+          </div>
         ) : (
           <div className="grid grid-cols-2 gap-4">
             {monetizedBoards.map((b) => {
@@ -1210,6 +1233,44 @@ function StorefrontPage() {
 // Fade-in wrapper for remote/user-uploaded images (covers, avatars, product
 // thumbnails) — starts transparent and eases in once loaded, so slow images
 // don't pop in. Purely presentational; onError/other behavior is untouched.
+/**
+ * One half of the Collections/Boards switcher.
+ *
+ * The count rides in the tab rather than in a header above the grid, so an
+ * empty Boards tab announces itself as empty before it is opened — the strip is
+ * always rendered now, and a tab that looks populated until you tap it is worse
+ * than one that says 0.
+ */
+function StoreTab({
+  label,
+  count,
+  active,
+  onClick,
+}: {
+  label: string;
+  count: number;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`flex flex-1 items-center justify-center gap-1.5 rounded-full px-4 py-2 text-sm font-semibold transition ${
+        active ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground"
+      }`}
+    >
+      {label}
+      <span
+        className={`grid min-w-[1.15rem] place-items-center rounded-full px-1.5 text-micro font-bold ${
+          active ? "bg-background/25 text-background" : "bg-foreground/10 text-foreground/70"
+        }`}
+      >
+        {count}
+      </span>
+    </button>
+  );
+}
+
 function FadeImage({
   src,
   alt = "",
