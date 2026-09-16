@@ -406,6 +406,87 @@ export async function createBoard(
   return toBoard(data);
 }
 
+// -------------------------------------------------------------
+// Board sections — the sub-folders inside a Pinterest board.
+//
+// Sections are board-scoped and live only on Pinterest: nothing here is
+// mirrored into Supabase, because a section carries no state the app needs
+// beyond "which one does this new pin go into". The create-pin flow reads the
+// list on demand and passes the chosen id straight through to POST /pins.
+//
+// Scope note: these endpoints sit under boards:read / boards:write, both of
+// which the app already requests (see SCOPES), so reaching sections needs no
+// reconnect.
+// -------------------------------------------------------------
+
+export type PinterestBoardSection = {
+  id: string;
+  name: string;
+};
+
+function toSection(raw: { id?: unknown; name?: unknown }): PinterestBoardSection | null {
+  // A section with no id is unusable as a pin target, and Pinterest has been
+  // seen to return sections with an empty name — keep those, named by the
+  // caller, rather than dropping a real section the creator can see.
+  if (typeof raw?.id !== "string" || !raw.id) return null;
+  return { id: raw.id, name: typeof raw.name === "string" ? raw.name : "" };
+}
+
+/**
+ * Every section on one board, following Pinterest's bookmark pagination the
+ * same way listBoards does.
+ *
+ * Returns [] rather than throwing when the board simply has no sections —
+ * the overwhelmingly common case, and not an error state. A genuine API
+ * failure still throws, so a broken token surfaces instead of silently
+ * looking like "no sections".
+ */
+export async function listBoardSections(
+  accessToken: string,
+  boardId: string,
+): Promise<PinterestBoardSection[]> {
+  const sections: PinterestBoardSection[] = [];
+  let bookmark: string | undefined;
+  do {
+    const qs = new URLSearchParams({ page_size: "100" });
+    if (bookmark) qs.set("bookmark", bookmark);
+    const data = await pinterestFetch(
+      accessToken,
+      `/boards/${encodeURIComponent(boardId)}/sections?${qs.toString()}`,
+    );
+    for (const raw of data.items ?? []) {
+      const section = toSection(raw);
+      if (section) sections.push(section);
+    }
+    bookmark = data.bookmark || undefined;
+  } while (bookmark);
+  return sections;
+}
+
+/** Create a real section on a real board. Pinterest caps section names at 180
+ * characters, and rejects a blank one — the caller trims before calling. */
+export async function createBoardSection(
+  accessToken: string,
+  boardId: string,
+  name: string,
+): Promise<PinterestBoardSection> {
+  const data = await pinterestFetch(
+    accessToken,
+    `/boards/${encodeURIComponent(boardId)}/sections`,
+    {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    },
+  );
+  const section = toSection(data);
+  if (!section) {
+    throw new Error("Pinterest created the section but returned no id for it.");
+  }
+  // Pinterest echoes the stored name; fall back to what we asked for so the
+  // toast never reads as an empty-named section.
+  return { id: section.id, name: section.name || name };
+}
+
 /**
  * One board by id.
  *
@@ -741,12 +822,22 @@ export async function getTopPinsAnalytics(
 
 export async function createPin(
   accessToken: string,
-  input: { boardId: string; title: string; description?: string; link?: string; imageUrl: string },
+  input: {
+    boardId: string;
+    /** Optional section within the board. Omitted (not sent as null) when the
+     * pin goes to the board root — Pinterest rejects an explicit null here. */
+    sectionId?: string;
+    title: string;
+    description?: string;
+    link?: string;
+    imageUrl: string;
+  },
 ): Promise<PinterestPin> {
   const data = await pinterestFetch(accessToken, "/pins", {
     method: "POST",
     body: JSON.stringify({
       board_id: input.boardId,
+      board_section_id: input.sectionId || undefined,
       title: input.title,
       description: input.description || undefined,
       link: input.link || undefined,
@@ -765,6 +856,109 @@ export async function createPin(
     isOwner: true,
     parentPinId: null,
   };
+}
+
+/** PATCH /pins/{pin_id} — the destination link only. Used by Go Live to point
+ * the real pin at the creator's storefront collection, which is what makes
+ * "monetised" true on Pinterest and not just in this database. */
+export async function updatePinLink(
+  accessToken: string,
+  pinId: string,
+  link: string,
+): Promise<void> {
+  await pinterestFetch(accessToken, `/pins/${encodeURIComponent(pinId)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ link }),
+  });
+}
+
+// -------------------------------------------------------------
+// Product tags — Pinterest API v5, spec 5.28.0 (June 2026).
+//
+//   GET  /pins/{pin_id}/product_tags              → { product_tags: [{ pin_id }] }
+//   POST /pins/{pin_id}/product_tags              body { product_tags: [{ pin_id }] }, 1–24
+//   POST /pins/{pin_id}/product_tags/bulk-delete  body { product_tags: [{ pin_id }] } → 204
+//
+// A tag on Pinterest is a reference to an existing PRODUCT PIN — a pin that
+// carries product metadata, sits on a claimed domain, and is owned by the same
+// account as the hero pin (the bulk-add error enum spells these out:
+// PRODUCT_METADATA_MISSING, PIN_NOT_FROM_VERIFIED_DOMAIN,
+// PIN_NOT_FROM_SAME_USER_AS_HERO_PIN, PIN_IS_PRIVATE, PIN_MISSING). There is no
+// way to tag a raw retailer URL, an item id, or another merchant's product pin
+// through the API, and no position/order. That is why the app's own tags
+// (pin_product_tags) are the source of truth and these calls are a MIRROR: read
+// what the creator tagged in the Pinterest app, and push back the subset of our
+// tags that already reference one of their own product pins.
+//
+// Scopes: boards:read, boards:write, pins:read, pins:write — all already in
+// SCOPES. Marked `x-sandbox: disabled` in the spec, so nothing here works
+// against the sandbox base URL; callers treat a failure as "unavailable".
+// -------------------------------------------------------------
+
+/** The most product tags one bulk-add request may carry (spec: maxItems 24). */
+export const PINTEREST_PRODUCT_TAGS_PER_REQUEST = 24;
+
+export async function listPinProductTags(accessToken: string, pinId: string): Promise<string[]> {
+  const data = await pinterestFetch(accessToken, `/pins/${encodeURIComponent(pinId)}/product_tags`);
+  const items = Array.isArray(data?.product_tags) ? data.product_tags : [];
+  return items
+    .map((t: { pin_id?: unknown }) => (typeof t?.pin_id === "string" ? t.pin_id : null))
+    .filter((id: string | null): id is string => !!id);
+}
+
+/** Tag product pins onto a hero pin. All-or-nothing on Pinterest's side; an
+ * already-tagged product pin is accepted as a no-op. Chunked to the spec's
+ * per-request cap. */
+export async function addPinProductTags(
+  accessToken: string,
+  pinId: string,
+  productPinIds: string[],
+): Promise<void> {
+  const ids = [...new Set(productPinIds.filter((id) => /^\d+$/.test(id)))];
+  for (let i = 0; i < ids.length; i += PINTEREST_PRODUCT_TAGS_PER_REQUEST) {
+    await pinterestFetch(accessToken, `/pins/${encodeURIComponent(pinId)}/product_tags`, {
+      method: "POST",
+      body: JSON.stringify({
+        product_tags: ids
+          .slice(i, i + PINTEREST_PRODUCT_TAGS_PER_REQUEST)
+          .map((pin_id) => ({ pin_id })),
+      }),
+    });
+  }
+}
+
+export async function deletePinProductTags(
+  accessToken: string,
+  pinId: string,
+  productPinIds: string[],
+): Promise<void> {
+  const ids = [...new Set(productPinIds.filter((id) => /^\d+$/.test(id)))];
+  if (ids.length === 0) return;
+  const res = await fetch(
+    `${apiBase()}/pins/${encodeURIComponent(pinId)}/product_tags/bulk-delete`,
+    {
+      method: "POST",
+      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ product_tags: ids.map((pin_id) => ({ pin_id })) }),
+    },
+  );
+  // 204 has no body, which is why this doesn't go through pinterestFetch.
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    if (res.status === 401) throw new PinterestAuthError(describePinterestError(401, text));
+    throw new Error(`Pinterest API product_tags/bulk-delete failed (${res.status}): ${text}`);
+  }
+}
+
+/** One pin by id — used to resolve the product pins a hero pin is tagged
+ * with into something showable (title, link, image). `isProduct` is
+ * Pinterest's own `is_product` flag. */
+export async function getPin(
+  accessToken: string,
+  pinId: string,
+): Promise<PinterestPin & { isProduct: boolean }> {
+  const raw = await pinterestFetch(accessToken, `/pins/${encodeURIComponent(pinId)}`);
+  return { ...toPin(raw, null), isProduct: raw?.is_product === true };
 }
 
 export async function getPinAnalytics(

@@ -26,7 +26,6 @@ import {
 } from "lucide-react";
 
 import { AppShell } from "@/components/app-shell";
-import { priceCentsOf } from "@/lib/product-price";
 import {
   SuggestionCard,
   ProgressiveSuggestionCard,
@@ -42,14 +41,24 @@ import { clearMonetizeProgress, saveMonetizeProgress } from "@/lib/monetize-prog
 import {
   approveBoardPins,
   getBoardMonetizationCandidates,
-  getPinRecommendation,
   getPinRecommendationPreview,
   type BoardCandidate,
   type CkResult,
   type RawVisualMatch,
-  type VisualMatch,
 } from "@/lib/pinterest.functions";
+import { notifyProblem } from "@/lib/notify";
 import { CATEGORY_PILLS, type Product } from "./pins";
+import {
+  sequenceProductTags,
+  tagFromMatch,
+  tagFromPlanned,
+  tagFromProduct,
+  tagFromUrl,
+  toProductTagInput,
+  type PendingProductTag,
+} from "@/lib/product-tag-data";
+import { planProductTags, type PlannedTag } from "@/lib/product-tags.functions";
+import { MAX_PRODUCT_TAGS_PER_PIN, canonicalTagLink } from "@/lib/product-tagging";
 
 export const Route = createFileRoute("/_authenticated/pins_/monetize-board")({
   validateSearch: (s: Record<string, unknown>) => ({
@@ -95,7 +104,7 @@ function MonetizeBoardPage() {
   // Full CK-validated path — only "Approve all" uses this: it needs the
   // complete confirmed set synchronously to decide what's safe to attach,
   // so it isn't a progressive-rendering candidate.
-  const runGetRecommendation = useServerFn(getPinRecommendation);
+  const runPlan = useServerFn(planProductTags);
   const runApprove = useServerFn(approveBoardPins);
   const qc = useQueryClient();
 
@@ -156,10 +165,12 @@ function MonetizeBoardPage() {
   const [pickedProductIds, setPickedProductIds] = useState<Set<string>>(new Set());
   // Whether the "Add from Collection" picker grid is expanded in the sheet.
   const [showCollection, setShowCollection] = useState(false);
-  // Every confirmed-available match is selected by default — this tracks
-  // the ones the user has tapped to deselect, keyed by link (matches
-  // resolve async, so "selected" can't be seeded as an initial Set).
-  const [deselectedRecLinks, setDeselectedRecLinks] = useState<Set<string>>(new Set());
+  // Which matches are selected. The DEFAULT is the product-tagging engine's
+  // answer — the confident and likely best match per detected object, inside
+  // the per-pin limit — not "everything Lens returned"; this map holds only
+  // the creator's explicit taps over that default, keyed by link (matches
+  // resolve async, so the default can't be seeded as an initial Set).
+  const [recOverrides, setRecOverrides] = useState<Map<string, boolean>>(new Map());
   // Active product-tag pill for the current pin (null = "All"). Pills come from
   // the object-detection components attached to each match — same as the pin
   // attach screen.
@@ -350,7 +361,35 @@ function MonetizeBoardPage() {
   // A failed search is treated exactly like a confirmed "no product found" —
   // both just mean there's nothing to auto-fill, so the manual fields show
   // either way instead of a dead-end error screen.
-  const currentMatches: RawVisualMatch[] = currentMatchQuery?.data?.matches ?? [];
+  const currentMatchesData = currentMatchQuery?.data?.matches;
+  const currentMatches: RawVisualMatch[] = useMemo(
+    () => currentMatchesData ?? [],
+    [currentMatchesData],
+  );
+
+  // The backend's product tags for this pin — what is selected by default and
+  // the order Approve persists. Every candidate's rank rides along so a card
+  // the creator taps on still carries how it was matched.
+  const currentPlan = useQuery({
+    queryKey: ["product-tag-plan", current?.pinId ?? ""],
+    queryFn: () => runPlan({ data: { pinId: current!.pinId } }),
+    enabled: !!current,
+    staleTime: Infinity,
+    retry: false,
+    refetchOnWindowFocus: false,
+  });
+  const planByLink = useMemo(() => {
+    const m = new Map<string, PlannedTag>();
+    for (const t of currentPlan.data?.ranked ?? []) m.set(canonicalTagLink(t.match.link), t);
+    return m;
+  }, [currentPlan.data]);
+  const defaultSelected = useMemo(
+    () => new Set((currentPlan.data?.tags ?? []).map((t) => canonicalTagLink(t.match.link))),
+    [currentPlan.data],
+  );
+  const isRecSelected = (link: string) =>
+    recOverrides.get(link) ?? defaultSelected.has(canonicalTagLink(link));
+  const selectedRecCount = currentMatches.filter((m) => isRecSelected(m.link)).length;
 
   // Product-tag pills (from object detection). Unique tags in first-seen order,
   // each with its match count. Pills show whenever detection produced at least
@@ -403,17 +442,17 @@ function MonetizeBoardPage() {
     // Re-subscribe whenever what a keypress would act on changes, so the
     // handler never closes over a stale manual-entry draft.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [current, confirmedByLink, deselectedRecLinks, manualDraft]);
+  }, [
+    current,
+    currentPlan.data,
+    currentMatches,
+    confirmedByLink,
+    recOverrides,
+    manualDraft,
+    pickedProductIds,
+  ]);
 
-  const persistApproval = async (
-    candidate: BoardCandidate,
-    products: Array<{
-      title: string;
-      affiliateUrl: string;
-      imageUrl: string | null;
-      priceCents: number | null;
-    }>,
-  ) => {
+  const persistApproval = async (candidate: BoardCandidate, tags: PendingProductTag[]) => {
     setPendingIds((s) => new Set(s).add(candidate.pinId));
     // The pin was marked "approved" optimistically for an instant advance; if
     // the server can't attach/go-live, roll that decision back so the pin
@@ -426,10 +465,20 @@ function MonetizeBoardPage() {
       });
     try {
       const { failed } = await runApprove({
-        data: { origin: window.location.origin, approvals: [{ pinId: candidate.pinId, products }] },
+        data: {
+          origin: window.location.origin,
+          approvals: [
+            {
+              pinId: candidate.pinId,
+              productTags: tags.slice(0, MAX_PRODUCT_TAGS_PER_PIN).map(toProductTagInput),
+            },
+          ],
+        },
       });
       if (failed.length > 0) {
         revert();
+      } else {
+        void qc.invalidateQueries({ queryKey: ["product-tag-plan", candidate.pinId] });
       }
     } catch {
       revert();
@@ -446,7 +495,7 @@ function MonetizeBoardPage() {
     setManualDraft({ pasteUrl: "", products: [] });
     setPickedProductIds(new Set());
     setShowCollection(false);
-    setDeselectedRecLinks(new Set());
+    setRecOverrides(new Map());
     setConfirmedByLink(new Map());
     setManualUrlError(null);
     setShowManualAdd(false);
@@ -478,12 +527,15 @@ function MonetizeBoardPage() {
   };
 
   const toggleRecSelection = (link: string) => {
-    setDeselectedRecLinks((s) => {
-      const next = new Set(s);
-      if (next.has(link)) next.delete(link);
-      else next.add(link);
-      return next;
-    });
+    const on = isRecSelected(link);
+    if (!on && selectedRecCount >= MAX_PRODUCT_TAGS_PER_PIN) {
+      notifyProblem(
+        `You can tag up to ${MAX_PRODUCT_TAGS_PER_PIN} products on a Pin`,
+        "Deselect one to add another.",
+      );
+      return;
+    }
+    setRecOverrides((m) => new Map(m).set(link, !on));
   };
 
   // Approve — attaches every chosen recommendation + manual product and goes
@@ -503,7 +555,7 @@ function MonetizeBoardPage() {
     // silently no-op.
     const selectedManual = manualDraft.products.filter((p) => p.selected);
     const selectedCollection = storeProducts.filter((p) => pickedProductIds.has(p.id));
-    const chosenMatches = currentMatches.filter((m) => !deselectedRecLinks.has(m.link));
+    const chosenMatches = currentMatches.filter((m) => isRecSelected(m.link));
     if (
       chosenMatches.length === 0 &&
       selectedManual.length === 0 &&
@@ -511,21 +563,19 @@ function MonetizeBoardPage() {
     ) {
       return;
     }
+    if (
+      chosenMatches.length + selectedManual.length + selectedCollection.length >
+      MAX_PRODUCT_TAGS_PER_PIN
+    ) {
+      notifyProblem(`You can tag up to ${MAX_PRODUCT_TAGS_PER_PIN} products on a Pin`);
+      return;
+    }
     const candidate = current;
-    const manualAndCollectionProducts = [
-      ...selectedManual.map((p) => ({
-        title: p.title,
-        affiliateUrl: p.url,
-        imageUrl: null,
-        // A pasted URL has no price anywhere in the system.
-        priceCents: null,
-      })),
-      ...selectedCollection.map((p) => ({
-        title: p.title,
-        affiliateUrl: p.affiliate_url,
-        imageUrl: p.image_url,
-        priceCents: p.price_cents,
-      })),
+    // Manual and collection picks are tags the creator made by hand; a pasted
+    // URL has no price anywhere in the system.
+    const manualAndCollectionTags: PendingProductTag[] = [
+      ...selectedManual.map((p) => tagFromUrl(p.url, p.title, null)),
+      ...selectedCollection.map((p) => tagFromProduct(p, "collection")),
     ];
     const next = { ...statusById, [candidate.pinId]: "approved" as const };
     setStatusById(next);
@@ -534,39 +584,25 @@ function MonetizeBoardPage() {
 
     if (chosenMatches.length === 0) {
       // Nothing needs CK — attach the manual/collection picks right away.
-      void persistApproval(candidate, manualAndCollectionProducts);
+      void persistApproval(candidate, manualAndCollectionTags);
       return;
     }
 
-    const chosenLinks = new Set(chosenMatches.map((m) => m.link));
+    // Each chosen match goes live as a TAG carrying how the backend matched it
+    // (object, category, rank, confidence); a card the backend never ranked is
+    // the creator's own pick. The price is the one the card confirmed on
+    // screen. The whole set is ordered the backend's way.
+    const tagFor = (m: RawVisualMatch): PendingProductTag => {
+      const planned = planByLink.get(canonicalTagLink(m.link));
+      return planned
+        ? tagFromPlanned(planned, confirmedByLink.get(m.link) ?? undefined)
+        : tagFromMatch(m, confirmedByLink.get(m.link) ?? undefined);
+    };
     setPendingIds((s) => new Set(s).add(candidate.pinId));
     void (async () => {
-      let recProducts: Array<{
-        title: string;
-        affiliateUrl: string;
-        imageUrl: string | null;
-        priceCents: number | null;
-      }> = [];
-      try {
-        const result = await qc.fetchQuery({
-          queryKey: ["pin-recommendation", candidate.pinId],
-          queryFn: () => runGetRecommendation({ data: { pinId: candidate.pinId } }),
-          staleTime: Infinity,
-          retry: false,
-        });
-        recProducts = result.recommendations
-          .filter((r) => chosenLinks.has(r.link))
-          .map((r) => ({
-            title: r.title,
-            affiliateUrl: r.link,
-            imageUrl: r.thumbnail,
-            priceCents: priceCentsOf(r.price),
-          }));
-      } catch {
-        // CK lookup failed — fall through with just the manual/collection picks.
-      }
+      const recTags = chosenMatches.map(tagFor);
       if (!mountedRef.current) return;
-      const products = [...recProducts, ...manualAndCollectionProducts];
+      const products = sequenceProductTags([...recTags, ...manualAndCollectionTags]);
       if (products.length === 0) {
         setPendingIds((s) => {
           const n = new Set(s);
@@ -681,7 +717,7 @@ function MonetizeBoardPage() {
       targets: remaining,
       origin: window.location.origin,
       qc,
-      runGetRecommendation,
+      runPlan,
       runApprove,
     });
     setCurrentIndex(total);
@@ -702,20 +738,22 @@ function MonetizeBoardPage() {
     // If we're sitting on one of them, spring to the next pending pin.
     if (current && nextStatus[current.pinId]) goToNextUnreviewed(nextStatus);
     void (async () => {
-      const resolved: Array<{ candidate: BoardCandidate; products: VisualMatch[] }> = [];
+      const resolved: Array<{ candidate: BoardCandidate; products: PendingProductTag[] }> = [];
       let i = 0;
       const CONCURRENCY = 4;
       const worker = async () => {
         while (i < targets.length) {
           const c = targets[i++];
           try {
+            // The backend's plan — the same set the deck would have shown
+            // selected had the creator opened this pin.
             const result = await qc.fetchQuery({
-              queryKey: ["pin-recommendation", c.pinId],
-              queryFn: () => runGetRecommendation({ data: { pinId: c.pinId } }),
+              queryKey: ["product-tag-plan", c.pinId],
+              queryFn: () => runPlan({ data: { pinId: c.pinId } }),
               staleTime: Infinity,
               retry: false,
             });
-            resolved.push({ candidate: c, products: result.recommendations });
+            resolved.push({ candidate: c, products: result.tags.map((t) => tagFromPlanned(t)) });
           } catch {
             resolved.push({ candidate: c, products: [] });
           }
@@ -734,16 +772,13 @@ function MonetizeBoardPage() {
               origin: window.location.origin,
               approvals: matched.map((r) => ({
                 pinId: r.candidate.pinId,
-                products: r.products.map((rec) => ({
-                  title: rec.title,
-                  affiliateUrl: rec.link,
-                  imageUrl: rec.thumbnail,
-                  priceCents: priceCentsOf(rec.price),
-                })),
+                productTags: r.products.slice(0, MAX_PRODUCT_TAGS_PER_PIN).map(toProductTagInput),
               })),
             },
           });
           failed.push(...matched.slice(res.approved).map((r) => r.candidate));
+          for (const r of matched.slice(0, res.approved))
+            void qc.invalidateQueries({ queryKey: ["product-tag-plan", r.candidate.pinId] });
         } catch {
           failed.push(...matched.map((r) => r.candidate));
         }
@@ -970,8 +1005,7 @@ function MonetizeBoardPage() {
                       </p>
                       {currentMatches.length > 0 && (
                         <span className="rounded-full bg-primary/10 px-2 py-0.5 text-micro font-semibold text-primary">
-                          {currentMatches.filter((m) => !deselectedRecLinks.has(m.link)).length}{" "}
-                          selected
+                          {selectedRecCount}/{MAX_PRODUCT_TAGS_PER_PIN} tagged
                         </span>
                       )}
                     </div>
@@ -1016,7 +1050,7 @@ function MonetizeBoardPage() {
                         <ProgressiveSuggestionCard
                           key={m.link}
                           match={m}
-                          selected={!deselectedRecLinks.has(m.link)}
+                          selected={isRecSelected(m.link)}
                           onToggle={() => toggleRecSelection(m.link)}
                           onSettled={handleMatchSettled}
                         />

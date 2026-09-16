@@ -21,6 +21,7 @@ titles, descriptions and board names — so the Pins that carry those links actu
 - [Routes](#routes)
 - [Architecture](#architecture)
 - [Pipeline 1 — product matching](#pipeline-1--product-matching-a-pin-image--buyable-products)
+- [Product tagging](#product-tagging)
 - [Pipeline 2 — Pinterest SEO / Boost](#pipeline-2--pinterest-seo--boost)
 - [Health Score](#health-score)
 - [Coin wallet](#coin-wallet)
@@ -131,7 +132,8 @@ All server-only unless marked `VITE_`. `.env` is gitignored.
 | `PINTEREST_REDIRECT_URI` | Must **byte-for-byte** match a redirect URI registered in the Pinterest app dashboard |
 | `PINTEREST_API_BASE_URL` | Sandbox base while on Trial access; switch to `https://api.pinterest.com/v5` when Standard access is granted — no code change needed |
 
-Scopes requested: `boards:read,boards:write,pins:read,pins:write,user_accounts:read`.
+Scopes requested: `boards:read,boards:write,pins:read,pins:write,user_accounts:read` — also what the
+v5 `product_tags` endpoints and `PATCH /pins/{id}` require, so tagging needs no reconnect.
 
 ### Product matching
 
@@ -335,6 +337,110 @@ missing from it is a shoppable product the pipeline can never see.
 
 ---
 
+## Product tagging
+
+Pinterest's unit of shopping is the **product tag**: one product, on one Pin, that a shopper can tap
+through to buy. The app reproduces the buyer-facing experience — **"Shop the look"**: a horizontal
+carousel of the Pin's products plus a **Visit Website** call to action — in both Previews (create-Pin
+step 4 and `/pins/preview`), generated **automatically** from the products the backend matched.
+
+Two things are kept deliberately separate:
+
+| | Creator side — **Attach Products** | Buyer side — **Shop the look** |
+| --- | --- | --- |
+| Where | Create Pin step 3 · the Monetise dialog | Create Pin step 4 · `/pins/preview` |
+| What it is | A normal product picker: the matched cards, "Add more" (paste a link / pick from a collection) | The Pin as a shopper sees it: image, creator, title, description, product carousel, Visit Website |
+| Who decides | The backend pre-selects its plan; the creator can tap cards on/off | Nobody — it renders the plan's sequence, nothing else |
+
+There is no manual tagging UI anywhere: no tag positions, no per-tag controls, no affiliate switch.
+Monetisation is decided in the backend (every tag is an affiliate tag); the creator only ever sees
+the resulting products.
+
+### What Pinterest actually supports (verified 2026-09-15, official sources only)
+
+| Question | Answer | Source |
+| --- | --- | --- |
+| Tags per Pin | **20** in the creator "Tag products" flow (5 with stickers); 24 in the business/collections flow; the API accepts 24 per request | [help: tag products](https://help.pinterest.com/en/article/tag-products-in-your-pins) · [business article](https://help.pinterest.com/en/business/article/tag-your-products-in-your-pins) · [API bulk_add](https://developers.pinterest.com/docs/api/v5/product_tags-bulk_add/) |
+| Formats | Image and video Pins (Idea Pins were folded into the single Pin format in Aug 2023) | [create.pinterest.com](https://create.pinterest.com/blog/new-pin-format-update/) |
+| Manual vs suggested | Manual only in Pinterest's UI — search by name or paste a retailer URL | help articles above |
+| Catalog required? | No in the UI. **Via API a tag is a `pin_id` of the creator's own product Pin** from a claimed domain with product metadata | [API bulk_add error enum](https://developers.pinterest.com/docs/api/v5/product_tags-bulk_add/) |
+| API | `GET/POST /pins/{id}/product_tags`, `POST …/product_tags/bulk-delete` (spec 5.28.0, June 2026); `POST /pins` and `PATCH /pins/{id}` carry **no** tag field; sandbox-disabled | [API list](https://developers.pinterest.com/docs/api/v5/product_tags-list/) |
+| Affiliate | UI: "Affiliate link or sponsored product" switch. API: `media_source.is_affiliate_link` on the beta `pin_url` source only — nothing per tag | help article · [pins-create](https://developers.pinterest.com/docs/api/v5/pins-create/) |
+| Regions | Product tagging listed for US and UK | [availability](https://help.pinterest.com/en/business/availability/product-tagging-availability) |
+
+Our tags point at retailer listings (Myntra, Amazon.in…), which the Pinterest API cannot represent as
+tags (`PIN_NOT_FROM_SAME_USER_AS_HERO_PIN`). So **`pin_product_tags` is the source of truth**, and
+Pinterest is a narrow mirror: the plan reads the creator's own Pinterest tags and leads with them,
+and Go Live / publish push back only tags that reference one of their own product Pins
+(`pushTagsToPinterest`, idempotent, best-effort). Go Live also `PATCH`es the real Pin's `link` to the
+storefront collection — the one write that makes "monetised" true on Pinterest.
+
+### The one limit
+
+`MAX_PRODUCT_TAGS_PER_PIN = 20` lives in [`product-tagging.ts`](src/lib/product-tagging.ts) and is
+imported everywhere: the plan's cap, the attach screens' "up to N" guard, the zod schemas on
+`createPinterestPin` / `goLivePin` / `approveBoardPins`, and the `pin_product_tags` trigger
+(`pin_product_tag_limit()` in the migration mirrors it — change both together). When more products
+are detected than allowed, the plan ranks all of them and keeps the strongest N — never the first N.
+
+### Architecture
+
+```
+src/lib/product-tagging.ts          pure: limit · exactness scoring · confidence bands · one-per-object selection
+src/lib/product-tags.functions.ts   RPC: planProductTags (THE decision) · listPinProductTags · syncPinProductTagsToPinterest
+src/lib/product-tags.server.ts      server: zod tag schema · writePinProductTags (the ONE writer) · Pinterest mirror
+src/lib/product-tag-data.ts         client: PendingProductTag · composeAttachedTags · sequenceProductTags (sorts by backend rank)
+src/components/shop-the-look.tsx    UI: ShopTheLookPreview — the buyer's view, used by both Previews
+```
+
+```
+Pin media → detect objects → per-object Lens + category gate + look gate   (pinterest.functions.ts, unchanged)
+         → rankedComponentsForImage → scoreTagCandidate → selectProductTags  (product-tagging.ts)
+         → planProductTags: saved tags + Pinterest-tagged first, then best-per-object, ranked, capped
+              ├─ Create Pin step 3 / Monetise dialog: plan = default selection, "All" grid order
+              └─ Create Pin step 4 / /pins/preview: ShopTheLookPreview renders composeAttachedTags(plan, taps)
+         → publish / Go Live → writePinProductTags persists the same ordered set
+```
+
+`planProductTags` is called with `imageUrl` (wizard, no pin row yet) or `pinId` (existing pin). It
+returns `tags` (the canonical, ranked, capped set) and `ranked` (every candidate with its rank), so
+a screen that lists all matches can order them the backend's way and a card the creator taps on
+still carries its rank. The client never scores — `sequenceProductTags` only sorts by `rank`.
+
+### Exact-match ranking
+
+The pipeline already finds, gates and look-verifies candidates per detected object. The tagging
+engine scores each candidate **against its object** and picks **one product per object**:
+
+```
+score = 0.38·look + 0.10·rank + 0.10·label + 0.08·category + 0.06·attributes
+      + 0.16·copy + 0.08·identifier + 0.04·quality
+```
+
+- `look` — look-gate verdict (`same` 1.0 · `close` 0.3 · unjudged 0.25). The only signal that saw both images.
+- `rank` — position in the pipeline's per-tab order (its own Lens-position/keyword/niche ranker).
+- `label` / `category` / `attributes` — the detector's label, closed-vocabulary category (a conflict is
+  fatal), and colour/material words from its look signature, found in the retailer title.
+- `copy` / `identifier` — how much of the Pin's own title/description the product title repeats, and
+  shared model codes ("Air Force **1**", "AirPods Pro **2**" ↔ "2nd Generation"). This is what makes
+  *Nike Air Force 1 '07 White* beat *White Sneakers*, and *AirPods Pro 2nd Gen* beat *AirPods*.
+- `quality` — thumbnail, price, live availability; a dead retailer page can never be chosen.
+
+Bands: **high ≥ 0.55** and **medium ≥ 0.35** are eligible for the plan (high first); low is never
+attached — a poor match is an empty slot, not a wrong product. Sequence: the creator's own saved /
+Pinterest tags, then by score. Tests: `bun test`.
+
+### Visit website
+
+Always the **pin's own storefront collection**, never a single product: `/s/:slug?c=<collection>`
+(`?c=` is the deep link the storefront page reads; the old `#slug` form landed on the root). The
+collection slug is derived from the pin id (`pinCollectionSlug`), so Preview shows the exact URL
+before the collection exists: the wizard mints the pin id, Publish creates the collection under it
+and sends that URL to Pinterest as the pin's `link`; Go Live reuses a pin's existing collection
+(instead of creating a new one every time) and writes the same URL to `pins.external_url`.
+
+---
+
 ## Pipeline 2 — Pinterest SEO / Boost
 
 Six stages, **exactly one paid model call per Pin**
@@ -442,6 +548,17 @@ Pinterest.
 
 Only Pins the creator **authored** are synced (`pins.is_owner`), never Pins they merely saved.
 
+**Board sections are never mirrored locally.** The create-Pin flow lets a creator pick an existing
+section of the chosen board or create a new one (`listPinterestBoardSections` /
+`createPinterestBoardSection`), and the chosen section id rides along to `POST /pins` as
+`board_section_id`. There is no `sections` table and no migration: a section carries no state the
+app needs beyond "which one does this new Pin go into", so mirroring it would only give the
+reconcile above another entity to keep in step. The picker reads the live list each time a board is
+selected, which is also why a section made in the Pinterest app appears here immediately. Both
+endpoints sit under the `boards:read` / `boards:write` scopes the app already requests, so sections
+need no reconnect. A failed section fetch never blocks publishing — the Pin goes to the board root,
+which is where it went before sections existed.
+
 ---
 
 ## Data model
@@ -458,6 +575,7 @@ Generated types: [`src/integrations/supabase/types.ts`](src/integrations/supabas
 | `boards` + `board_collections` | Pinterest-style board grouping for the storefront's Boards tab |
 | `pins` | `status` (draft/live), `is_owner`, `collection_id` vs `origin_collection_id`, metrics (`impressions`, `clicks`, `conversions`, `earnings_cents`) |
 | `storefront_products` | An attached affiliate product: `affiliate_url`, price, commission, routed to a `pin_id` and/or `collection_id` |
+| `pin_product_tags` | One row per (pin, product): object category/label/box, exactness score + confidence + look verdict, source (`auto`/`suggested`/`search`/`url`/`collection`/`manual`), affiliate toggle, `pinterest_product_pin_id` when mirrored. Unique per pin+product; trigger-enforced per-pin limit; keeps `storefront_products.pin_id` in step |
 | `pinterest_connections` | Access/refresh tokens. **No GRANT or policy for `anon`/`authenticated` at all** — service-role only |
 | `pin_suggestion_history` | Every AI suggestion, whatever the outcome — powers 24h reuse and "avoid these phrasings" |
 

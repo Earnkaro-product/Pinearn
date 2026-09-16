@@ -8,17 +8,17 @@ import {
   Check,
   ChevronRight,
   Sparkles,
-  Store,
   Link2,
   Plus,
   X,
   ClipboardPaste,
   ArrowRight,
-  Grip,
   Image as ImageIcon,
   Search,
+  Folder,
+  FolderPlus,
 } from "lucide-react";
-import { AnimatePresence, motion, Reorder } from "framer-motion";
+import { AnimatePresence, motion } from "framer-motion";
 import { useScrollMorph } from "@/hooks/use-scroll-morph";
 import { PinScanOverlay } from "@/components/pin-scan-overlay";
 import { useScanPhase } from "@/hooks/use-scan-phase";
@@ -31,32 +31,44 @@ import {
   SuggestionCardSkeleton,
   realProductPrice,
 } from "@/components/suggestion-card";
+import { ShopTheLookPreview } from "@/components/shop-the-look";
+import {
+  EMPTY_ATTACHMENT,
+  attachedLinkSet,
+  composeAttachedTags,
+  tagFromUrl,
+  toProductTagInput,
+  type AttachmentState,
+  type PendingProductTag,
+} from "@/lib/product-tag-data";
+import { planProductTags, type ProductTagPlan } from "@/lib/product-tags.functions";
+import { pinCollectionSlug, pinCollectionUrl } from "@/lib/product-tag-data";
+import { MAX_PRODUCT_TAGS_PER_PIN, canonicalTagLink } from "@/lib/product-tagging";
+import { logPipeline } from "@/lib/pipeline-log";
 import { EducationalLoader, HINTS } from "@/components/rotating-hint";
 import { useVisualSearch } from "@/hooks/use-visual-search";
 import { AppShell } from "@/components/app-shell";
 import { SeoInsightButton, SeoInsightSheet } from "@/components/seo-insight";
 import { FlowIntroGate } from "@/components/flow-intro";
 import { supabase } from "@/integrations/supabase/client";
-import { hostBrand, estimateCommissionPct } from "@/lib/brands";
+import { estimateCommissionPct, hostBrand } from "@/lib/brands";
 import { getFriendlyMessage } from "@/lib/friendly-error";
 import { PinterestConnectPanel } from "@/components/pinterest-gate";
 import { usePinterestConnection } from "@/hooks/use-pinterest-connect";
 import {
   createPinterestBoard,
+  createPinterestBoardSection,
   createPinterestPin,
+  listPinterestBoardSections,
   type CkResult,
-  type RawVisualMatch,
 } from "@/lib/pinterest.functions";
-import {
-  CATEGORY_PILLS,
-  TagTab,
-  ReorderableCard,
-  type Collection,
-  type Product,
-  type Storefront,
-} from "./pins";
+import { TagTab, type Collection, type Product, type Storefront } from "./pins";
 
 type PinterestBoard = { id: string; name: string };
+
+/** A section inside a Pinterest board. Lives only on Pinterest — see
+ * listPinterestBoardSections — so this is the live shape, not a DB row. */
+type BoardSection = { id: string; name: string };
 
 // Cover thumbnails + pin count per board (collection id) — what turns the
 // board picker from a bare <select> into the same cover-collage cards the
@@ -152,8 +164,23 @@ function CreatePinWizard() {
   const titleInputRef = useRef<HTMLInputElement>(null);
 
   const [storefrontId, setStorefrontId] = useState<string>("");
-  const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
+  const [attachment, setAttachment] = useState<AttachmentState>(EMPTY_ATTACHMENT);
+  // The pin's id, minted here so its storefront collection URL — the "Visit
+  // website" destination — is known before the pin exists. Publish sends it;
+  // the server creates the pin under it.
+  const [draftPinId, setDraftPinId] = useState<string>(() => crypto.randomUUID());
+  // A different image is a different Pin: what was attached starts over, and
+  // so does the id.
+  useEffect(() => {
+    setAttachment(EMPTY_ATTACHMENT);
+    setDraftPinId(crypto.randomUUID());
+  }, [imageUrl]);
   const [boardId, setBoardId] = useState<string>("");
+  // "" = publish to the board root, which is what Pinterest does when no
+  // section is given. Sections are board-scoped, so this is cleared whenever
+  // the board changes (below) — a section id from board A is not a valid
+  // target on board B, and Pinterest would reject it at publish time.
+  const [sectionId, setSectionId] = useState<string>("");
   const fileRef = useRef<HTMLInputElement | null>(null);
   const runCreatePinterestPin = useServerFn(createPinterestPin);
 
@@ -175,6 +202,15 @@ function CreatePinWizard() {
       })) as PinterestBoard[];
     },
   });
+
+  // Every board change goes through this, so no path can leave a stale
+  // section selected. Same-board re-selection keeps the section.
+  function chooseBoard(id: string) {
+    setBoardId((cur) => {
+      if (cur !== id) setSectionId("");
+      return id;
+    });
+  }
 
   useEffect(() => {
     if (boardId || boards.length === 0) return;
@@ -253,21 +289,47 @@ function CreatePinWizard() {
     },
   });
 
-  // Follow the selection order (drag-reorder in step 3 writes it) so the
-  // first product stays the primary one at publish time.
-  const selectedProducts = selectedProductIds
-    .map((id) => products.find((p) => p.id === id))
-    .filter((p): p is Product => !!p);
-  // Use the first selected product's storefront so the pin still links to a shop.
-  const derivedStorefrontId = selectedProducts[0]?.storefront_id ?? storefrontId ?? "";
-  const activeStorefront = storefronts.find((s) => s.id === derivedStorefrontId);
+  // The backend's product tags for this image — which products, in what
+  // order. Asked for the moment the creator reaches Attach Products (title and
+  // description are settled by then and are part of the ranking context), so
+  // it is usually in hand before Preview. It joins the same pipeline work the
+  // streamed grid started; nothing is computed twice.
+  const runPlan = useServerFn(planProductTags);
+  const plan = useQuery({
+    queryKey: ["product-tag-plan", imageUrl, title.trim(), description.trim()],
+    queryFn: () =>
+      runPlan({ data: { imageUrl, title: title.trim(), description: description.trim() } }),
+    enabled: !!imageUrl && step >= 3,
+    staleTime: Infinity,
+    retry: false,
+    refetchOnWindowFocus: false,
+  });
+
+  // Everything attached, in the backend's sequence — what Preview shows and
+  // what Publish persists. The plan's products are attached by default; the
+  // creator's taps in Attach Products override them; owned products and
+  // pasted links join unranked, after the ranked ones.
+  const previewTags = useMemo(
+    () => composeAttachedTags(plan.data, attachment, products),
+    [plan.data, attachment, products],
+  );
+
+  // The storefront the pin links to: the one holding the first attached
+  // product the creator already owns, else the first storefront. Matched
+  // listings don't exist as products until publish, so they can't name one.
+  const firstOwnedTag = previewTags.find((t) => t.productId);
+  const firstOwnedProduct = firstOwnedTag
+    ? products.find((p) => p.id === firstOwnedTag.productId)
+    : undefined;
+  const derivedStorefrontId = firstOwnedProduct?.storefront_id || storefrontId || "";
+  const activeStorefront = storefronts.find((s) => s.id === derivedStorefrontId) ?? storefronts[0];
 
   // Keep storefrontId in sync with the picked products.
   useEffect(() => {
-    if (selectedProducts[0]?.storefront_id && selectedProducts[0].storefront_id !== storefrontId) {
-      setStorefrontId(selectedProducts[0].storefront_id);
+    if (firstOwnedProduct?.storefront_id && firstOwnedProduct.storefront_id !== storefrontId) {
+      setStorefrontId(firstOwnedProduct.storefront_id);
     }
-  }, [selectedProducts, storefrontId]);
+  }, [firstOwnedProduct, storefrontId]);
 
   async function handleUpload(file: File) {
     if (!file.type.startsWith("image/")) return notifyProblem("Please choose an image file");
@@ -301,25 +363,44 @@ function CreatePinWizard() {
       if (!boardId) throw new Error("Sync a Pinterest board from Storefront first");
       if (!imageUrl) throw new Error("Add an image first");
 
-      const primaryProduct = selectedProducts[0];
+      // Fallback destination for a pin with no products; with products the
+      // server links the pin to its own collection (see createPinterestPin).
       const external = activeStorefront
         ? `${window.location.origin}/s/${activeStorefront.slug}`
-        : primaryProduct?.affiliate_url || undefined;
+        : previewTags[0]?.link || undefined;
 
-      await runCreatePinterestPin({
+      return runCreatePinterestPin({
         data: {
           collectionId: boardId,
+          pinId: draftPinId,
+          origin: window.location.origin,
+          sectionId: sectionId || undefined,
           title: title.trim() || "Untitled pin",
           description: description.trim() || undefined,
           imageUrl,
           link: external,
-          productId: primaryProduct?.id,
+          // The canonical sequence Preview showed — the first is the primary.
+          // Each carries how it was matched (object, category, score, source);
+          // the server creates product rows for matched listings and enforces
+          // the per-pin limit.
+          productTags: previewTags.map(toProductTagInput),
         },
       });
     },
-    onSuccess: () => {
+    onSuccess: (result) => {
       qc.invalidateQueries({ queryKey: ["pins"] });
-      notifyDone("Pin published to Pinterest");
+      qc.invalidateQueries({ queryKey: ["all-products"] });
+      if (result.tagError) {
+        // The Pin IS on Pinterest — say so, and say what didn't follow it.
+        notifyDone("Pin published to Pinterest", `Product tags didn't save: ${result.tagError}`);
+      } else {
+        notifyDone(
+          "Pin published to Pinterest",
+          result.tagsWritten > 0
+            ? `${result.tagsWritten} product${result.tagsWritten === 1 ? "" : "s"} tagged`
+            : undefined,
+        );
+      }
       navigate({ to: "/pins" });
     },
     onError: (e: Error) => notifyProblem(getFriendlyMessage(e)),
@@ -332,8 +413,7 @@ function CreatePinWizard() {
       titleInputRef.current?.focus();
       return notifyProblem("Add a title");
     }
-    if (step === 3 && selectedProductIds.length === 0)
-      return notifyProblem("Pick at least one product");
+    if (step === 3 && previewTags.length === 0) return notifyProblem("Attach at least one product");
     setStep((s) => (s < 4 ? ((s + 1) as Step) : s));
   }
 
@@ -424,7 +504,9 @@ function CreatePinWizard() {
             titleInputRef={titleInputRef}
             boards={boards}
             boardId={boardId}
-            setBoardId={setBoardId}
+            setBoardId={chooseBoard}
+            sectionId={sectionId}
+            setSectionId={setSectionId}
             boardMeta={boardMeta}
           />
         )}
@@ -436,13 +518,11 @@ function CreatePinWizard() {
             storefronts={storefronts}
             preferredStorefrontId={derivedStorefrontId}
             products={products}
-            selectedIds={selectedProductIds}
-            toggle={(id) =>
-              setSelectedProductIds((cur) =>
-                cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id],
-              )
-            }
-            reorder={setSelectedProductIds}
+            plan={plan.data}
+            planPending={plan.isPending}
+            attachment={attachment}
+            setAttachment={setAttachment}
+            attachedCount={previewTags.length}
             onNext={next}
           />
         )}
@@ -452,10 +532,16 @@ function CreatePinWizard() {
             title={title}
             description={description}
             storefront={activeStorefront}
-            products={selectedProducts}
+            tags={previewTags}
+            draftPinId={draftPinId}
+            planPending={plan.isPending}
+            planFailed={plan.isError}
+            onRetryPlan={() => void plan.refetch()}
             boards={boards}
             boardId={boardId}
-            setBoardId={setBoardId}
+            setBoardId={chooseBoard}
+            sectionId={sectionId}
+            setSectionId={setSectionId}
             boardMeta={boardMeta}
           />
         )}
@@ -479,15 +565,17 @@ function CreatePinWizard() {
             ) : (
               <button
                 onClick={() => publish.mutate()}
-                disabled={publish.isPending || !boardId}
+                // Held while the backend is still deciding the products: what
+                // Preview shows is what gets published, and it isn't final yet.
+                disabled={publish.isPending || !boardId || plan.isPending}
                 className="inline-flex w-full items-center justify-center gap-1.5 rounded-2xl bg-gradient-primary px-4 py-3.5 text-sm font-bold text-primary-foreground shadow-glow transition active:scale-[0.98] disabled:opacity-70"
               >
-                {publish.isPending ? (
+                {publish.isPending || plan.isPending ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
                 ) : (
                   <Sparkles className="h-4 w-4" />
                 )}
-                Publish to Pinterest
+                {plan.isPending ? "Finding the best products…" : "Publish to Pinterest"}
               </button>
             )}
           </div>
@@ -576,6 +664,8 @@ function StepDetails({
   boards,
   boardId,
   setBoardId,
+  sectionId,
+  setSectionId,
   boardMeta,
 }: {
   imageUrl: string;
@@ -589,6 +679,8 @@ function StepDetails({
   boards: PinterestBoard[];
   boardId: string;
   setBoardId: (id: string) => void;
+  sectionId: string;
+  setSectionId: (id: string) => void;
   boardMeta: BoardMeta;
 }) {
   const [imgLoaded, setImgLoaded] = useState(false);
@@ -686,6 +778,11 @@ function StepDetails({
           picking it before the copy keeps title/description aligned with it.
           The review step shows the same picker, pre-filled with this choice. */}
       <BoardPicker boards={boards} boardId={boardId} setBoardId={setBoardId} meta={boardMeta} />
+
+      {/* Section second — it only exists inside the board above, so it can't
+          be offered until a board is chosen. Optional: no choice publishes to
+          the board root, exactly as before sections existed. */}
+      <SectionPicker boardId={boardId} sectionId={sectionId} setSectionId={setSectionId} />
 
       <div>
         <Field label="Title" hint={`${title.length}/100`}>
@@ -1028,6 +1125,213 @@ function BoardPickerSheet({
   );
 }
 
+/**
+ * Section picker — the sub-folder inside the chosen board.
+ *
+ * Deliberately inline rather than a sheet like the board picker: a board has
+ * at most a handful of sections, the choice is optional, and the whole point
+ * is that "no section" stays the effortless default. Sections are read live
+ * from Pinterest each time a board is selected (nothing is mirrored locally),
+ * so a section the creator just made in the Pinterest app shows up here.
+ */
+function SectionPicker({
+  boardId,
+  sectionId,
+  setSectionId,
+}: {
+  boardId: string;
+  sectionId: string;
+  setSectionId: (id: string) => void;
+}) {
+  const [creating, setCreating] = useState(false);
+  const [name, setName] = useState("");
+  const runListSections = useServerFn(listPinterestBoardSections);
+  const runCreateSection = useServerFn(createPinterestBoardSection);
+
+  const sections = useQuery({
+    queryKey: ["board-sections", boardId],
+    queryFn: () => runListSections({ data: { collectionId: boardId } }),
+    enabled: !!boardId,
+    staleTime: 60_000,
+    retry: false,
+    refetchOnWindowFocus: false,
+  });
+
+  const list: BoardSection[] = sections.data?.sections ?? [];
+
+  // Close the inline form whenever the board changes, so switching boards
+  // never leaves a half-typed section name pointed at the wrong board.
+  useEffect(() => {
+    setCreating(false);
+    setName("");
+  }, [boardId]);
+
+  const createSection = useMutation({
+    mutationFn: async () => {
+      const trimmed = name.trim();
+      if (!trimmed) throw new Error("Give the section a name first");
+      return runCreateSection({ data: { collectionId: boardId, name: trimmed } });
+    },
+    onSuccess: async (section) => {
+      // Refetch rather than patch the cache: the create path may have returned
+      // an existing same-named section, and this list is also how a section
+      // made outside the app arrives.
+      await sections.refetch();
+      setSectionId(section.id);
+      setCreating(false);
+      setName("");
+      notifyDone(
+        section.reused
+          ? `Using your existing "${section.name}" section`
+          : `Section "${section.name}" created on Pinterest`,
+      );
+    },
+    onError: (e: Error) => notifyProblem(getFriendlyMessage(e)),
+  });
+
+  // No board yet → nothing to section. The board picker's own empty state is
+  // already telling the creator what to do, so stay silent here.
+  if (!boardId) return null;
+
+  return (
+    <div>
+      <div className="mb-2 flex items-center justify-between">
+        <span className="text-sm font-medium">
+          Section <span className="font-normal text-muted-foreground">· optional</span>
+        </span>
+        {sections.isFetching && <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />}
+      </div>
+
+      {/* A failed section fetch must not block publishing — the pin still goes
+          to the board root, which is where it went before sections existed. */}
+      {sections.isError ? (
+        <div className="flex items-center justify-between gap-3 rounded-2xl border border-border bg-surface-2/40 px-3.5 py-3">
+          <p className="text-xs text-muted-foreground">
+            Couldn't load this board's sections. Your pin will publish to the board itself.
+          </p>
+          <button
+            type="button"
+            onClick={() => sections.refetch()}
+            className="shrink-0 text-xs font-bold text-primary hover:underline"
+          >
+            Retry
+          </button>
+        </div>
+      ) : (
+        <div className="flex flex-wrap gap-2">
+          {/* "No section" is a real, selectable option rather than an implicit
+              absence, so the board root reads as a deliberate choice. */}
+          <SectionChip
+            label="No section"
+            icon={<Folder className="h-3.5 w-3.5" />}
+            selected={!sectionId}
+            onClick={() => setSectionId("")}
+          />
+          {list.map((section) => (
+            <SectionChip
+              key={section.id}
+              label={section.name || "Untitled section"}
+              icon={<Folder className="h-3.5 w-3.5" />}
+              selected={section.id === sectionId}
+              onClick={() => setSectionId(section.id)}
+            />
+          ))}
+          {!creating && (
+            <SectionChip
+              label="Create new section"
+              icon={<FolderPlus className="h-3.5 w-3.5" />}
+              selected={false}
+              dashed
+              onClick={() => setCreating(true)}
+            />
+          )}
+        </div>
+      )}
+
+      {creating && (
+        <div className="mt-2.5 rounded-2xl border border-border bg-background p-3.5 shadow-sm">
+          <label className="text-mini font-semibold uppercase tracking-wide text-muted-foreground">
+            Section name
+          </label>
+          <input
+            autoFocus
+            value={name}
+            onChange={(e) => setName(e.target.value.slice(0, 180))}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && name.trim() && !createSection.isPending)
+                createSection.mutate();
+              if (e.key === "Escape") {
+                setCreating(false);
+                setName("");
+              }
+            }}
+            placeholder="e.g. Festive looks"
+            className="mt-1.5 w-full rounded-xl border border-input bg-background px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-ring"
+          />
+          <p className="mt-1.5 text-mini text-muted-foreground">
+            Creates a real section inside this board on Pinterest, then publishes your pin into it.
+          </p>
+          <div className="mt-2.5 flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setCreating(false);
+                setName("");
+              }}
+              className="rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground hover:text-foreground"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={!name.trim() || createSection.isPending}
+              onClick={() => createSection.mutate()}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-gradient-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-glow disabled:opacity-60"
+            >
+              {createSection.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              Create section
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** One section option — same pill language as the category tabs. */
+function SectionChip({
+  label,
+  icon,
+  selected,
+  dashed = false,
+  onClick,
+}: {
+  label: string;
+  icon: React.ReactNode;
+  selected: boolean;
+  dashed?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={selected}
+      className={`inline-flex max-w-full items-center gap-1.5 rounded-full px-3.5 py-2 text-xs font-semibold transition active:scale-[0.97] ${
+        selected
+          ? "bg-gradient-primary text-primary-foreground shadow-glow"
+          : dashed
+            ? "border-2 border-dashed border-border text-primary hover:border-primary hover:bg-primary/5"
+            : "border border-border bg-surface text-foreground hover:border-primary/40 hover:bg-primary/5"
+      }`}
+    >
+      <span className="shrink-0">{icon}</span>
+      <span className="truncate">{label}</span>
+      {selected && <Check className="h-3.5 w-3.5 shrink-0" />}
+    </button>
+  );
+}
+
 /** The grid's first tile — same footprint as a board card, opens the
  * create-board form. */
 function NewBoardTile({ onClick }: { onClick: () => void }) {
@@ -1206,9 +1510,11 @@ function StepProducts({
   storefronts,
   preferredStorefrontId,
   products,
-  selectedIds,
-  toggle,
-  reorder,
+  plan,
+  planPending,
+  attachment,
+  setAttachment,
+  attachedCount,
   onNext,
 }: {
   imageUrl: string;
@@ -1217,88 +1523,63 @@ function StepProducts({
   storefronts: Storefront[];
   preferredStorefrontId: string;
   products: Product[];
-  selectedIds: string[];
-  toggle: (id: string) => void;
-  reorder: (ids: string[]) => void;
+  plan: ProductTagPlan | undefined;
+  planPending: boolean;
+  attachment: AttachmentState;
+  setAttachment: React.Dispatch<React.SetStateAction<AttachmentState>>;
+  attachedCount: number;
   onNext: () => void;
 }) {
-  const qc = useQueryClient();
-
   const [manualUrl, setManualUrl] = useState("");
   const [productUrlError, setProductUrlError] = useState<string | null>(null);
   const manualUrlInputRef = useRef<HTMLInputElement>(null);
-  // Keyed by link (stable identity for a progressive-rendering match),
-  // not index — the real storefront_products row id once auto-inserted.
-  const [aiProductIds, setAiProductIds] = useState<Record<string, string>>({});
-  const [manualProductIds, setManualProductIds] = useState<Set<string>>(new Set());
-  const mountedRef = useRef(true);
 
   // Attach-flow UI state — mirrors the single-pin attach dialog exactly.
   // Manual entry lives in the "Add more" sheet, never inline on the page;
   // `showCollection` swaps in the full-screen Add-from-Collection flow.
   const [showAddMore, setShowAddMore] = useState(false);
   const [showCollection, setShowCollection] = useState(false);
-  // Active product-tag tab (null = "All") + static category pills.
+  // Active product-tag tab (null = "All").
   const [activeTag, setActiveTag] = useState<string | null>(null);
-  // Active product-tag tab only; category pills removed in favor of live filters.
-  // Explicit display order of the AI match grid, driven by the inline drag.
-  const [aiOrder, setAiOrder] = useState<string[]>([]);
 
   // Scroll-linked morph: the big pin preview shrinks/fades/lifts out of the
   // way as the results scroll down, and expands back on scroll up. This page
   // scrolls the window (no modal container), so no ref is passed.
   const morph = useScrollMorph(undefined, { heroMaxHeight: 208 });
-  // Guards against double-inserting the same suggestion — plain ref (not
-  // state) since it only needs to block a duplicate call, never render.
-  const insertingLinksRef = useRef<Set<string>>(new Set());
-
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-    };
-  }, []);
 
   // Streamed in two stages — see useVisualSearch. The product pills land in
   // ~6s; each pill's grid fills on its own after that, so the wizard shows
   // what it found in the image long before it has finished pricing it.
   const {
     tabs,
+    components,
     matches: suggestions,
     isDetecting,
     isLoading: aiLoading,
+    isRefining,
+    detectionFailed,
   } = useVisualSearch({ imageUrl, title, description, enabled: !!imageUrl });
 
-  // Progressive rendering: `suggestions` paints immediately (image/title/
-  // source + Lens price, no CK wait); each card resolves its live price/stock
-  // independently via ProgressiveSuggestionCard. `confirmedByLink` records
-  // each match's outcome the instant it settles — never present = still
-  // resolving, `null` = no price from CK or Lens at all (rare).
-  const [confirmedByLink, setConfirmedByLink] = useState<Map<string, CkResult>>(new Map());
-
-  // Reset AI selection tracking when a fresh IMAGE is searched. Keyed on the
-  // image rather than on the results: results now arrive in pieces as each
-  // pill lands, and resetting on every piece would clear the user's picks
-  // under them mid-scan.
+  // Detection lifecycle events, through the app's existing pipeline log.
+  const detectingRef = useRef(false);
   useEffect(() => {
-    setAiProductIds({});
-    setConfirmedByLink(new Map());
-    insertingLinksRef.current = new Set();
-    setAiOrder([]);
+    if (isDetecting && !detectingRef.current) {
+      detectingRef.current = true;
+      logPipeline("product_detection_started", {});
+    } else if (!isDetecting && detectingRef.current) {
+      detectingRef.current = false;
+      logPipeline(detectionFailed ? "product_match_failed" : "product_detection_completed", {
+        objects: components.length,
+      });
+    }
+  }, [isDetecting, detectionFailed, components.length]);
+
+  useEffect(() => {
     setActiveTag(null);
   }, [imageUrl]);
 
   // Full-screen scan experience shown while the visual search runs — same as
   // the attach-products dialog, and now on the same timing (see useScanPhase).
-  //
-  // It waits for DETECTION, then briefly for the first tab's products — long
-  // enough that the reveal lands on real cards instead of skeletons, capped so
-  // a slow pin never traps anyone (see useScanPhase). The remaining grids fill
-  // in underneath as their searches return. No image yet = no overlay.
-  // A named component is a result in itself — it becomes a tab. The untagged
-  // whole-image fallback has no label, so there it takes an actual match to
-  // count, which is what keeps a pin with nothing to sell out of the "found"
-  // ending and in the empty state that offers a manual link.
   const firstTabReady = tabs.some((t) => !t.loading);
   const { phase: scanPhase, dismiss: dismissScan } = useScanPhase({
     searching: isDetecting,
@@ -1307,11 +1588,25 @@ function StepProducts({
     active: !!imageUrl,
   });
 
-  const checkedAI = new Set<string>(
-    Object.entries(aiProductIds)
-      .filter(([, id]) => selectedIds.includes(id))
-      .map(([link]) => link),
+  // What's attached right now, derived exactly as Preview derives it, so a
+  // checkmark here IS a card in Shop the look.
+  const attached = useMemo(
+    () => composeAttachedTags(plan, attachment, products),
+    [plan, attachment, products],
   );
+  const attachedLinks = useMemo(() => attachedLinkSet(attached), [attached]);
+  const attachedProductIds = useMemo(
+    () => new Set(attached.map((t) => t.productId).filter((id): id is string => !!id)),
+    [attached],
+  );
+  const isSelected = (link: string) => attachedLinks.has(canonicalTagLink(link));
+
+  // The backend's rank for each candidate — the grid's order under "All".
+  const rankByLink = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const t of plan?.ranked ?? []) m.set(canonicalTagLink(t.match.link), t.rank);
+    return m;
+  }, [plan]);
 
   // The single best earning rate across the matched retailers — headlines the
   // results ("earn up to Y% per sale") so the value is obvious at a glance.
@@ -1319,22 +1614,16 @@ function StepProducts({
     ? Math.max(...suggestions.map((s) => estimateCommissionPct(s.source)))
     : 0;
 
-  // Product-tag tabs, one per detected component, in prominence order. Taken
-  // from `tabs` (detection) rather than from the matches, so a pill shows the
-  // moment it is named and carries a spinner until its own search lands.
+  // Product-tag tabs, one per detected component, in prominence order.
   const tagByLink = useMemo(
     () => new Map(suggestions.map((s) => [s.link, s.tag] as const)),
     [suggestions],
   );
-  // A pill earns its place by having something to show. It appears while its
-  // search is running (that's the point — the user sees what was found in the
-  // pin immediately) and is withdrawn if that search settles empty, because a
-  // tab that opens onto nothing is worse than a tab that was never offered.
   const namedTabs = useMemo(
     () => tabs.filter((t) => !!t.label && (t.loading || t.matches.length > 0)),
     [tabs],
   );
-  const tags = useMemo(() => [...new Set(namedTabs.map((t) => t.label))], [namedTabs]);
+  const tabLabels = useMemo(() => [...new Set(namedTabs.map((t) => t.label))], [namedTabs]);
   const tagCounts = useMemo(() => {
     const m = new Map<string, number>();
     for (const t of namedTabs) m.set(t.label, (m.get(t.label) ?? 0) + t.matches.length);
@@ -1350,33 +1639,21 @@ function StepProducts({
       ? 3
       : 0
     : Math.min(6, namedTabs.filter((t) => t.loading).length * 3);
-  // Keep the active tab valid as results change.
   useEffect(() => {
-    if (activeTag && !tags.includes(activeTag)) setActiveTag(null);
-  }, [activeTag, tags]);
+    if (activeTag && !tabLabels.includes(activeTag)) setActiveTag(null);
+  }, [activeTag, tabLabels]);
 
-  // Inline drag-reorder of the found-products grid, driven by `aiOrder`.
-  const orderedAiLinks = useMemo(() => {
-    const rank = new Map(aiOrder.map((l, i) => [l, i]));
-    return suggestions
-      .map((s) => s.link)
-      .sort((a, b) => (rank.get(a) ?? Infinity) - (rank.get(b) ?? Infinity));
-  }, [suggestions, aiOrder]);
-  const visibleAiLinks = useMemo(
-    () =>
-      activeTag ? orderedAiLinks.filter((l) => tagByLink.get(l) === activeTag) : orderedAiLinks,
-    [activeTag, orderedAiLinks, tagByLink],
-  );
-  const onAiReorder = (links: string[]) => {
-    setAiOrder(links);
-    // Mirror the grid order into the wizard's selection so the first product
-    // stays the primary one at publish time.
-    const aiIds = links
-      .map((l) => aiProductIds[l])
-      .filter((id): id is string => !!id && selectedIds.includes(id));
-    const rest = selectedIds.filter((id) => !aiIds.includes(id));
-    reorder([...aiIds, ...rest]);
-  };
+  // "All" is the canonical sequence: the backend's ranked order, every object
+  // interleaved by exactness, then whatever the backend hasn't ranked yet in
+  // the order it streamed in. A single object's tab keeps the pipeline order.
+  const orderedLinks = useMemo(() => {
+    const links = suggestions.map((s) => s.link);
+    if (activeTag) return links.filter((l) => tagByLink.get(l) === activeTag);
+    return [...links]
+      .map((l, i) => ({ l, i, r: rankByLink.get(canonicalTagLink(l)) ?? Infinity }))
+      .sort((a, b) => a.r - b.r || a.i - b.i)
+      .map((x) => x.l);
+  }, [suggestions, activeTag, tagByLink, rankByLink]);
 
   // Products offered by the Add-from-Collection flow — same storefront rule
   // as the attach dialog.
@@ -1386,11 +1663,54 @@ function StepProducts({
     [products, preferredStorefrontId],
   );
 
-  // Pick an existing collection product from the "Add more" sheet — mirror it
-  // into `manualProductIds` so it surfaces in the main grid, and toggle it.
+  const handleSuggestionSettled = (link: string, details: CkResult) => {
+    setAttachment((a) => {
+      if (a.confirmedByLink.has(link)) return a;
+      const next = new Map(a.confirmedByLink);
+      next.set(link, details);
+      return { ...a, confirmedByLink: next };
+    });
+  };
+
+  const overLimit = () =>
+    notifyProblem(
+      `You can attach up to ${MAX_PRODUCT_TAGS_PER_PIN} products to a Pin`,
+      "Remove one to add another.",
+    );
+
+  /** Tapping a card attaches it (or detaches it) — a plain product pick. */
+  const toggleAI = (link: string) => {
+    const on = isSelected(link);
+    if (!on && attached.length >= MAX_PRODUCT_TAGS_PER_PIN) return overLimit();
+    const match = suggestions.find((m) => m.link === link);
+    if (!match) return;
+    const key = canonicalTagLink(link);
+    setAttachment((a) => {
+      const overrides = new Map(a.overrides);
+      overrides.set(link, { selected: !on, match });
+      // Turning a listing off turns it off however it was attached.
+      return on
+        ? {
+            ...a,
+            overrides,
+            pasted: a.pasted.filter((t) => canonicalTagLink(t.link) !== key),
+            productIds: a.productIds.filter(
+              (id) =>
+                canonicalTagLink(products.find((p) => p.id === id)?.affiliate_url ?? "") !== key,
+            ),
+          }
+        : { ...a, overrides };
+    });
+    logPipeline(on ? "product_tag_removed" : "product_tag_added", { source: "match" });
+  };
+
   const toggleCollectionProduct = (id: string) => {
-    setManualProductIds((prev) => new Set(prev).add(id));
-    toggle(id);
+    const on = attachedProductIds.has(id);
+    if (!on && attached.length >= MAX_PRODUCT_TAGS_PER_PIN) return overLimit();
+    setAttachment((a) => ({
+      ...a,
+      productIds: on ? a.productIds.filter((x) => x !== id) : [...a.productIds, id],
+    }));
   };
 
   const pasteFromClipboard = async () => {
@@ -1403,135 +1723,49 @@ function StepProducts({
     }
   };
 
-  // Everything currently selected, in selection order — the sheet's reorder
-  // list reads from this and writes back via `reorder`.
-  const selectedRows = selectedIds
-    .map((id) => products.find((p) => p.id === id))
-    .filter((p): p is Product => !!p);
-
-  // Auto-inserts one confirmed-available suggestion as a real
-  // storefront_product — same "add every AI match automatically" behavior
-  // as before, just triggered per-match the instant CK confirms it instead
-  // of blindly looping over unconfirmed raw matches.
-  const autoInsertSuggestion = async (s: RawVisualMatch) => {
-    if (aiProductIds[s.link] || insertingLinksRef.current.has(s.link)) return;
-    const targetStorefront = preferredStorefrontId || storefronts[0]?.id;
-    if (!targetStorefront) {
+  // A pasted link is attached now and becomes a product row at publish (the
+  // server creates it, reusing an existing row with the same URL). Nothing is
+  // written for a wizard the creator abandons.
+  const addPastedLink = () => {
+    const url = manualUrl.trim();
+    if (!url) return setProductUrlError("Paste a product link first");
+    let host: string;
+    try {
+      const u = new URL(url);
+      if (!/^https?:$/.test(u.protocol)) throw new Error("bad scheme");
+      host = u.hostname.replace(/^www\./, "");
+    } catch {
+      setProductUrlError("That doesn't look like a valid URL");
+      manualUrlInputRef.current?.focus();
+      return;
+    }
+    if (!(preferredStorefrontId || storefronts[0]?.id)) {
       notifyProblem("Create a storefront first.");
       return;
     }
-    insertingLinksRef.current.add(s.link);
-    try {
-      const { data: userRes } = await supabase.auth.getUser();
-      const userId = userRes.user?.id;
-      if (!userId) throw new Error("Not signed in");
-      const { data: inserted, error } = await supabase
-        .from("storefront_products")
-        .insert({
-          user_id: userId,
-          storefront_id: targetStorefront,
-          title: s.title,
-          affiliate_url: s.link,
-          image_url: s.thumbnail,
-        })
-        .select("id")
-        .single();
-      if (error) throw error;
-      if (!mountedRef.current) return;
-      setAiProductIds((prev) => ({ ...prev, [s.link]: inserted.id as string }));
-      toggle(inserted.id as string);
-      qc.invalidateQueries({ queryKey: ["all-products"] });
-    } catch (e) {
-      notifyProblem(getFriendlyMessage(e));
-    } finally {
-      insertingLinksRef.current.delete(s.link);
-    }
-  };
-
-  const handleSuggestionSettled = (link: string, details: CkResult) => {
-    setConfirmedByLink((prev) => {
-      if (prev.has(link)) return prev;
-      const next = new Map(prev);
-      next.set(link, details);
-      return next;
-    });
-    // Every match that resolved with a usable price (live CK figure or the
-    // Lens fallback, in stock or not) is auto-attached — there's no
-    // "unavailable" card to hold back anymore. Only a match with no price at
-    // all (`details === null`) is skipped, since there'd be nothing to show.
-    if (details) {
-      const s = suggestions.find((m) => m.link === link);
-      if (s) void autoInsertSuggestion(s);
-    }
-  };
-
-  // Toggling an already-inserted suggestion just flips its selection; a
-  // card can't be tapped before it's confirmed+inserted (ProgressiveSuggestionCard
-  // only renders onToggle once resolved), so this is the common path.
-  const toggleAI = (link: string) => {
-    const existingId = aiProductIds[link];
-    if (existingId) {
-      toggle(existingId);
+    if (attachedLinks.has(canonicalTagLink(url))) {
+      setManualUrl("");
+      notifyDone("Already attached");
       return;
     }
-    const s = suggestions.find((m) => m.link === link);
-    if (s) void autoInsertSuggestion(s);
+    if (attached.length >= MAX_PRODUCT_TAGS_PER_PIN) return overLimit();
+    const own = products.find((p) => canonicalTagLink(p.affiliate_url) === canonicalTagLink(url));
+    setAttachment((a) =>
+      own
+        ? { ...a, productIds: [...a.productIds, own.id] }
+        : {
+            ...a,
+            pasted: [
+              ...a.pasted,
+              tagFromUrl(url, title ? `${title} — ${host}` : host, imageUrl || null),
+            ],
+          },
+    );
+    setManualUrl("");
+    setProductUrlError(null);
+    notifyDone(own ? "Already in Your products — attached" : "Product attached");
+    logPipeline("product_tag_added", { source: own ? "collection" : "url" });
   };
-
-  const addProduct = useMutation({
-    mutationFn: async () => {
-      const url = manualUrl.trim();
-      if (!url) throw new Error("Paste a product link first");
-      try {
-        new URL(url);
-      } catch {
-        throw new Error("That doesn't look like a valid URL");
-      }
-      const targetStorefront = preferredStorefrontId || storefronts[0]?.id;
-      if (!targetStorefront) throw new Error("Create a storefront first.");
-
-      const normalize = (u: string) => u.trim().replace(/\/+$/, "").toLowerCase();
-      const existing = products.find((p) => normalize(p.affiliate_url) === normalize(url));
-      if (existing) return { id: existing.id, duplicate: true as const };
-
-      const { data: userRes } = await supabase.auth.getUser();
-      const userId = userRes.user?.id;
-      if (!userId) throw new Error("Not signed in");
-      let hostname = "New product";
-      try {
-        hostname = new URL(url).hostname.replace(/^www\./, "");
-      } catch {
-        /* keep default */
-      }
-      const productTitle = title ? `${title} — ${hostname}` : hostname;
-      const { data: inserted, error } = await supabase
-        .from("storefront_products")
-        .insert({
-          user_id: userId,
-          storefront_id: targetStorefront,
-          title: productTitle,
-          affiliate_url: url,
-          image_url: imageUrl || null,
-        })
-        .select("id")
-        .single();
-      if (error) throw error;
-      return { id: inserted.id as string, duplicate: false as const };
-    },
-    onSuccess: ({ id, duplicate }) => {
-      qc.invalidateQueries({ queryKey: ["all-products"] });
-      if (!selectedIds.includes(id)) toggle(id);
-      setManualProductIds((prev) => new Set(prev).add(id));
-      setManualUrl("");
-      setProductUrlError(null);
-      notifyDone(duplicate ? "Already in Your products — selected" : "Added to Your products");
-    },
-    onError: (e: Error) => {
-      notifyProblem(getFriendlyMessage(e));
-      setProductUrlError(e.message);
-      manualUrlInputRef.current?.focus();
-    },
-  });
 
   return (
     <>
@@ -1568,16 +1802,11 @@ function StepProducts({
           </span>
         </motion.div>
 
-        {/* Visual scan preview (big pin with scanning bar). Its reserved
-            height collapses and the image shrinks/fades/lifts as the user
-            scrolls down — and reverses on scroll up. */}
         {imageUrl && (
           <motion.div
             style={{ height: morph.heroHeight, opacity: morph.heroOpacity }}
             className="flex items-start justify-center overflow-hidden"
           >
-            {/* The box hugs the pin: image sets its own width from the box
-                height, so it fills edge-to-edge with no letterboxing. */}
             <motion.div
               style={{ scale: morph.heroScale, y: morph.heroY }}
               className="relative h-full origin-top overflow-hidden rounded-2xl border border-border shadow-sm"
@@ -1604,7 +1833,9 @@ function StepProducts({
             <span className="mx-auto grid h-11 w-11 place-items-center rounded-full bg-amber-500/10 text-amber-600">
               <Sparkles className="h-5 w-5" />
             </span>
-            <p className="mt-3 text-sm font-semibold">No matching products found</p>
+            <p className="mt-3 text-sm font-semibold">
+              We couldn't identify any products in this Pin
+            </p>
             <p className="mt-1 text-xs text-muted-foreground">
               Tap <span className="font-semibold text-primary">Add more</span> below to paste a link
               or pick from a collection.
@@ -1612,10 +1843,6 @@ function StepProducts({
           </div>
         ) : (
           <>
-            {/* Earnings-led header — centred and prominent. While the pills are
-                still filling it names what was FOUND IN THE PIN, which is
-                already known and doesn't churn as each search lands; a bare
-                "Found 0 products" during that window would just look wrong. */}
             <div className="mt-6 text-center">
               <h5 className="font-display text-2xl font-extrabold leading-tight tracking-tight sm:text-3xl">
                 {aiLoading && namedTabs.length > 0
@@ -1635,14 +1862,23 @@ function StepProducts({
                   </>
                 )}
               </p>
+              {/* The backend is choosing which products to attach by default —
+                  said plainly, so unchecked cards read as "not decided yet"
+                  rather than "nothing matched". */}
+              {(isRefining || planPending) && suggestions.length > 0 ? (
+                <p className="mt-1 flex items-center justify-center gap-1.5 text-xs font-medium text-muted-foreground/70">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  {planPending ? "Choosing the best matches…" : "Checking each match…"}
+                </p>
+              ) : plan && plan.tags.length > 0 ? (
+                <p className="mt-1 text-xs font-medium text-muted-foreground/70">
+                  {plan.tags.length} best match{plan.tags.length === 1 ? "" : "es"} attached — tap
+                  any card to change
+                </p>
+              ) : null}
             </div>
 
-            {/* Category pills removed — use live filtering instead. */}
-
-            {/* Product-tag tabs — one per detected component. Below the pin,
-                above the products. Shown whenever detection named at least one
-                component — a single category still gets "All" + its own pill. */}
-            {tags.length >= 1 && (
+            {tabLabels.length >= 1 && (
               <div className="no-scrollbar mt-4 -mx-1 flex items-center gap-2 overflow-x-auto px-1">
                 <TagTab
                   label="All"
@@ -1651,7 +1887,7 @@ function StepProducts({
                   active={activeTag === null}
                   onClick={() => setActiveTag(null)}
                 />
-                {tags.map((t) => (
+                {tabLabels.map((t) => (
                   <TagTab
                     key={t}
                     label={t}
@@ -1664,77 +1900,62 @@ function StepProducts({
               </div>
             )}
 
-            {/* Drag any card by its ⠿ handle to rearrange (All tab only);
-                tapping elsewhere selects/deselects it. */}
-            {activeTag === null ? (
-              <Reorder.Group
-                as="div"
-                axis="y"
-                values={orderedAiLinks}
-                onReorder={onAiReorder}
-                className="mt-3 grid grid-cols-2 gap-2.5 sm:grid-cols-3"
-              >
-                {orderedAiLinks.map((link) => {
-                  const s = suggestions.find((m) => m.link === link);
-                  if (!s) return null;
-                  return (
-                    <ReorderableCard key={link} value={link}>
-                      <ProgressiveSuggestionCard
-                        match={s}
-                        selected={checkedAI.has(link)}
-                        onToggle={() => toggleAI(link)}
-                        onSettled={handleSuggestionSettled}
-                      />
-                    </ReorderableCard>
-                  );
-                })}
-                {Array.from({ length: pendingCardCount }).map((_, i) => (
-                  <SuggestionCardSkeleton key={`skeleton-${i}`} />
-                ))}
-              </Reorder.Group>
-            ) : (
-              <div className="mt-3 grid grid-cols-2 gap-2.5 sm:grid-cols-3">
-                {visibleAiLinks.map((link) => {
-                  const s = suggestions.find((m) => m.link === link);
-                  if (!s) return null;
-                  return (
-                    <ProgressiveSuggestionCard
-                      key={link}
-                      match={s}
-                      selected={checkedAI.has(link)}
-                      onToggle={() => toggleAI(link)}
-                      onSettled={handleSuggestionSettled}
-                    />
-                  );
-                })}
-                {Array.from({ length: pendingCardCount }).map((_, i) => (
-                  <SuggestionCardSkeleton key={`skeleton-${i}`} />
-                ))}
-              </div>
-            )}
+            <div className="mt-3 grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+              {orderedLinks.map((link) => {
+                const s = suggestions.find((m) => m.link === link);
+                if (!s) return null;
+                return (
+                  <ProgressiveSuggestionCard
+                    key={link}
+                    match={s}
+                    selected={isSelected(link)}
+                    onToggle={() => toggleAI(link)}
+                    onSettled={handleSuggestionSettled}
+                  />
+                );
+              })}
+              {Array.from({ length: pendingCardCount }).map((_, i) => (
+                <SuggestionCardSkeleton key={`skeleton-${i}`} />
+              ))}
+            </div>
           </>
         )}
 
-        {/* Manually-added products — no heading; they simply join the grid. */}
-        {manualProductIds.size > 0 && (
-          <div className="mt-4">
-            <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
-              {products
-                .filter((p) => manualProductIds.has(p.id))
-                .map((p) => (
-                  <SuggestionCard
-                    key={p.id}
-                    title={p.title}
-                    thumbnail={p.image_url}
-                    source={hostBrand(p.affiliate_url)}
-                    link={p.affiliate_url}
-                    price={realProductPrice(p.price_cents)}
-                    commissionPct={p.commission_pct}
-                    selected={selectedIds.includes(p.id)}
-                    onToggle={() => toggle(p.id)}
-                  />
-                ))}
-            </div>
+        {/* Products attached by hand — pasted links and collection picks —
+            join the grid below the matches. */}
+        {(attachment.pasted.length > 0 || attachment.productIds.length > 0) && (
+          <div className="mt-4 grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+            {attachment.productIds.map((id) => {
+              const p = products.find((x) => x.id === id);
+              if (!p) return null;
+              return (
+                <SuggestionCard
+                  key={p.id}
+                  title={p.title}
+                  thumbnail={p.image_url}
+                  source={hostBrand(p.affiliate_url)}
+                  link={p.affiliate_url}
+                  price={realProductPrice(p.price_cents)}
+                  commissionPct={p.commission_pct}
+                  selected={attachedProductIds.has(p.id)}
+                  onToggle={() => toggleCollectionProduct(p.id)}
+                />
+              );
+            })}
+            {attachment.pasted.map((t) => (
+              <SuggestionCard
+                key={t.key}
+                title={t.title}
+                thumbnail={t.thumbnail}
+                source={t.retailer}
+                link={t.link}
+                price={t.price}
+                selected={isSelected(t.link)}
+                onToggle={() =>
+                  setAttachment((a) => ({ ...a, pasted: a.pasted.filter((x) => x.key !== t.key) }))
+                }
+              />
+            ))}
           </div>
         )}
       </div>
@@ -1759,8 +1980,7 @@ function StepProducts({
             onClick={onNext}
             className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-2xl bg-gradient-primary px-4 py-3 text-sm font-bold text-primary-foreground shadow-glow transition active:scale-[0.98]"
           >
-            Next{selectedIds.length > 0 ? ` (${selectedIds.length})` : ""}{" "}
-            <ArrowRight className="h-4 w-4" />
+            Next{attachedCount > 0 ? ` (${attachedCount})` : ""} <ArrowRight className="h-4 w-4" />
           </button>
         </div>
       </div>
@@ -1792,7 +2012,6 @@ function StepProducts({
                 Paste an affiliate link, or pick a product from your collection.
               </p>
 
-              {/* Paste a link */}
               <div className="mt-4 flex items-center gap-2">
                 <div
                   className={`flex flex-1 items-center gap-2 rounded-2xl border bg-background px-3 py-3 ${
@@ -1822,122 +2041,31 @@ function StepProducts({
                 </button>
               </div>
               {productUrlError && <p className="mt-1.5 text-xs text-rose-500">{productUrlError}</p>}
-              {/* Only appears once there's a link to add. */}
               {manualUrl.trim() && (
                 <button
                   type="button"
-                  onClick={() => addProduct.mutate()}
-                  disabled={addProduct.isPending}
-                  className="mt-2.5 inline-flex w-full items-center justify-center gap-1.5 rounded-2xl bg-gradient-primary px-4 py-3 text-sm font-bold text-primary-foreground shadow-glow transition active:scale-[0.98] disabled:opacity-50"
+                  onClick={addPastedLink}
+                  className="mt-2.5 inline-flex w-full items-center justify-center gap-1.5 rounded-2xl bg-gradient-primary px-4 py-3 text-sm font-bold text-primary-foreground shadow-glow transition active:scale-[0.98]"
                 >
-                  {addProduct.isPending ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <Plus className="h-4 w-4" />
-                  )}
+                  <Plus className="h-4 w-4" />
                   Add link
                 </button>
               )}
 
-              {/* divider */}
               <div className="my-4 flex items-center gap-3 text-mini font-semibold uppercase tracking-wide text-muted-foreground/70">
                 <span className="h-px flex-1 bg-border" /> or{" "}
                 <span className="h-px flex-1 bg-border" />
               </div>
 
-              {/* Add from collection — full-screen: a Collections grid,
-                  then that collection's products. */}
               <AddFromCollectionButton onClick={() => setShowCollection(true)} />
 
               {showCollection && (
                 <CollectionAddFlow
                   products={storeProducts}
-                  pickedIds={new Set(selectedIds)}
+                  pickedIds={attachedProductIds}
                   onTogglePicked={toggleCollectionProduct}
                   onExit={() => setShowCollection(false)}
                 />
-              )}
-
-              {/* Everything picked so far — reorder by dragging a row, or
-                  remove with ✕. */}
-              {selectedRows.length > 0 && (
-                <div className="mt-5">
-                  <p className="mb-2 text-xs font-semibold text-muted-foreground">
-                    {selectedRows.length} selected
-                  </p>
-                  <Reorder.Group
-                    as="div"
-                    axis="y"
-                    values={selectedIds}
-                    onReorder={reorder}
-                    className="flex max-h-[34vh] flex-col gap-2 overflow-y-auto"
-                  >
-                    {selectedRows.map((p) => {
-                      const amount = p.price_cents != null ? p.price_cents / 100 : null;
-                      const pct =
-                        p.commission_pct ?? estimateCommissionPct(hostBrand(p.affiliate_url));
-                      const earn = amount != null ? Math.round(amount * (pct / 100)) : null;
-                      return (
-                        <Reorder.Item
-                          as="div"
-                          key={p.id}
-                          value={p.id}
-                          whileDrag={{ scale: 1.02, zIndex: 10 }}
-                          transition={{ type: "spring", stiffness: 500, damping: 40 }}
-                          className="flex touch-none select-none items-center gap-2.5 rounded-2xl border border-border bg-surface p-2 shadow-sm active:cursor-grabbing"
-                        >
-                          <span className="grid h-7 w-6 shrink-0 cursor-grab place-items-center text-muted-foreground/60 active:cursor-grabbing">
-                            <Grip className="h-4 w-4" />
-                          </span>
-                          <div className="h-11 w-11 shrink-0 overflow-hidden rounded-xl bg-surface-2">
-                            {p.image_url ? (
-                              <img
-                                src={p.image_url}
-                                alt=""
-                                className="h-full w-full object-cover"
-                              />
-                            ) : (
-                              <div className="grid h-full w-full place-items-center text-muted-foreground">
-                                <ImageIcon className="h-4 w-4" />
-                              </div>
-                            )}
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <p className="truncate text-micro font-bold uppercase tracking-wide text-muted-foreground">
-                              {hostBrand(p.affiliate_url)}
-                            </p>
-                            <p className="truncate text-sm font-semibold leading-tight">
-                              {p.title}
-                            </p>
-                            <div className="mt-0.5 flex items-center gap-2">
-                              {amount != null && (
-                                <span className="text-xs font-bold">
-                                  ₹{amount.toLocaleString("en-IN")}
-                                </span>
-                              )}
-                              {earn != null && (
-                                <span className="text-mini font-bold text-emerald-600">
-                                  Earn ₹{earn}/sale
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              toggle(p.id);
-                            }}
-                            aria-label="Remove"
-                            className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-muted-foreground transition hover:bg-surface-2 hover:text-foreground"
-                          >
-                            <X className="h-4 w-4" />
-                          </button>
-                        </Reorder.Item>
-                      );
-                    })}
-                  </Reorder.Group>
-                </div>
               )}
 
               <button
@@ -1948,7 +2076,7 @@ function StepProducts({
                 }}
                 className="mt-4 inline-flex w-full items-center justify-center gap-1.5 rounded-2xl bg-gradient-primary px-4 py-3.5 text-sm font-bold text-primary-foreground shadow-glow transition active:scale-[0.98]"
               >
-                Continue{selectedIds.length > 0 ? ` (${selectedIds.length})` : ""}
+                Continue{attachedCount > 0 ? ` (${attachedCount})` : ""}
                 <ArrowRight className="h-4 w-4" />
               </button>
             </motion.div>
@@ -1987,23 +2115,49 @@ function StepReview({
   title,
   description,
   storefront,
-  products,
+  tags,
+  draftPinId,
+  planPending,
+  planFailed,
+  onRetryPlan,
   boards,
   boardId,
   setBoardId,
+  sectionId,
+  setSectionId,
   boardMeta,
 }: {
   imageUrl: string;
   title: string;
   description: string;
   storefront: Storefront | undefined;
-  products: Product[];
+  /** The canonical sequence — what Publish will persist. */
+  tags: PendingProductTag[];
+  draftPinId: string;
+  planPending: boolean;
+  planFailed: boolean;
+  onRetryPlan: () => void;
   boards: PinterestBoard[];
   boardId: string;
   setBoardId: (id: string) => void;
+  sectionId: string;
+  setSectionId: (id: string) => void;
   boardMeta: BoardMeta;
 }) {
-  const [imgLoaded, setImgLoaded] = useState(false);
+  // Where a shopper lands from the pin: this pin's own storefront collection,
+  // which Publish creates under a slug derived from the pin id — so the URL
+  // shown here is the one the real pin will carry. No products → the
+  // storefront itself.
+  const websiteUrl =
+    storefront && typeof window !== "undefined"
+      ? tags.length > 0
+        ? pinCollectionUrl(
+            window.location.origin,
+            storefront.slug,
+            pinCollectionSlug(title.trim() || "Untitled pin", draftPinId),
+          )
+        : `${window.location.origin}/s/${storefront.slug}`
+      : null;
   return (
     <div className="space-y-5">
       <h2 className="font-display text-xl font-bold">Ready to publish</h2>
@@ -2016,55 +2170,28 @@ function StepReview({
         allowChange={false}
       />
 
-      <div className="overflow-hidden rounded-3xl border border-border bg-surface">
-        {imageUrl && (
-          <img
-            key={imageUrl}
-            src={imageUrl}
-            alt=""
-            loading="lazy"
-            onLoad={() => setImgLoaded(true)}
-            className={`max-h-[420px] w-full object-cover opacity-0 transition-opacity duration-300 ${
-              imgLoaded ? "opacity-100" : ""
-            }`}
-          />
-        )}
-        <div className="space-y-3 p-5">
-          <h3 className="font-display text-lg font-bold">{title || "Untitled pin"}</h3>
-          {description && <p className="text-sm text-muted-foreground">{description}</p>}
-          {storefront && (
-            <div className="flex items-center gap-2 rounded-xl bg-primary/5 px-3 py-2 text-xs font-medium text-primary">
-              <Store className="h-4 w-4" /> {storefront.name}
-              {products.length > 0 && (
-                <span className="text-primary/70">
-                  · {products.length} product{products.length === 1 ? "" : "s"}
-                </span>
-              )}
-            </div>
-          )}
+      {/* Still changeable here — the board is locked on review but the section
+          is a one-tap choice that's easy to reconsider at the last moment. */}
+      <SectionPicker boardId={boardId} sectionId={sectionId} setSectionId={setSectionId} />
+
+      {/* The buyer's view — the pin as a shopper will see it, with Shop the
+          look in the sequence the backend decided. */}
+      <div>
+        <div className="mb-2 text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+          How shoppers will see it
         </div>
+        <ShopTheLookPreview
+          imageUrl={imageUrl}
+          title={title}
+          description={description}
+          creatorName={storefront?.name}
+          products={tags}
+          websiteUrl={websiteUrl}
+          loading={planPending}
+          failed={planFailed}
+          onRetry={onRetryPlan}
+        />
       </div>
-      {products.length > 0 && (
-        <div>
-          <div className="mb-2 text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-            Attached products
-          </div>
-          <div className="flex gap-3 overflow-x-auto pb-2">
-            {products.map((p) => (
-              <div key={p.id} className="h-56 w-36 shrink-0">
-                <SuggestionCard
-                  title={p.title}
-                  thumbnail={p.image_url}
-                  source={hostBrand(p.affiliate_url)}
-                  link={p.affiliate_url}
-                  price={realProductPrice(p.price_cents)}
-                  commissionPct={p.commission_pct}
-                />
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
     </div>
   );
 }

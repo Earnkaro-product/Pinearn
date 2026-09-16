@@ -39,6 +39,7 @@ export function SuggestionCard({
   pending,
   onToggle,
   commissionPct,
+  showEarnings = true,
 }: {
   title: string;
   thumbnail: string | null;
@@ -66,6 +67,9 @@ export function SuggestionCard({
   // product) — omit it to fall back to the retailer-name estimate (an
   // AI visual-search match, which has no real commission on file yet).
   commissionPct?: number | null;
+  // The earnings pill is the CREATOR's view of a product. A buyer-facing
+  // surface (Shop the look) turns it off — a shopper is not the one earning.
+  showEarnings?: boolean;
 }) {
   const pct = commissionPct ?? estimateCommissionPct(source);
   const earning = price ? Math.round(price.extractedValue * (pct / 100)) : null;
@@ -169,7 +173,7 @@ export function SuggestionCard({
           )
         )}
 
-        {pending ? (
+        {!showEarnings ? null : pending ? (
           <span className="inline-flex h-6 w-24 animate-pulse rounded-full bg-surface-2" />
         ) : (
           earning != null && (
