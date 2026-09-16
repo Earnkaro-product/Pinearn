@@ -6,7 +6,10 @@ import type { Database, Json } from "@/integrations/supabase/types";
 import { z } from "zod";
 import {
   createBoard as createPinterestBoardRemote,
+  createBoardSection as createPinterestBoardSectionRemote,
   createPin as createPinterestPinRemote,
+  listBoardSections as listPinterestBoardSectionsRemote,
+  updatePinLink as updatePinterestPinLinkRemote,
   getAccountAnalytics,
   getPinAnalytics,
   getTopPinsAnalytics,
@@ -22,6 +25,15 @@ import { isSupportedRetailerLink } from "@/lib/brands";
 import { createLimiter } from "@/lib/concurrency-limiter";
 import { logNet } from "@/lib/net-logger";
 import { categoriesAgree, categoryOfTitle } from "@/lib/product-category";
+import { MAX_PRODUCT_TAGS_PER_PIN } from "@/lib/product-tagging";
+import { pinCollectionSlug, pinCollectionUrl } from "@/lib/product-tag-data";
+import {
+  friendlyTagError,
+  productTagListSchema,
+  pushTagsToPinterest,
+  writePinProductTags,
+  type ProductTagInput,
+} from "@/lib/product-tags.server";
 import {
   detectImage,
   lensCropParam,
@@ -325,20 +337,37 @@ export const createPinterestPin = createServerFn({ method: "POST" })
   .validator(
     (d: {
       collectionId: string;
+      sectionId?: string;
       title: string;
       description?: string;
       imageUrl: string;
       link?: string;
-      productId?: string;
+      pinId?: string;
+      origin?: string;
+      productTags?: z.input<typeof productTagListSchema>;
     }) =>
       z
         .object({
           collectionId: z.string().uuid(),
+          // The pin's id, minted by the wizard so Preview could already show
+          // the pin's collection URL (pinCollectionSlug). Refused if taken.
+          pinId: z.string().uuid().optional(),
+          // Needed to build that URL server-side; the client's `link` is only
+          // the fallback for a pin with no products.
+          origin: z.string().url().optional(),
+          // A real Pinterest section id (opaque numeric string), not a local
+          // uuid — sections are never mirrored into Supabase.
+          sectionId: z.string().min(1).max(64).optional(),
           title: z.string().min(1).max(100),
           description: z.string().max(500).optional(),
           imageUrl: z.string().url(),
           link: z.string().url().optional(),
-          productId: z.string().uuid().optional(),
+          // The products tagged on the pin, in the order the creator arranged
+          // them — the first is the primary (`pins.product_id`). Each is either
+          // an existing product of theirs or a matched listing to create. The
+          // schema carries the per-pin limit, so an over-long payload is
+          // refused here, before Pinterest is called.
+          productTags: productTagListSchema.optional().default([]),
         })
         .parse(d),
   )
@@ -349,42 +378,145 @@ export const createPinterestPin = createServerFn({ method: "POST" })
       .from("collections")
       .select("id, storefront_id, pinterest_board_id")
       .eq("id", data.collectionId)
+      .eq("user_id", userId)
       .maybeSingle();
     if (cErr) throw new Error(cErr.message);
     if (!collection?.pinterest_board_id) {
       throw new Error("Pick a board that's synced from Pinterest first.");
     }
 
-    const pin = await withPinterestToken(userId, (accessToken) =>
-      createPinterestPinRemote(accessToken, {
-        boardId: collection.pinterest_board_id!,
-        title: data.title,
-        description: data.description,
-        link: data.link,
-        imageUrl: data.imageUrl,
-      }),
-    );
+    // Existing products named in the tags must be the caller's own — checked
+    // BEFORE the Pinterest call, because a refused tag after publish would
+    // leave a pin live on Pinterest with no way to undo it.
+    const existingIds = data.productTags.map((t) => t.productId).filter((id): id is string => !!id);
+    if (existingIds.length > 0) {
+      const { data: own, error: ownErr } = await supabase
+        .from("storefront_products")
+        .select("id")
+        .eq("user_id", userId)
+        .in("id", existingIds);
+      if (ownErr) throw new Error(ownErr.message);
+      if ((own ?? []).length !== new Set(existingIds).size) {
+        throw new Error("One of the tagged products isn't in your store");
+      }
+    }
+
+    const pinId = data.pinId ?? crypto.randomUUID();
+    if (data.pinId) {
+      const { data: taken } = await supabase
+        .from("pins")
+        .select("id")
+        .eq("id", pinId)
+        .maybeSingle();
+      if (taken) throw new Error("This Pin was already published — refresh and try again.");
+    }
+
+    // A pin with products gets its own storefront collection — the same
+    // per-pin collection Go Live makes, with the same deterministic slug — and
+    // that collection's URL is the pin's destination, on Pinterest and here.
+    // Made BEFORE the Pinterest call so the link it carries is real.
+    let pinCollection: { id: string; slug: string; created: boolean } | null = null;
+    let link = data.link;
+    if (data.productTags.length > 0) {
+      const { data: storefront } = await supabase
+        .from("storefronts")
+        .select("id,slug")
+        .eq("id", collection.storefront_id)
+        .maybeSingle();
+      const { count: collCount } = await supabase
+        .from("collections")
+        .select("*", { count: "exact", head: true })
+        .eq("storefront_id", collection.storefront_id);
+      if (storefront && data.origin) {
+        pinCollection = await ensurePinCollection(
+          supabase,
+          userId,
+          storefront.id,
+          { id: pinId, title: data.title },
+          null,
+          collCount ?? 0,
+        );
+        link = pinCollectionUrl(data.origin, storefront.slug, pinCollection.slug);
+      }
+    }
+
+    let pin: Awaited<ReturnType<typeof createPinterestPinRemote>>;
+    try {
+      pin = await withPinterestToken(userId, (accessToken) =>
+        createPinterestPinRemote(accessToken, {
+          boardId: collection.pinterest_board_id!,
+          sectionId: data.sectionId,
+          title: data.title,
+          description: data.description,
+          link,
+          imageUrl: data.imageUrl,
+        }),
+      );
+    } catch (e) {
+      if (pinCollection?.created) {
+        await supabase.from("collections").delete().eq("id", pinCollection.id);
+      }
+      throw e;
+    }
 
     const { data: inserted, error: pErr } = await supabase
       .from("pins")
       .insert({
+        id: pinId,
         user_id: userId,
         storefront_id: collection.storefront_id,
-        collection_id: collection.id,
-        product_id: data.productId ?? null,
+        // Re-homed into its own collection when it has products, exactly as Go
+        // Live does, with the board kept as the origin (see boardIdOf).
+        collection_id: pinCollection?.id ?? collection.id,
+        origin_collection_id: pinCollection ? collection.id : null,
         title: data.title,
         description: data.description || null,
         image_url: data.imageUrl,
-        external_url: data.link || null,
+        external_url: link || null,
         source: "pinterest",
         status: "live",
         pinterest_pin_id: pin.id,
       })
-      .select("id")
+      .select("id,image_url")
       .single();
     if (pErr) throw new Error(pErr.message);
 
-    return { id: inserted.id, pinterestPinId: pin.id };
+    // Write the product tags. This is the SAME writer Go Live uses, so a pin
+    // published here reads identically to one monetised later: real
+    // pin_product_tags rows (category, score, source, affiliate toggle),
+    // `storefront_products.pin_id` mirrored for the storefront/analytics/take-
+    // down readers, and `pins.product_id` pointing at the primary.
+    //
+    // A failed tag must not fail the publish: the pin is already live on
+    // Pinterest by this point and there is no undo for that. The failure is
+    // reported back so the wizard can say so, and the tags are recoverable by
+    // opening the pin from /pins.
+    let tagsWritten = 0;
+    let tagError: string | null = null;
+    if (data.productTags.length > 0) {
+      try {
+        const { tags } = await writePinProductTags(
+          supabase,
+          userId,
+          inserted,
+          collection.storefront_id,
+          pinCollection?.id ?? null,
+          data.productTags,
+          // The pin is live on Pinterest the moment it exists.
+          { live: true },
+        );
+        tagsWritten = tags.length;
+        // Mirror to Pinterest whatever CAN be mirrored (tags that reference
+        // the creator's own product pins). Best-effort by design — see
+        // pushTagsToPinterest.
+        void pushTagsToPinterest(supabase, userId, inserted.id);
+      } catch (e) {
+        tagError = friendlyTagError(e).message;
+        console.error("[createPinterestPin] tagging products failed", tagError);
+      }
+    }
+
+    return { id: inserted.id, pinterestPinId: pin.id, tagsWritten, tagError };
   });
 
 // -------------------------------------------------------------
@@ -482,6 +614,79 @@ export const createPinterestBoard = createServerFn({ method: "POST" })
     }
 
     return { id: coll.id as string, name: board.name };
+  });
+
+// -------------------------------------------------------------
+// Board sections (the sub-folders inside a Pinterest board).
+//
+// Both functions take the LOCAL collection id — the same id the create-pin
+// board picker already holds — and resolve it to the real Pinterest board id
+// here, so the client never has to know or handle Pinterest's board ids.
+//
+// Nothing about a section is stored locally. A section is only ever a pin
+// target, and mirroring it would mean a table that the Pinterest sync would
+// then have to reconcile for no gain; instead the picker reads the live list
+// each time it opens a board.
+// -------------------------------------------------------------
+
+/** Local collection id → the real Pinterest board id, scoped to this user.
+ * Throws the same message the publish path uses for an unsynced board. */
+async function pinterestBoardIdFor(
+  supabase: SupabaseClient<Database>,
+  userId: string,
+  collectionId: string,
+): Promise<string> {
+  const { data: collection, error } = await supabase
+    .from("collections")
+    .select("pinterest_board_id")
+    .eq("id", collectionId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!collection?.pinterest_board_id) {
+    throw new Error("Pick a board that's synced from Pinterest first.");
+  }
+  return collection.pinterest_board_id;
+}
+
+export const listPinterestBoardSections = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .validator((d: { collectionId: string }) =>
+    z.object({ collectionId: z.string().uuid() }).parse(d),
+  )
+  .handler(async ({ data, context }) => {
+    const { supabase, userId } = context;
+    const boardId = await pinterestBoardIdFor(supabase, userId, data.collectionId);
+    const sections = await withPinterestToken(userId, (t) =>
+      listPinterestBoardSectionsRemote(t, boardId),
+    );
+    return { sections };
+  });
+
+export const createPinterestBoardSection = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .validator((d: { collectionId: string; name: string }) =>
+    z.object({ collectionId: z.string().uuid(), name: z.string().min(1).max(180) }).parse(d),
+  )
+  .handler(async ({ data, context }) => {
+    const { supabase, userId } = context;
+    const boardId = await pinterestBoardIdFor(supabase, userId, data.collectionId);
+    const name = data.name.trim();
+    if (!name) throw new Error("Give the section a name first");
+
+    // Pinterest allows two sections with the same name on one board, which
+    // would leave the creator with a duplicate they can't tell apart — and the
+    // usual cause is a double-tap on Create. Reuse the existing one instead.
+    const existing = await withPinterestToken(userId, (t) =>
+      listPinterestBoardSectionsRemote(t, boardId),
+    );
+    const clash = existing.find((s) => s.name.trim().toLowerCase() === name.toLowerCase());
+    if (clash) return { id: clash.id, name: clash.name, reused: true };
+
+    const section = await withPinterestToken(userId, (t) =>
+      createPinterestBoardSectionRemote(t, boardId, name),
+    );
+    return { id: section.id, name: section.name, reused: false };
   });
 
 // -------------------------------------------------------------
@@ -751,6 +956,10 @@ export type RawVisualMatch = {
   // detector found nothing to buy in the image and the search fell back to the
   // whole frame.
   tag?: string;
+  // That component's category from the shared vocabulary, so a consumer of the
+  // flat list (the board deck) can regroup matches into objects without a
+  // second detection call.
+  category?: ProductCategory;
   // The look gate's verdict for this card: "same" (this product, or the same
   // design in the same colourway) or "close" (visibly similar, not exact).
   // Absent when the verifier had no usable verdict. "same" cards always rank
@@ -2940,9 +3149,12 @@ async function searchComponentUncached(
           .slice(0, PER_TAG_MAX)
           .map((c, i) => ({ m: c.m, rank: i, score: c.score, verdict: null }));
       }
-      return ranked
-        .slice(0, PER_TAG_MAX)
-        .map((c) => ({ ...toRawVisualMatch(c.m), tag: p.crop.label, score: c.score }));
+      return ranked.slice(0, PER_TAG_MAX).map((c) => ({
+        ...toRawVisualMatch(c.m),
+        tag: p.crop.label,
+        category: p.crop.category,
+        score: c.score,
+      }));
     };
 
     let settled = built;
@@ -3110,6 +3322,7 @@ async function searchComponentUncached(
     out = ordered.slice(0, PER_TAG_MAX).map(({ c, v }) => ({
       ...toRawVisualMatch(c.m),
       tag: crop.label,
+      category: crop.category,
       score: c.score,
       ...(v ? { lookMatch: v as "same" | "close" } : {}),
     }));
@@ -3130,9 +3343,12 @@ async function searchComponentUncached(
       // thing as the gate being switched off — only claim the latter.
       trace.verifyDisabled = !VERIFY_ENABLED;
     }
-    out = ordered
-      .slice(0, PER_TAG_MAX)
-      .map((c) => ({ ...toRawVisualMatch(c.m), tag: crop.label, score: c.score }));
+    out = ordered.slice(0, PER_TAG_MAX).map((c) => ({
+      ...toRawVisualMatch(c.m),
+      tag: crop.label,
+      category: crop.category,
+      score: c.score,
+    }));
   }
 
   if (trace) {
@@ -3944,6 +4160,72 @@ async function searchByImageRaw(
   return out;
 }
 
+/** One detected object with its verified, ranked candidates — the shape the
+ * product-tagging engine (src/lib/product-tagging.ts) scores. */
+export type RankedComponent = {
+  key: number;
+  label: string;
+  category: ProductCategory;
+  signature: string;
+  box: Box | null;
+  matches: RawVisualMatch[];
+};
+
+/**
+ * The pipeline's finished answer, kept PER OBJECT rather than flattened.
+ *
+ * `searchByImageRaw` above merges every tab into one list because the swipe
+ * decks render one grid; the tagging engine needs the opposite — it picks ONE
+ * product per detected object and must know which object each candidate was
+ * found under. Same stages, same caches, same cross-tab dedupe (a product that
+ * qualified for two objects is kept under the one it scores best for); only
+ * the grouping differs. When the detector found nothing, the whole-image
+ * search is reported as a single unlabelled component under key -1.
+ */
+export async function rankedComponentsForImage(
+  imageUrl: string,
+  title = "",
+  description = "",
+): Promise<{ components: RankedComponent[]; noProducts: boolean }> {
+  const { crops, noProducts } = await cropResultFor(imageUrl);
+
+  if (noProducts) {
+    const matches = await searchComponent(imageUrl, crops, -1, title, description);
+    return {
+      components:
+        matches.length > 0
+          ? [{ key: -1, label: "", category: "other", signature: "", box: null, matches }]
+          : [],
+      noProducts: true,
+    };
+  }
+  if (crops.length === 0) return { components: [], noProducts: false };
+
+  const perComponent = await Promise.all(
+    crops.map((_, i) => searchComponent(imageUrl, crops, i, title, description)),
+  );
+  const best = new Map<string, { m: RawVisualMatch; key: number }>();
+  perComponent.forEach((list, key) => {
+    for (const m of list) {
+      const held = best.get(m.link);
+      if (!held || (m.score ?? 0) < (held.m.score ?? 0)) best.set(m.link, { m, key });
+    }
+  });
+  return {
+    components: crops.map((c, key) => ({
+      key,
+      label: c.label,
+      category: c.category,
+      signature: c.signature,
+      box: c.box,
+      matches: perComponent[key]
+        .filter((m) => best.get(m.link)?.key === key)
+        .sort((a, b) => (a.score ?? 0) - (b.score ?? 0)),
+    })),
+    noProducts: false,
+  };
+}
+
 // Cross-check every match against the real retailer page for a live price,
 // keeping every match that ends up with *any* usable price — CK's live figure
 // when it resolves, otherwise the price Google Lens already reported. Only a
@@ -4075,7 +4357,18 @@ export const visualSearchImage = createServerFn({ method: "POST" })
  * `visualSearchComponent` takes back. `noProducts` means the detector found
  * nothing purchasable, and only then should the client ask for component -1
  * (the whole image) instead. */
-export type VisualComponent = { key: number; label: string; category: ProductCategory };
+export type VisualComponent = {
+  key: number;
+  label: string;
+  category: ProductCategory;
+  /** The object's look as detection saw it ("white leather low-top") — the
+   * product-tagging engine reads colour/material words out of it. Empty on
+   * detections cached before the prompt asked for one. */
+  signature: string;
+  /** Normalised 0-1 box, or null for a near-full-frame object. Lets a tag
+   * remember where its product sits in the picture. */
+  box: Box | null;
+};
 
 export async function componentsForImage(
   imageUrl: string,
@@ -4122,7 +4415,13 @@ export async function componentsForImage(
     void searchComponent(imageUrl, crops, key, title, description, "verified").catch(() => []);
   }
   return {
-    components: crops.map((c, key) => ({ key, label: c.label, category: c.category })),
+    components: crops.map((c, key) => ({
+      key,
+      label: c.label,
+      category: c.category,
+      signature: c.signature,
+      box: c.box,
+    })),
     noProducts,
   };
 }
@@ -4337,15 +4636,18 @@ async function performGoLive(
   pin: { id: string; title: string; image_url: string | null },
   storefront: { id: string; slug: string },
   position: number,
-  existingProductIds: string[],
-  newProducts: Array<{
-    title: string;
-    affiliateUrl: string;
-    imageUrl: string | null;
-    priceCents?: number | null;
-  }>,
+  tags: ProductTagInput[],
+  /** `tags` is the complete desired set — see WriteTagsOptions.replace. */
+  replaceTags = false,
 ): Promise<{ externalUrl: string; collectionId: string; productId: string | null }> {
-  if (existingProductIds.length === 0 && newProducts.length === 0) {
+  // A pin that already carries tags (published from the wizard, or a draft
+  // whose tags were saved) may go live with an empty payload — its tags ARE the
+  // products. Only a pin with nothing at all is refused.
+  const { count: existingTagCount } = await supabase
+    .from("pin_product_tags")
+    .select("*", { count: "exact", head: true })
+    .eq("pin_id", pin.id);
+  if (tags.length === 0 && (replaceTags || (existingTagCount ?? 0) === 0)) {
     throw new Error("Attach at least one product before going live.");
   }
 
@@ -4360,84 +4662,65 @@ async function performGoLive(
     .maybeSingle();
   const originCollectionId = pinRow?.origin_collection_id ?? pinRow?.collection_id ?? null;
 
-  const name = (pin.title?.trim() || "Pin collection").slice(0, 60);
-  const slug = `${slugify(name) || "collection"}-${Math.random().toString(36).slice(2, 6)}`;
-  const { data: created, error: cErr } = await supabase
-    .from("collections")
-    .insert({
-      user_id: userId,
-      storefront_id: storefront.id,
-      name,
-      slug,
-      source: "manual",
-      position,
-    })
-    .select("id,slug")
-    .single();
-  if (cErr) throw new Error(cErr.message);
-  const collectionId = created.id as string;
-  const collectionSlug = created.slug as string;
+  // The pin's own collection — the one its products live in and the one
+  // "Visit website" opens. Reused across re-go-lives (it used to be recreated
+  // every time, leaving the previous one behind).
+  const collection = await ensurePinCollection(
+    supabase,
+    userId,
+    storefront.id,
+    pin,
+    pinRow ?? null,
+    position,
+  );
+  const collectionId = collection.id;
+  const collectionSlug = collection.slug;
 
-  // Insert new (e.g. visual-search-matched) products into this collection,
-  // reusing an existing row with the same affiliate URL if one exists. Every
-  // product is tagged with `pin_id` so the analytics pin breakdown can show
-  // all of a pin's products and a take-down can detach exactly this set.
-  let newInsertedIds: string[] = [];
-  const reusedExistingIds: string[] = [];
-  if (newProducts.length > 0) {
-    const urls = newProducts.map((p) => p.affiliateUrl);
-    const { data: existingRows } = await supabase
-      .from("storefront_products")
-      .select("id, affiliate_url")
-      .eq("storefront_id", storefront.id)
-      .in("affiliate_url", urls);
-    const existingByUrl = new Map((existingRows ?? []).map((r) => [r.affiliate_url, r.id]));
-    const toInsert = newProducts
-      .filter((p) => !existingByUrl.has(p.affiliateUrl))
-      .map((p) => ({
-        user_id: userId,
-        storefront_id: storefront.id,
-        collection_id: collectionId,
-        pin_id: pin.id,
-        title: p.title,
-        affiliate_url: p.affiliateUrl,
-        image_url: p.imageUrl ?? pin.image_url,
-        // The price the shopper was shown at the moment they picked this match.
-        // Dropping it here is what left every stored product with a null
-        // price_cents — and therefore no price, no struck-through MRP and no
-        // discount badge on the public storefront, which reads those columns
-        // and cannot run a live retailer lookup for an anonymous visitor.
-        price_cents: p.priceCents ?? null,
-        // Written explicitly because the column's own default was 'USD' and no
-        // code ever set it — see 20260818120000_products_currency_inr.sql. Every
-        // price this pipeline can produce comes from an Indian retailer via Lens,
-        // which the parser stamps as ₹.
-        currency: "INR",
-      }));
-    if (toInsert.length > 0) {
-      const { data: inserted, error: insErr } = await supabase
-        .from("storefront_products")
-        .insert(toInsert)
-        .select("id");
-      if (insErr) throw new Error(insErr.message);
-      newInsertedIds = (inserted ?? []).map((r) => r.id);
-    }
-    reusedExistingIds.push(...(Array.from(existingByUrl.values()) as string[]));
+  // Tag the products. One writer for every path (see product-tags.server.ts):
+  // it creates product rows for matched listings (reusing a row with the same
+  // canonical URL), refuses a set past the per-pin limit BEFORE anything is
+  // attached, stamps `storefront_products.pin_id`, and points
+  // `pins.product_id` at the primary.
+  let productIds: string[];
+  try {
+    ({ productIds } = await writePinProductTags(
+      supabase,
+      userId,
+      pin,
+      storefront.id,
+      collectionId,
+      tags,
+      { replace: replaceTags, live: true },
+    ));
+  } catch (e) {
+    // A collection made just now was made for tags that don't exist.
+    if (collection.created) await supabase.from("collections").delete().eq("id", collectionId);
+    throw friendlyTagError(e);
   }
 
-  // Move every reused/explicitly-selected existing product into this
-  // collection and tag it with this pin.
-  const moveIds = Array.from(new Set([...existingProductIds, ...reusedExistingIds]));
-  if (moveIds.length > 0) {
+  // Move every tagged product into this pin's collection — the storefront
+  // renders a pin's products from its collection, and a product tagged earlier
+  // (wizard publish, a re-go-live) may still sit in a previous one.
+  if (productIds.length > 0) {
     const { error: mvErr } = await supabase
       .from("storefront_products")
       .update({ collection_id: collectionId, pin_id: pin.id })
-      .in("id", moveIds);
+      .in("id", productIds);
     if (mvErr) throw new Error(mvErr.message);
   }
 
-  const externalUrl = `${origin}/s/${storefront.slug}#${collectionSlug}`;
-  const productId = existingProductIds[0] ?? newInsertedIds[0] ?? reusedExistingIds[0] ?? null;
+  // Going live is what turns a pending tag into a monetised one. A tag the
+  // creator switched off stays 'disabled' — that is the toggle doing its job.
+  await supabase
+    .from("pin_product_tags")
+    .update({ monetisation_status: "monetised" })
+    .eq("pin_id", pin.id)
+    .eq("affiliate_enabled", true);
+
+  // `?c=` is the deep link the storefront page actually reads; the old `#slug`
+  // form landed on the storefront root.
+  const externalUrl = pinCollectionUrl(origin, storefront.slug, collectionSlug);
+  const productId = productIds[0] ?? null;
 
   const { error: pinErr } = await supabase
     .from("pins")
@@ -4454,12 +4737,100 @@ async function performGoLive(
   return { externalUrl, collectionId, productId };
 }
 
+/**
+ * The pin's own storefront collection — reused when the pin already has one
+ * (a re-go-live, or a pin published from the wizard with products), created
+ * otherwise under the deterministic slug `pinCollectionSlug` gives it, so the
+ * "Visit website" destination Preview showed before the collection existed is
+ * the one that exists afterwards. A slug clash on the storefront (two pins with
+ * the same title and id prefix — effectively never) falls back to a random
+ * suffix rather than failing the publish.
+ */
+async function ensurePinCollection(
+  supabase: SupabaseClient<Database>,
+  userId: string,
+  storefrontId: string,
+  pin: { id: string; title: string },
+  existing: { collection_id: string | null; origin_collection_id: string | null } | null,
+  position: number,
+): Promise<{ id: string; slug: string; created: boolean }> {
+  const current = existing?.collection_id ?? null;
+  if (current && current !== existing?.origin_collection_id) {
+    const { data: coll } = await supabase
+      .from("collections")
+      .select("id,slug,source")
+      .eq("id", current)
+      .eq("storefront_id", storefrontId)
+      .maybeSingle();
+    if (coll?.source === "manual") return { id: coll.id, slug: coll.slug, created: false };
+  }
+  const name = (pin.title?.trim() || "Pin collection").slice(0, 60);
+  const attempt = async (slug: string) =>
+    supabase
+      .from("collections")
+      .insert({
+        user_id: userId,
+        storefront_id: storefrontId,
+        name,
+        slug,
+        source: "manual",
+        position,
+      })
+      .select("id,slug")
+      .single();
+  let { data: created, error } = await attempt(pinCollectionSlug(pin.title, pin.id));
+  if (error?.code === "23505") {
+    ({ data: created, error } = await attempt(
+      `${slugify(name) || "collection"}-${Math.random().toString(36).slice(2, 6)}`,
+    ));
+  }
+  if (error || !created) throw new Error(error?.message ?? "Could not create the pin's collection");
+  return { id: created.id, slug: created.slug, created: true };
+}
+
+/** The pre-tag Go Live payload — bare product ids and matched listings — as
+ * tags. Both the single-pin preview and the board bulk approve still speak
+ * this shape (and may add tag metadata alongside); this keeps them one path. */
+function legacyProductsToTags(
+  existingProductIds: string[],
+  newProducts: Array<{
+    title: string;
+    affiliateUrl: string;
+    imageUrl: string | null;
+    priceCents?: number | null;
+  }>,
+): ProductTagInput[] {
+  return [
+    ...existingProductIds.map((productId) => productTagListSchema.element.parse({ productId })),
+    ...newProducts.map((p) =>
+      productTagListSchema.element.parse({
+        product: {
+          title: p.title,
+          affiliateUrl: p.affiliateUrl,
+          imageUrl: p.imageUrl,
+          priceCents: p.priceCents ?? null,
+        },
+        source: "manual",
+      }),
+    ),
+  ];
+}
+
 export const goLivePin = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .validator(
     (d: {
       pinId: string;
       origin: string;
+      /** The product tags to attach — the shape the tagging UI produces, with
+       * category / score / source / affiliate toggle per product. */
+      productTags?: z.input<typeof productTagListSchema>;
+      /** `productTags` is the COMPLETE desired set: tags already on the pin
+       * that aren't in it are removed. What the monetise dialog sends, since
+       * it seeded from the existing tags and the creator edited the list. */
+      replaceTags?: boolean;
+      /** Pre-tag payload, still accepted so an already-open preview page (or a
+       * client mid-deploy) can go live. Converted to plain manual tags. */
       existingProductIds?: string[];
       newProducts?: Array<{
         title: string;
@@ -4472,7 +4843,13 @@ export const goLivePin = createServerFn({ method: "POST" })
         .object({
           pinId: z.string().uuid(),
           origin: z.string().url(),
-          existingProductIds: z.array(z.string().uuid()).optional().default([]),
+          productTags: productTagListSchema.optional().default([]),
+          replaceTags: z.boolean().optional().default(false),
+          existingProductIds: z
+            .array(z.string().uuid())
+            .max(MAX_PRODUCT_TAGS_PER_PIN)
+            .optional()
+            .default([]),
           newProducts: z
             .array(
               z.object({
@@ -4482,9 +4859,16 @@ export const goLivePin = createServerFn({ method: "POST" })
                 priceCents: z.number().int().nonnegative().nullable().optional(),
               }),
             )
+            .max(MAX_PRODUCT_TAGS_PER_PIN)
             .optional()
             .default([]),
         })
+        .refine(
+          (v) =>
+            v.productTags.length + v.existingProductIds.length + v.newProducts.length <=
+            MAX_PRODUCT_TAGS_PER_PIN,
+          { message: `A Pin can have at most ${MAX_PRODUCT_TAGS_PER_PIN} tagged products` },
+        )
         .parse(d),
   )
   .handler(async ({ data, context }) => {
@@ -4492,8 +4876,9 @@ export const goLivePin = createServerFn({ method: "POST" })
 
     const { data: pin, error: pinErr } = await supabase
       .from("pins")
-      .select("id,title,image_url,storefront_id")
+      .select("id,title,image_url,storefront_id,pinterest_pin_id")
       .eq("id", data.pinId)
+      .eq("user_id", userId)
       .maybeSingle();
     if (pinErr) throw new Error(pinErr.message);
     if (!pin) throw new Error("Pin not found");
@@ -4512,16 +4897,41 @@ export const goLivePin = createServerFn({ method: "POST" })
       .select("*", { count: "exact", head: true })
       .eq("storefront_id", storefront.id);
 
-    return performGoLive(
+    const result = await performGoLive(
       supabase,
       userId,
       data.origin,
       pin,
       storefront,
       collCount ?? 0,
-      data.existingProductIds,
-      data.newProducts,
+      [...data.productTags, ...legacyProductsToTags(data.existingProductIds, data.newProducts)],
+      // The payload is the whole list; tags it no longer names are removed by
+      // the writer itself, after the new set is in — never before.
+      data.replaceTags,
     );
+    // Point the REAL pin at the storefront collection (PATCH /pins/{id} link),
+    // so a tap on Pinterest lands on the products — this is what makes a pin
+    // monetised anywhere but this database. Best-effort: the local state is
+    // already correct, and a sandbox token or a revoked connection must not
+    // undo a go-live that has otherwise succeeded. The outcome is reported so
+    // the success screen can say which of the two happened.
+    let pinterestLinkUpdated = false;
+    if (pin.pinterest_pin_id) {
+      try {
+        await withPinterestToken(userId, (t) =>
+          updatePinterestPinLinkRemote(t, pin.pinterest_pin_id!, result.externalUrl),
+        );
+        pinterestLinkUpdated = true;
+      } catch (e) {
+        console.error(
+          "[goLivePin] Pinterest link update failed",
+          e instanceof Error ? e.message : e,
+        );
+      }
+    }
+    // Best-effort mirror of the mirrorable tags — never blocks going live.
+    void pushTagsToPinterest(supabase, userId, pin.id);
+    return { ...result, pinterestLinkUpdated };
   });
 
 // -------------------------------------------------------------
@@ -4576,10 +4986,26 @@ async function revertPinToAvailable(
 
   const perPinCollectionId = pin.collection_id;
 
-  // Detach every product attached to this pin (removes it from the storefront
-  // and the analytics pin breakdown).
-  const { error: delErr } = await supabase.from("storefront_products").delete().eq("pin_id", pinId);
+  // Detach every product tagged on this pin. Rows that existed only for the
+  // pin — matched listings and pasted links, filed under nothing or under the
+  // per-pin collection Go Live made — are deleted (removes them from the
+  // storefront and the analytics pin breakdown). A product picked from one of
+  // the creator's real collections is only unlinked: it was theirs before the
+  // pin and stays theirs after. The tags themselves go first (they cascade
+  // from a deleted product row, but not from an unlinked one).
+  const { error: tagErr } = await supabase.from("pin_product_tags").delete().eq("pin_id", pinId);
+  if (tagErr) throw new Error(tagErr.message);
+  let doomed = supabase.from("storefront_products").delete().eq("pin_id", pinId);
+  doomed = perPinCollectionId
+    ? doomed.or(`collection_id.is.null,collection_id.eq.${perPinCollectionId}`)
+    : doomed.is("collection_id", null);
+  const { error: delErr } = await doomed;
   if (delErr) throw new Error(delErr.message);
+  const { error: unlinkErr } = await supabase
+    .from("storefront_products")
+    .update({ pin_id: null })
+    .eq("pin_id", pinId);
+  if (unlinkErr) throw new Error(unlinkErr.message);
 
   // Return the pin to the available pool, back under the board it came from.
   const { error: upErr } = await supabase
@@ -4750,12 +5176,13 @@ export const approveBoardPins = createServerFn({ method: "POST" })
       origin: string;
       approvals: Array<{
         pinId: string;
-        products: Array<{
+        products?: Array<{
           title: string;
           affiliateUrl: string;
           imageUrl: string | null;
           priceCents?: number | null;
         }>;
+        productTags?: z.input<typeof productTagListSchema>;
       }>;
     }) =>
       z
@@ -4763,19 +5190,35 @@ export const approveBoardPins = createServerFn({ method: "POST" })
           origin: z.string().url(),
           approvals: z
             .array(
-              z.object({
-                pinId: z.string().uuid(),
-                products: z
-                  .array(
-                    z.object({
-                      title: z.string(),
-                      affiliateUrl: z.string().url(),
-                      imageUrl: z.string().url().nullable(),
-                      priceCents: z.number().int().nonnegative().nullable().optional(),
-                    }),
-                  )
-                  .min(1),
-              }),
+              z
+                .object({
+                  pinId: z.string().uuid(),
+                  // Pre-tag shape: matched listings only. Still accepted; every
+                  // entry becomes a manual tag.
+                  products: z
+                    .array(
+                      z.object({
+                        title: z.string(),
+                        affiliateUrl: z.string().url(),
+                        imageUrl: z.string().url().nullable(),
+                        priceCents: z.number().int().nonnegative().nullable().optional(),
+                      }),
+                    )
+                    .max(MAX_PRODUCT_TAGS_PER_PIN)
+                    .optional()
+                    .default([]),
+                  // Tag shape, with the matcher's category / score / source.
+                  productTags: productTagListSchema.optional().default([]),
+                })
+                .refine((a) => a.products.length + a.productTags.length >= 1, {
+                  message: "Each approval needs at least one product",
+                })
+                .refine(
+                  (a) => a.products.length + a.productTags.length <= MAX_PRODUCT_TAGS_PER_PIN,
+                  {
+                    message: `A Pin can have at most ${MAX_PRODUCT_TAGS_PER_PIN} tagged products`,
+                  },
+                ),
             )
             .min(1),
         })
@@ -4788,9 +5231,10 @@ export const approveBoardPins = createServerFn({ method: "POST" })
     const { data: pinRows, error: pErr } = await supabase
       .from("pins")
       .select("id,title,image_url,storefront_id")
+      .eq("user_id", userId)
       .in("id", pinIds);
     if (pErr) throw new Error(pErr.message);
-    const pinById = new Map((pinRows ?? []).map((p: any) => [p.id as string, p]));
+    const pinById = new Map((pinRows ?? []).map((p) => [p.id, p]));
 
     const storefrontId = (pinRows ?? [])[0]?.storefront_id as string | undefined;
     if (!storefrontId) throw new Error("No storefront found for these pins");
@@ -4817,16 +5261,10 @@ export const approveBoardPins = createServerFn({ method: "POST" })
         continue;
       }
       try {
-        await performGoLive(
-          supabase,
-          userId,
-          data.origin,
-          pin,
-          storefront,
-          nextPosition++,
-          [],
-          a.products,
-        );
+        await performGoLive(supabase, userId, data.origin, pin, storefront, nextPosition++, [
+          ...a.productTags,
+          ...legacyProductsToTags([], a.products),
+        ]);
         approved++;
       } catch (e) {
         failed.push(`${pin.title || a.pinId}: ${e instanceof Error ? e.message : e}`);

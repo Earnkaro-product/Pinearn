@@ -199,16 +199,26 @@ export const getPublicStorefront = createServerFn({ method: "GET" })
           : null,
         livePinIds.length > 0 ? `pin_id.in.(${livePinIds.join(",")})` : null,
       ].filter(Boolean);
+      // The product tag rides along for one reason: its affiliate toggle. A tag
+      // the creator switched off is still a product on the pin, but the
+      // storefront links it to the plain retailer page (`product_url`) instead
+      // of the monetised link — so the swap is made here, once, and every
+      // renderer below keeps reading `affiliate_url` as "where this card goes".
       const { data: prod } = await admin
         .from("storefront_products")
         .select(
-          "id,title,image_url,affiliate_url,price_cents,currency,collection_id,pin_id,position",
+          "id,title,image_url,affiliate_url,price_cents,currency,collection_id,pin_id,position,pin_product_tags(affiliate_enabled,product_url)",
         )
         .eq("storefront_id", store.id)
         .or(filters.join(","))
         .order("position", { ascending: true })
         .limit(500);
-      products = prod ?? [];
+      products = (prod ?? []).map(({ pin_product_tags, ...p }) => {
+        const tag = (
+          pin_product_tags as Array<{ affiliate_enabled: boolean; product_url: string }> | null
+        )?.find((t) => t.affiliate_enabled === false);
+        return tag?.product_url ? { ...p, affiliate_url: tag.product_url } : p;
+      });
     }
 
     return {

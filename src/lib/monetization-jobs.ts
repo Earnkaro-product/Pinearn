@@ -2,9 +2,11 @@ import { useSyncExternalStore } from "react";
 import type { QueryClient } from "@tanstack/react-query";
 import { notifyDone } from "@/lib/notify";
 
-import { priceCentsOf } from "./product-price";
+import { tagFromPlanned, toProductTagInput, type PendingProductTag } from "@/lib/product-tag-data";
+import type { ProductTagPlan } from "@/lib/product-tags.functions";
+import { MAX_PRODUCT_TAGS_PER_PIN } from "@/lib/product-tagging";
 
-import type { BoardCandidate, VisualMatch } from "./pinterest.functions";
+import type { BoardCandidate } from "./pinterest.functions";
 
 // A single "monetise the whole board" background job. It is deliberately held
 // at MODULE scope (not in React state) so it keeps running — and stays
@@ -79,20 +81,13 @@ export function dismissMonetizationJob(id: string) {
 // component (via useServerFn) at kickoff and then called from here — plain
 // functions, so surviving unmount is safe, exactly like the old in-component
 // promise chain did.
-type RunGetRecommendation = (args: {
-  data: { pinId: string };
-}) => Promise<{ recommendations: VisualMatch[] }>;
+type RunPlan = (args: { data: { pinId: string } }) => Promise<ProductTagPlan>;
 type RunApprove = (args: {
   data: {
     origin: string;
     approvals: Array<{
       pinId: string;
-      products: Array<{
-        title: string;
-        affiliateUrl: string;
-        imageUrl: string | null;
-        priceCents: number | null;
-      }>;
+      productTags: Array<ReturnType<typeof toProductTagInput>>;
     }>;
   };
 }) => Promise<{ approved: number; failed: string[] }>;
@@ -104,7 +99,7 @@ export type StartBoardMonetizationOptions = {
   targets: BoardCandidate[];
   origin: string;
   qc: QueryClient;
-  runGetRecommendation: RunGetRecommendation;
+  runPlan: RunPlan;
   runApprove: RunApprove;
 };
 
@@ -139,10 +134,11 @@ export function startBoardMonetization(opts: StartBoardMonetizationOptions): voi
 }
 
 async function runJob(opts: StartBoardMonetizationOptions): Promise<void> {
-  const { collectionId, targets, qc, runGetRecommendation, runApprove, origin } = opts;
+  const { collectionId, targets, qc, runPlan, runApprove, origin } = opts;
   try {
-    const resolved: Array<{ candidate: BoardCandidate; recommendations: VisualMatch[] }> =
-      new Array(targets.length);
+    const resolved: Array<{ candidate: BoardCandidate; tags: PendingProductTag[] }> = new Array(
+      targets.length,
+    );
     let nextIndex = 0;
     const CONCURRENCY = 4;
     const worker = async () => {
@@ -150,27 +146,29 @@ async function runJob(opts: StartBoardMonetizationOptions): Promise<void> {
         const i = nextIndex++;
         const c = targets[i];
         try {
+          // The backend's product tags for this pin — the same plan the
+          // interactive deck and the single-pin dialog attach by default, so a
+          // board monetised unattended reads exactly as one reviewed by hand.
+          // A pin the backend can't tag confidently stays in the queue.
           const result = await qc.fetchQuery({
-            queryKey: ["pin-recommendation", c.pinId],
-            queryFn: () => runGetRecommendation({ data: { pinId: c.pinId } }),
+            queryKey: ["product-tag-plan", c.pinId],
+            queryFn: () => runPlan({ data: { pinId: c.pinId } }),
             staleTime: Infinity,
             // One try — a failure just counts as "unmatched", never a silent
             // 3× re-run of the whole reverse-image + CK pipeline.
             retry: false,
           });
-          resolved[i] = { candidate: c, recommendations: result.recommendations };
+          resolved[i] = { candidate: c, tags: result.tags.map((t) => tagFromPlanned(t)) };
         } catch {
-          resolved[i] = { candidate: c, recommendations: [] };
+          resolved[i] = { candidate: c, tags: [] };
         }
-        const matchedSoFar = resolved
-          .filter(Boolean)
-          .filter((r) => r.recommendations.length > 0).length;
+        const matchedSoFar = resolved.filter(Boolean).filter((r) => r.tags.length > 0).length;
         patch(collectionId, { matched: matchedSoFar });
       }
     };
     await Promise.all(Array.from({ length: Math.min(CONCURRENCY, targets.length) }, worker));
 
-    const matched = resolved.filter((r) => r.recommendations.length > 0);
+    const matched = resolved.filter((r) => r.tags.length > 0);
     patch(collectionId, { status: "publishing" });
 
     let approved = 0;
@@ -180,16 +178,14 @@ async function runJob(opts: StartBoardMonetizationOptions): Promise<void> {
           origin,
           approvals: matched.map((r) => ({
             pinId: r.candidate.pinId,
-            products: r.recommendations.map((rec) => ({
-              title: rec.title,
-              affiliateUrl: rec.link,
-              imageUrl: rec.thumbnail,
-              priceCents: priceCentsOf(rec.price),
-            })),
+            productTags: r.tags.slice(0, MAX_PRODUCT_TAGS_PER_PIN).map(toProductTagInput),
           })),
         },
       });
       approved = res.approved;
+      // Each approved pin's plan now leads with its saved tags.
+      for (const r of matched)
+        void qc.invalidateQueries({ queryKey: ["product-tag-plan", r.candidate.pinId] });
     }
 
     patch(collectionId, { approved, status: "done" });

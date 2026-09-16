@@ -278,6 +278,93 @@ export type Database = {
         };
         Relationships: [];
       };
+      pin_product_tags: {
+        Row: {
+          affiliate_enabled: boolean;
+          affiliate_url: string | null;
+          box: Json | null;
+          category: string;
+          component_key: number | null;
+          confidence: string | null;
+          created_at: string;
+          detected_label: string | null;
+          id: string;
+          look_match: string | null;
+          match_score: number | null;
+          match_source: string;
+          matched_title: string;
+          monetisation_status: string;
+          pin_id: string;
+          pinterest_product_pin_id: string | null;
+          position: number;
+          product_id: string;
+          product_url: string;
+          updated_at: string;
+          user_id: string;
+        };
+        Insert: {
+          affiliate_enabled?: boolean;
+          affiliate_url?: string | null;
+          box?: Json | null;
+          category?: string;
+          component_key?: number | null;
+          confidence?: string | null;
+          created_at?: string;
+          detected_label?: string | null;
+          id?: string;
+          look_match?: string | null;
+          match_score?: number | null;
+          match_source?: string;
+          matched_title: string;
+          monetisation_status?: string;
+          pin_id: string;
+          pinterest_product_pin_id?: string | null;
+          position?: number;
+          product_id: string;
+          product_url: string;
+          updated_at?: string;
+          user_id: string;
+        };
+        Update: {
+          affiliate_enabled?: boolean;
+          affiliate_url?: string | null;
+          box?: Json | null;
+          category?: string;
+          component_key?: number | null;
+          confidence?: string | null;
+          created_at?: string;
+          detected_label?: string | null;
+          id?: string;
+          look_match?: string | null;
+          match_score?: number | null;
+          match_source?: string;
+          matched_title?: string;
+          monetisation_status?: string;
+          pin_id?: string;
+          pinterest_product_pin_id?: string | null;
+          position?: number;
+          product_id?: string;
+          product_url?: string;
+          updated_at?: string;
+          user_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "pin_product_tags_pin_id_fkey";
+            columns: ["pin_id"];
+            isOneToOne: false;
+            referencedRelation: "pins";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "pin_product_tags_product_id_fkey";
+            columns: ["product_id"];
+            isOneToOne: false;
+            referencedRelation: "storefront_products";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
       pin_suggestion_history: {
         Row: {
           angle: string | null;

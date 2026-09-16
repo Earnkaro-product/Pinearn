@@ -7,15 +7,22 @@ import { useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import { ArrowRight, CheckCheck, Loader2, Rocket, Sparkles } from "lucide-react";
 import { notifyProblem } from "@/lib/notify";
-import {
-  SuggestionCard,
-  realProductPrice,
-  type SuggestionPrice,
-} from "@/components/suggestion-card";
+import type { SuggestionPrice } from "@/components/suggestion-card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { hostBrand } from "@/lib/brands";
 import { getFriendlyMessage } from "@/lib/friendly-error";
 import { goLivePin } from "@/lib/pinterest.functions";
+import { ShopTheLookPreview } from "@/components/shop-the-look";
+import {
+  normalizeCollectionUrl,
+  pinCollectionSlug,
+  pinCollectionUrl,
+  sequenceProductTags,
+  tagFromProduct,
+  tagFromUrl,
+  toProductTagInput,
+  type PendingProductTag,
+} from "@/lib/product-tag-data";
+import { logPipeline } from "@/lib/pipeline-log";
 
 export const Route = createFileRoute("/_authenticated/pins_/preview")({
   validateSearch: (s: Record<string, unknown>) => ({
@@ -27,6 +34,8 @@ export const Route = createFileRoute("/_authenticated/pins_/preview")({
 type Pin = {
   id: string;
   title: string;
+  description: string | null;
+  status: string;
   image_url: string | null;
   external_url: string | null;
   storefront_id: string | null;
@@ -59,7 +68,7 @@ function PinPreviewPage() {
   const runGoLive = useServerFn(goLivePin);
   // Once the pin is live we swap the whole page for a celebratory success
   // state instead of navigating straight away.
-  const [liveDone, setLiveDone] = useState(false);
+  const [liveDone, setLiveDone] = useState<null | { pinterestLinkUpdated: boolean }>(null);
 
   const { data: pin, isLoading: pinLoading } = useQuery({
     queryKey: ["pin", pinId],
@@ -69,7 +78,7 @@ function PinPreviewPage() {
       if (!userId) return null;
       const { data, error } = await supabase
         .from("pins")
-        .select("id,title,image_url,external_url,storefront_id,collection_id")
+        .select("id,title,description,status,image_url,external_url,storefront_id,collection_id")
         .eq("id", pinId)
         .eq("user_id", userId)
         .maybeSingle();
@@ -97,20 +106,31 @@ function PinPreviewPage() {
     enabled: !!pin?.storefront_id,
   });
 
-  const stash = useMemo<{ productIds: string[]; aiPicks: AIPick[] }>(() => {
-    if (!pinId) return { productIds: [], aiPicks: [] };
+  // The monetise dialog hands over its PRODUCT TAGS — the complete desired
+  // set, in order, each with how it was matched and its affiliate toggle. The
+  // older `{ productIds, aiPicks }` stash is still read so a preview opened
+  // before this deploy still goes live.
+  const stash = useMemo<{
+    productIds: string[];
+    aiPicks: AIPick[];
+    tags: PendingProductTag[];
+  }>(() => {
+    const empty = { productIds: [], aiPicks: [], tags: [] };
+    if (!pinId) return empty;
     try {
       const raw = sessionStorage.getItem(`pin-preview:${pinId}`);
-      if (!raw) return { productIds: [], aiPicks: [] };
+      if (!raw) return empty;
       const parsed = JSON.parse(raw);
       return {
         productIds: Array.isArray(parsed.productIds) ? parsed.productIds : [],
         aiPicks: Array.isArray(parsed.aiPicks) ? parsed.aiPicks : [],
+        tags: Array.isArray(parsed.tags) ? parsed.tags : [],
       };
     } catch {
-      return { productIds: [], aiPicks: [] };
+      return empty;
     }
   }, [pinId]);
+  const usingTags = stash.tags.length > 0;
 
   const { data: selectedProducts = [] } = useQuery({
     queryKey: ["selected-products", stash.productIds.join(",")],
@@ -135,6 +155,16 @@ function PinPreviewPage() {
       if (!pin || !storefront) throw new Error("Pin not ready");
       // Real Go Live path, shared with board-level bulk monetization — see
       // performGoLive() in pinterest.functions.ts.
+      if (usingTags) {
+        return runGoLive({
+          data: {
+            pinId: pin.id,
+            origin: window.location.origin,
+            productTags: stash.tags.map(toProductTagInput),
+            replaceTags: true,
+          },
+        });
+      }
       return runGoLive({
         data: {
           pinId: pin.id,
@@ -152,21 +182,57 @@ function PinPreviewPage() {
         },
       });
     },
-    onSuccess: () => {
+    onSuccess: (result) => {
       qc.invalidateQueries({ queryKey: ["pins"] });
       qc.invalidateQueries({ queryKey: ["collections"] });
       qc.invalidateQueries({ queryKey: ["all-products"] });
+      // The plan for this pin now has different saved tags leading it.
+      qc.invalidateQueries({ queryKey: ["product-tag-plan", pinId] });
+      logPipeline("product_monetised", { pin: pinId, tags: productCount });
       try {
         sessionStorage.removeItem(`pin-preview:${pinId}`);
       } catch {
         /* ignore */
       }
-      setLiveDone(true);
+      setLiveDone({ pinterestLinkUpdated: result.pinterestLinkUpdated });
     },
     onError: (e: Error) => notifyProblem(getFriendlyMessage(e)),
   });
 
-  const productCount = selectedProducts.length + stash.aiPicks.length;
+  // What Shop the look shows — the dialog's canonical sequence, or the legacy
+  // stash rendered through the same component so an old handoff still reads
+  // as the buyer will see it.
+  const displayTags = useMemo<PendingProductTag[]>(
+    () =>
+      usingTags
+        ? sequenceProductTags(stash.tags)
+        : sequenceProductTags([
+            ...selectedProducts.map((p) => tagFromProduct(p, "collection")),
+            ...stash.aiPicks.map((a) => ({
+              ...tagFromUrl(a.url, a.title, a.image),
+              retailer: a.source,
+              price: a.price,
+              priceCents: a.price ? Math.round(a.price.extractedValue * 100) : null,
+            })),
+          ]),
+    [usingTags, stash, selectedProducts],
+  );
+  const productCount = displayTags.length;
+  // Where Visit website goes: this pin's own storefront collection. For a live
+  // pin that is its saved destination; for a pin about to go live it is the
+  // collection Go Live WILL create — the slug is derived from the pin id, so
+  // Preview and the real link agree (see pinCollectionSlug).
+  const websiteUrl = pin
+    ? pin.status === "live" && pin.external_url
+      ? normalizeCollectionUrl(pin.external_url)
+      : storefront
+        ? pinCollectionUrl(
+            window.location.origin,
+            storefront.slug,
+            pinCollectionSlug(pin.title, pin.id),
+          )
+        : null
+    : null;
 
   if (!pinId) {
     return (
@@ -184,6 +250,7 @@ function PinPreviewPage() {
         <LiveSuccess
           imageUrl={pin?.image_url ?? null}
           count={productCount}
+          pinterestLinkUpdated={liveDone.pinterestLinkUpdated}
           onSeePins={() => navigate({ to: "/pins", search: {} as never })}
         />
       </AppShell>
@@ -222,57 +289,17 @@ function PinPreviewPage() {
           </div>
         </div>
       ) : (
-        <div className="mx-auto max-w-xs pb-24 md:pb-8">
-          {/* Pin preview — image + attached products in one card, as the viewer sees it */}
-          <div className="overflow-hidden rounded-2xl border border-border bg-surface shadow-sm">
-            <div className="relative aspect-[4/5] w-full bg-gradient-to-br from-rose-500 to-pink-600">
-              {pin.image_url && (
-                <img
-                  src={pin.image_url}
-                  alt=""
-                  className="absolute inset-0 h-full w-full object-cover"
-                />
-              )}
-            </div>
-            <div className="p-4">
-              <h2 className="hidden">{pin.title}</h2>
-
-              <div className="flex items-center justify-between">
-                <h3 className="text-sm font-semibold">Products on this pin</h3>
-                <span className="rounded-full bg-primary/10 px-2 py-0.5 text-micro font-semibold text-primary">
-                  {selectedProducts.length + stash.aiPicks.length} items
-                </span>
-              </div>
-              <div className="mt-3 grid grid-cols-2 gap-2.5 sm:grid-cols-3">
-                {selectedProducts.map((p) => (
-                  <SuggestionCard
-                    key={p.id}
-                    title={p.title}
-                    thumbnail={p.image_url}
-                    source={storefront?.name ?? hostBrand(p.affiliate_url)}
-                    link={p.affiliate_url}
-                    price={realProductPrice(p.price_cents)}
-                    commissionPct={p.commission_pct}
-                  />
-                ))}
-                {stash.aiPicks.map((a, i) => (
-                  <SuggestionCard
-                    key={`ai-${i}`}
-                    title={a.title}
-                    thumbnail={a.image}
-                    source={a.source}
-                    link={a.url}
-                    price={a.price}
-                  />
-                ))}
-                {selectedProducts.length + stash.aiPicks.length === 0 && (
-                  <p className="col-span-full rounded-xl border border-dashed border-border bg-surface-2/40 p-4 text-center text-xs text-muted-foreground">
-                    No products attached.
-                  </p>
-                )}
-              </div>
-            </div>
-          </div>
+        <div className="mx-auto max-w-sm pb-24 md:pb-8">
+          {/* The buyer's view — the pin as a shopper will see it, with Shop the
+              look in the sequence the backend decided. */}
+          <ShopTheLookPreview
+            imageUrl={pin.image_url}
+            title={pin.title}
+            description={pin.description}
+            creatorName={storefront?.name}
+            products={displayTags}
+            websiteUrl={websiteUrl}
+          />
         </div>
       )}
 
@@ -282,7 +309,7 @@ function PinPreviewPage() {
           className="fixed inset-x-0 bottom-0 z-50 border-t border-border/60 bg-surface/95 px-4 pt-2.5 shadow-[0_-12px_30px_rgba(0,0,0,0.12)] backdrop-blur"
           style={{ paddingBottom: "max(0.6rem, env(safe-area-inset-bottom))" }}
         >
-          {selectedProducts.length + stash.aiPicks.length === 0 && (
+          {productCount === 0 && (
             <p className="mx-auto max-w-2xl pb-1.5 text-center text-mini text-muted-foreground">
               Attach a product to go live.
             </p>
@@ -290,7 +317,7 @@ function PinPreviewPage() {
           <div className="mx-auto flex max-w-2xl">
             <button
               onClick={() => goLive.mutate()}
-              disabled={goLive.isPending || selectedProducts.length + stash.aiPicks.length === 0}
+              disabled={goLive.isPending || productCount === 0}
               className="inline-flex w-full items-center justify-center gap-1.5 rounded-xl bg-gradient-primary px-3 py-3 text-sm font-semibold text-primary-foreground shadow-glow transition disabled:opacity-50"
             >
               {goLive.isPending ? (
@@ -389,10 +416,15 @@ function CashRain() {
 function LiveSuccess({
   imageUrl,
   count,
+  pinterestLinkUpdated,
   onSeePins,
 }: {
   imageUrl: string | null;
   count: number;
+  /** Whether Go Live managed to point the real Pinterest pin at the storefront.
+   * When it couldn't (sandbox, expired connection) the copy says so instead of
+   * promising a link that isn't there. */
+  pinterestLinkUpdated: boolean;
   onSeePins: () => void;
 }) {
   return (
@@ -468,9 +500,13 @@ function LiveSuccess({
         transition={{ delay: 0.3 }}
         className="relative z-10 mx-auto mt-2 max-w-[17rem] text-sm font-medium text-muted-foreground"
       >
-        Your shoppable link is live on this pin
-        {count > 0 ? `, with ${count} product${count === 1 ? "" : "s"} attached` : ""} — every tap
-        can now earn you a commission.
+        {pinterestLinkUpdated
+          ? "Your shoppable link is live on this pin"
+          : "Your shoppable page is ready for this pin"}
+        {count > 0 ? `, with ${count} product${count === 1 ? "" : "s"} tagged` : ""}
+        {pinterestLinkUpdated
+          ? " — every tap can now earn you a commission."
+          : ". We couldn't update the pin's link on Pinterest just now — reconnect Pinterest and go live again to finish."}
       </motion.p>
 
       <motion.button
