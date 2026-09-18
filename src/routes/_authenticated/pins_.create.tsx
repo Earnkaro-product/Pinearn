@@ -1643,9 +1643,11 @@ function StepProducts({
     if (activeTag && !tabLabels.includes(activeTag)) setActiveTag(null);
   }, [activeTag, tabLabels]);
 
-  // "All" is the canonical sequence: the backend's ranked order, every object
-  // interleaved by exactness, then whatever the backend hasn't ranked yet in
-  // the order it streamed in. A single object's tab keeps the pipeline order.
+  // "All" is the canonical sequence: the backend's ranked order — each
+  // object's top three as a block, then the remainder interleaved tier by
+  // tier (see selectProductTags) — then whatever the backend hasn't ranked
+  // yet in the order it streamed in. A single object's tab keeps the pipeline
+  // order.
   const orderedLinks = useMemo(() => {
     const links = suggestions.map((s) => s.link);
     if (activeTag) return links.filter((l) => tagByLink.get(l) === activeTag);

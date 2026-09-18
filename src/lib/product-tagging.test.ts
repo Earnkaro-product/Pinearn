@@ -224,6 +224,81 @@ describe("selectProductTags — one per object, limit, confidence bands", () => 
   });
 });
 
+describe("selectProductTags — the All sequence", () => {
+  // The order the "All" tab renders in: each object's top three as a
+  // contiguous BLOCK, in detection order, then the remainder interleaved tier
+  // by tier. A flat score sort put one object's entire run of matches ahead of
+  // the next object's, because candidates for one crop score within a whisker
+  // of each other.
+
+  // Four candidates per object, so the lead block (3) and the interleaved
+  // tail (the 4th of each) are both exercised.
+  const four = (prefix: string) => [
+    cand(`${prefix} One`, { lookMatch: "same" }),
+    cand(`${prefix} Two`, { lookMatch: "close" }),
+    cand(`${prefix} Three`),
+    cand(`${prefix} Four`, { price: null }),
+  ];
+
+  test("leads with each object's top three as a block, then interleaves the rest", () => {
+    const { all } = selectProductTags({
+      tabs: [
+        { component: sneakers, candidates: four("White Sneakers") },
+        { component: bag, candidates: four("Tan Leather Handbag") },
+      ],
+      pinCopy: "",
+    });
+
+    expect(all.map((p) => p.component.label)).toEqual([
+      // Lead: sneakers' best three, then the bag's best three.
+      "White Sneakers",
+      "White Sneakers",
+      "White Sneakers",
+      "Handbag",
+      "Handbag",
+      "Handbag",
+      // Tail: the 4th of each, interleaved.
+      "White Sneakers",
+      "Handbag",
+    ]);
+    // Within each object's lead block, best first.
+    expect(all[0].score).toBeGreaterThanOrEqual(all[1].score);
+    expect(all[1].score).toBeGreaterThanOrEqual(all[2].score);
+    expect(all[3].score).toBeGreaterThanOrEqual(all[4].score);
+  });
+
+  test("an object with fewer than three candidates just contributes what it has", () => {
+    const { all } = selectProductTags({
+      tabs: [
+        {
+          component: sneakers,
+          candidates: [cand("Nike Air Force 1 White Sneakers"), cand("White Sneakers Lookalike")],
+        },
+        { component: bag, candidates: [cand("Tan Leather Handbag")] },
+      ],
+      pinCopy: "",
+    });
+    expect(all.map((p) => p.component.label)).toEqual([
+      "White Sneakers",
+      "White Sneakers",
+      "Handbag",
+    ]);
+  });
+
+  test("every scored candidate still appears exactly once", () => {
+    const { all } = selectProductTags({
+      tabs: [
+        { component: sneakers, candidates: four("White Sneakers") },
+        { component: bag, candidates: four("Tan Leather Handbag") },
+        { component: shades, candidates: four("Black Aviator Sunglasses") },
+      ],
+      pinCopy: "",
+    });
+    expect(all).toHaveLength(12);
+    expect(new Set(all.map((p) => p.candidate.link)).size).toBe(12);
+  });
+});
+
 describe("helpers", () => {
   test("confidence bands", () => {
     expect(confidenceFor(0.9)).toBe("high");

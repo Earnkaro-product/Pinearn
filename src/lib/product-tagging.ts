@@ -44,6 +44,12 @@ import { categoriesAgree, categoryOfTitle, type ProductCategory } from "@/lib/pr
  */
 export const MAX_PRODUCT_TAGS_PER_PIN = 20;
 
+/** How many of each detected object's best matches lead the "All" grid as a
+ * contiguous block, before the remainder is interleaved tier by tier. Three
+ * is a shortlist a shopper can take in per thing in the picture without the
+ * first object's matches filling the fold. See selectProductTags. */
+export const ALL_TAB_LEAD_PER_COMPONENT = 3;
+
 /** How sure the matcher is that a tag's product IS the object in the Pin. */
 export type TagConfidence = "high" | "medium" | "low";
 
@@ -354,7 +360,9 @@ export type TagSelection = {
   /** Objects for which nothing reached medium — the "we couldn't find this
    * one" list the UI can name. */
   unmatched: TagComponentInput[];
-  /** Every scored candidate, best first, for a browse grid or debug panel. */
+  /** Every scored candidate in the order the "All" grid renders: each
+   * object's top ALL_TAB_LEAD_PER_COMPONENT as a contiguous block, in
+   * detection order, then everything remaining interleaved tier by tier. */
   all: ProductTagProposal[];
 };
 
@@ -375,11 +383,15 @@ export function selectProductTags(input: TagSelectionInput): TagSelection {
   );
   const excluded = input.excludeLinks ?? new Set<string>();
 
-  const all: ProductTagProposal[] = [];
+  // One scored list PER detected object, each best-first. Kept separate so
+  // `all` can be interleaved by tier below — a flat score sort would let one
+  // object's whole run of matches sit above another's.
+  const perComponent: ProductTagProposal[][] = [];
   const bestPerComponent: ProductTagProposal[] = [];
   const unmatched: TagComponentInput[] = [];
 
   for (const tab of input.tabs) {
+    const scored: ProductTagProposal[] = [];
     let best: ProductTagProposal | null = null;
     for (const [i, c] of tab.candidates.entries()) {
       const proposal = scoreTagCandidate(
@@ -389,15 +401,42 @@ export function selectProductTags(input: TagSelectionInput): TagSelection {
         input.pinCopy,
         input.availability?.get(c.link),
       );
-      all.push(proposal);
+      scored.push(proposal);
       if (excluded.has(c.link)) continue;
       if (!best || proposal.score > best.score) best = proposal;
     }
+    scored.sort((a, b) => b.score - a.score);
+    perComponent.push(scored);
     if (best && best.confidence !== "low") bestPerComponent.push(best);
     else unmatched.push(tab.component);
   }
 
-  all.sort((a, b) => b.score - a.score);
+  // The "All" sequence, in two parts.
+  //
+  // FIRST: each object's top few as a contiguous BLOCK, one object after
+  // another in detection order — the vest's best three, then the pants' best
+  // three, then the footwear's. The head of the grid reads as a shortlist per
+  // thing in the picture, which is what a shopper scanning "All" is after.
+  //
+  // THEN: everything left over, interleaved tier by tier (every object's 4th,
+  // then every object's 5th, ...) so no single object's long tail buries
+  // another's.
+  //
+  // Sorting `all` flat by score instead (what this did originally) made the
+  // grid read as one object's entire run, then the next object's, because
+  // scores cluster hard within an object: the crop, the query and the
+  // retailer set are all shared, so ten candidates for the same vest score
+  // within a whisker of each other and far from anything for the pants.
+  const all: ProductTagProposal[] = [];
+  for (const scored of perComponent) {
+    all.push(...scored.slice(0, ALL_TAB_LEAD_PER_COMPONENT));
+  }
+  const deepest = perComponent.reduce((n, c) => Math.max(n, c.length), 0);
+  for (let tier = ALL_TAB_LEAD_PER_COMPONENT; tier < deepest; tier++) {
+    for (const scored of perComponent) {
+      if (tier < scored.length) all.push(scored[tier]);
+    }
+  }
 
   // The same product can be the best for two objects (two crops of one dress).
   // Keep it once, under the object it scores highest for.

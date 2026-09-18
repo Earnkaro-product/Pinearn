@@ -408,13 +408,20 @@ function MonetizeBoardPage() {
   useEffect(() => {
     if (activeTag && !tagCounts.has(activeTag)) setActiveTag(null);
   }, [activeTag, tagCounts]);
-  const visibleMatches = useMemo(
-    () =>
-      activeTag
-        ? currentMatches.filter((m) => tagByLink.get(m.link) === activeTag)
-        : currentMatches,
-    [activeTag, currentMatches, tagByLink],
-  );
+  // "All" is the backend's canonical sequence: each object's top three as a
+  // block, in detection order, then the remainder interleaved tier by tier
+  // (see selectProductTags). Same rule as the create wizard's All tab — the
+  // raw pipeline order this used to render put one object's whole run of
+  // matches ahead of the next object's. A single object's tab keeps the
+  // pipeline order; anything the backend hasn't ranked yet trails in the
+  // order it streamed in.
+  const visibleMatches = useMemo(() => {
+    if (activeTag) return currentMatches.filter((m) => tagByLink.get(m.link) === activeTag);
+    return currentMatches
+      .map((m, i) => ({ m, i, r: planByLink.get(canonicalTagLink(m.link))?.rank ?? Infinity }))
+      .sort((a, b) => a.r - b.r || a.i - b.i)
+      .map((x) => x.m);
+  }, [activeTag, currentMatches, tagByLink, planByLink]);
 
   const { reportResolved } = usePipelineTiming(
     current?.pinId ?? null,
