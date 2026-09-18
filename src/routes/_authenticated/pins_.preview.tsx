@@ -3,7 +3,7 @@ import { AppShell } from "@/components/app-shell";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { supabase } from "@/integrations/supabase/client";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import { ArrowRight, CheckCheck, Loader2, Rocket, Sparkles } from "lucide-react";
 import { notifyProblem } from "@/lib/notify";
@@ -60,6 +60,37 @@ type AIPick = {
   source: string;
   price: SuggestionPrice;
 };
+type StashedPreview = {
+  productIds: string[];
+  aiPicks: AIPick[];
+  tags: PendingProductTag[];
+};
+
+const EMPTY_STASH: StashedPreview = { productIds: [], aiPicks: [], tags: [] };
+
+/** What the monetise dialog handed over for this pin, straight out of
+ * sessionStorage. A missing, half-written or unparseable entry reads as
+ * nothing attached rather than throwing on a surface the creator can't fix.
+ *
+ * Returns nothing during SSR: this route renders on the server first, where
+ * there is no sessionStorage. Touching it there throws a ReferenceError
+ * mid-render, which is served as a blank page — the real tags are read on the
+ * client immediately after hydration (see the effect in PinPreviewPage). */
+function readStash(pinId: string): StashedPreview {
+  if (!pinId || typeof window === "undefined") return EMPTY_STASH;
+  try {
+    const raw = sessionStorage.getItem(`pin-preview:${pinId}`);
+    if (!raw) return EMPTY_STASH;
+    const parsed = JSON.parse(raw);
+    return {
+      productIds: Array.isArray(parsed.productIds) ? parsed.productIds : [],
+      aiPicks: Array.isArray(parsed.aiPicks) ? parsed.aiPicks : [],
+      tags: Array.isArray(parsed.tags) ? parsed.tags : [],
+    };
+  } catch {
+    return EMPTY_STASH;
+  }
+}
 
 function PinPreviewPage() {
   const { pinId } = Route.useSearch();
@@ -110,25 +141,18 @@ function PinPreviewPage() {
   // set, in order, each with how it was matched and its affiliate toggle. The
   // older `{ productIds, aiPicks }` stash is still read so a preview opened
   // before this deploy still goes live.
-  const stash = useMemo<{
-    productIds: string[];
-    aiPicks: AIPick[];
-    tags: PendingProductTag[];
-  }>(() => {
-    const empty = { productIds: [], aiPicks: [], tags: [] };
-    if (!pinId) return empty;
-    try {
-      const raw = sessionStorage.getItem(`pin-preview:${pinId}`);
-      if (!raw) return empty;
-      const parsed = JSON.parse(raw);
-      return {
-        productIds: Array.isArray(parsed.productIds) ? parsed.productIds : [],
-        aiPicks: Array.isArray(parsed.aiPicks) ? parsed.aiPicks : [],
-        tags: Array.isArray(parsed.tags) ? parsed.tags : [],
-      };
-    } catch {
-      return empty;
-    }
+  //
+  // Read into state rather than straight into a memo. The dialog writes the
+  // stash and then navigates TWICE (it stamps ?pinId on the current entry
+  // before pushing /pins/preview), so this component's first render can land
+  // with pinId still empty — and a memo that resolved to "no tags" on that
+  // render had no reason to re-read storage once the real pinId arrived. That
+  // is the bug where Preview showed nothing until you refreshed the page: the
+  // products were in sessionStorage the whole time, but nothing read them
+  // again. Storage isn't reactive, so the re-read has to be explicit.
+  const [stash, setStash] = useState<StashedPreview>(() => readStash(pinId));
+  useEffect(() => {
+    setStash(readStash(pinId));
   }, [pinId]);
   const usingTags = stash.tags.length > 0;
 
@@ -152,7 +176,14 @@ function PinPreviewPage() {
 
   const goLive = useMutation({
     mutationFn: async () => {
-      if (!pin || !storefront) throw new Error("Pin not ready");
+      // Only the pin is required. `storefront` is loaded for DISPLAY (the
+      // creator name on the preview card) and its query is gated on
+      // pin.storefront_id — gating the button on it meant a pin whose
+      // storefront query hadn't resolved, or that has no storefront row to
+      // load, failed here with a generic "Pin not ready" instead of reaching
+      // the server, which resolves the storefront itself and reports exactly
+      // what is missing.
+      if (!pin) throw new Error("Pin not ready");
       // Real Go Live path, shared with board-level bulk monetization — see
       // performGoLive() in pinterest.functions.ts.
       if (usingTags) {
@@ -222,15 +253,15 @@ function PinPreviewPage() {
   // pin that is its saved destination; for a pin about to go live it is the
   // collection Go Live WILL create — the slug is derived from the pin id, so
   // Preview and the real link agree (see pinCollectionSlug).
+  // `origin` is empty during SSR (no window on the server) — reading it
+  // unguarded threw mid-render and the route was served as a blank page. The
+  // client render right after hydration fills it in.
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
   const websiteUrl = pin
     ? pin.status === "live" && pin.external_url
       ? normalizeCollectionUrl(pin.external_url)
-      : storefront
-        ? pinCollectionUrl(
-            window.location.origin,
-            storefront.slug,
-            pinCollectionSlug(pin.title, pin.id),
-          )
+      : storefront && origin
+        ? pinCollectionUrl(origin, storefront.slug, pinCollectionSlug(pin.title, pin.id))
         : null
     : null;
 
